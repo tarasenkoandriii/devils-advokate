@@ -238,34 +238,28 @@ p {
   color: var(--signal-calm);
 }
 
-/* ── Site top bar (слоган + лого + переключатель языка, одной
- * прилипшей строкой, position: fixed на весь скролл) — та же
- * "прилипшая" стилистика, что sticky-illustration ниже, только
- * привязана к верхнему краю экрана, не к углам. ТОЛЬКО ДЕСКТОП
- * (≥768px) — на мобильном своя, отдельная от этой, in-flow вёрстка
- * (mobile-only-illustration--top + .hero__top-bar ниже). ────────── */
+/* ── Site top bar (лого + переключатель языка, тонкой прилипшей
+ * полосой у самого верхнего края, position: fixed на весь скролл) —
+ * та же "прилипшая" стилистика, что sticky-illustration ниже.
+ * СЛОГАН СЮДА НЕ ВХОДИТ — он отдельная угловая иллюстрация
+ * (sticky-illustration--top-left), не часть этой полосы: попытка
+ * свести всё в один ряд заставляла крупную картинку слогана мешать
+ * чтению текста при скролле. ТОЛЬКО ДЕСКТОП (≥768px) — на мобильном
+ * своя, отдельная от этой, in-flow вёрстка (mobile-only-illustration--
+ * top + .hero__top-bar ниже). ────────────────────────────────────── */
 
 .site-topbar {
   position: fixed;
   top: 20px;
   left: 24px;
   right: 24px;
-  z-index: 20; /* выше sticky-illustration (15) — панель поверх декоративных картинок при скролле */
+  z-index: 20; /* выше sticky-illustration (15) — полоса поверх декоративных картинок при скролле */
   display: flex;
   align-items: center;
   gap: 14px;
   max-width: calc(var(--container-width) - 48px);
   margin: 0 auto;
   pointer-events: none; /* сама полоса не перехватывает клики фоном под собой */
-}
-
-.site-topbar__slogan-image {
-  display: block;
-  width: 190px;
-  height: auto;
-  border-radius: 18px;
-  opacity: 0.85;
-  filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.22));
 }
 
 .site-topbar__logo {
@@ -297,6 +291,11 @@ p {
   pointer-events: none; /* декоративные — не перехватывают клики по контенту под собой */
 }
 
+.sticky-illustration--top-left {
+  top: 88px; /* ниже верхнего бара hero (лого + переключатель языка) */
+  left: 24px;
+}
+
 .sticky-illustration--bottom-left {
   bottom: 24px;
   left: 24px;
@@ -318,6 +317,10 @@ p {
 .sticky-illustration--bottom-left .sticky-illustration__image {
   width: 190px;
   filter: drop-shadow(0 12px 30px rgba(226, 99, 79, 0.28));
+}
+
+.sticky-illustration--top-left .sticky-illustration__image {
+  filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.22));
 }
 
 .sticky-illustration--bottom-right .sticky-illustration__image {
@@ -386,9 +389,11 @@ p {
   .hero {
     /* Раньше это пространство создавал .hero__top-bar в потоке
      * документа (собственная высота + padding-bottom: 32px) — теперь
-     * та же роль у зафиксированной .site-topbar, контенту нужен явный
-     * отступ, чтобы не оказаться под ней. */
-    padding-top: 200px;
+     * та же роль у тонкой зафиксированной .site-topbar, контенту
+     * нужен явный отступ, чтобы не оказаться под ней. Слоган-
+     * иллюстрация в углу — оверлей поверх контента (как hell/lawyer
+     * внизу), отдельного отступа под неё не требуется. */
+    padding-top: 80px;
   }
 }
 

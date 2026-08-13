@@ -14,11 +14,12 @@ import { TELEGRAM_URL } from '../lib/telegram-url';
 // картинки. `position: fixed` даёт тот же зрительный результат
 // ("прилипло к углу экрана") надёжнее и без этой возни.
 //
-// Слоган — по прямому запросу больше НЕ в углу отдельно, а объединён в
-// одну прилипшую верхнюю полосу (.site-topbar) вместе с лого и
-// переключателем языка — та же position: fixed стилистика, но в одну
-// строку у самого верхнего края экрана, не как отдельная угловая
-// картинка.
+// Слоган — по прямому запросу отдельно от лого/переключателя, в
+// углу экрана (не в общей строке с ними — при попытке объединить в
+// одну полосу картинка при скролле мешала читать текст ниже). Лого +
+// переключатель языка — отдельная тонкая прилипшая полоса
+// (.site-topbar) у самого верхнего края, position: fixed, не
+// возвращается в обычный поток документа на десктопе.
 //
 // На мобильных (<768px) .site-topbar и bottom-left/bottom-right
 // fixed-иллюстрации скрыты целиком (см. media query в globals.css —
@@ -45,19 +46,21 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
   return (
     <>
       <div className="site-topbar" aria-hidden="false">
+        <span className="site-topbar__logo">Devil&apos;s Advocate</span>
+        <div className="site-topbar__spacer" />
+        <LanguageSwitcher current={lang} />
+      </div>
+
+      <div className="sticky-illustration sticky-illustration--top-left" aria-hidden="true">
         <Image
           src="/images/hero-slogan.png"
           alt=""
           width={1536}
           height={1024}
           priority
-          aria-hidden="true"
-          className="site-topbar__slogan-image"
+          className="sticky-illustration__image"
           sizes="(max-width: 767px) 0px, 190px"
         />
-        <span className="site-topbar__logo">Devil&apos;s Advocate</span>
-        <div className="site-topbar__spacer" />
-        <LanguageSwitcher current={lang} />
       </div>
 
       <div className="sticky-illustration sticky-illustration--bottom-left" aria-hidden="true">
@@ -85,7 +88,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
       <header className="hero">
         {/* Мобильный вариант слогана — в потоке документа, не fixed,
          * показывается ТОЛЬКО <768px (на десктопе эту роль играет
-         * .site-topbar выше). */}
+         * sticky-illustration--top-left выше). */}
         <div className="mobile-only-illustration mobile-only-illustration--top" aria-hidden="true">
           <Image
             src="/images/hero-slogan.png"
