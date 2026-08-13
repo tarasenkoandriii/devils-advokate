@@ -261,9 +261,9 @@ p {
 
 .site-topbar__slogan-image {
   display: block;
-  width: 64px;
+  width: 190px;
   height: auto;
-  border-radius: 10px;
+  border-radius: 18px;
   opacity: 0.85;
   filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.22));
 }
@@ -388,11 +388,7 @@ p {
      * документа (собственная высота + padding-bottom: 32px) — теперь
      * та же роль у зафиксированной .site-topbar, контенту нужен явный
      * отступ, чтобы не оказаться под ней. */
-    padding-top: 96px;
-  }
-
-  .hero__top-bar {
-    display: none; /* десктоп — заменена прилипшей .site-topbar выше */
+    padding-top: 200px;
   }
 }
 
@@ -408,6 +404,19 @@ p {
   font-size: 16px;
   color: var(--text-faint);
   letter-spacing: 0.04em;
+}
+
+@media (min-width: 768px) {
+  .hero__top-bar {
+    /* Десктоп — заменена прилипшей .site-topbar выше. Правило ПОСЛЕ
+     * базового .hero__top-bar по порядку в файле намеренно — при
+     * равной специфичности порядок в исходнике решает, кто победит
+     * в каскаде, media-query сама по себе специфичность не добавляет.
+     * Первая версия была ДО базового правила и поэтому проигрывала
+     * ему — найдено визуальным рендером (Playwright), не статическим
+     * анализом. */
+    display: none;
+  }
 }
 
 /* Текст+картинка и callout-карточки — РАЗНЫЕ строки, не колонки одной

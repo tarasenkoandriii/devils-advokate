@@ -53,7 +53,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
           priority
           aria-hidden="true"
           className="site-topbar__slogan-image"
-          sizes="(max-width: 767px) 0px, 96px"
+          sizes="(max-width: 767px) 0px, 190px"
         />
         <span className="site-topbar__logo">Devil&apos;s Advocate</span>
         <div className="site-topbar__spacer" />
