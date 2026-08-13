@@ -113,7 +113,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
                 width={1536}
                 height={1024}
                 className="hero__courtroom-image"
-                sizes="(max-width: 640px) 100vw, 340px"
+                sizes="(max-width: 640px) 100vw, 510px"
               />
             </div>
           </div>
@@ -127,8 +127,6 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
             ))}
           </div>
         </div>
-
-        <div className="tension-divider" />
       </header>
     </>
   );

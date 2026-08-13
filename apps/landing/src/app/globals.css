@@ -92,7 +92,7 @@ h3 {
 }
 
 h1 {
-  font-size: clamp(26px, 2.6vw, 36px);
+  font-size: clamp(23px, 2.3vw, 32px);
   letter-spacing: -0.01em;
 }
 
@@ -108,18 +108,6 @@ p {
   font-size: 18px;
   color: var(--text-muted);
   max-width: 620px;
-}
-
-.tension-divider {
-  height: 3px;
-  width: 100%;
-  background: linear-gradient(
-    90deg,
-    var(--signal-calm) 0%,
-    var(--signal-caution) 50%,
-    var(--signal-critical) 100%
-  );
-  opacity: 0.5;
 }
 
 .button {
@@ -412,7 +400,7 @@ p {
 }
 
 .hero__courtroom-image {
-  width: 340px;
+  width: 510px;
   height: auto;
   border-radius: 20px;
   filter: drop-shadow(0 16px 48px rgba(0, 0, 0, 0.5));
