@@ -98,6 +98,14 @@ export interface Dictionary {
     eyebrow: string;
     title: string;
     steps: Array<{ title: string; description: string }>;
+    // Пункт: текстовые оверлеи прямо на иллюстрации (conversation_cycle_bindings.json)
+    // — координаты заданы в CycleSteps.tsx, текст — здесь, тот же принцип
+    // разделения, что уже применяется в Technology (dict.technology.groups).
+    overlay: {
+      stages: Array<{ label: string; description: string }>; // 5 штук, порядок = порядок в bindings-JSON (PREPARE→TALK→CLARIFY→ANALYZE→LEARN&ACT)
+      center: string;
+      pipeline: string[]; // 6 штук, верхняя строка иконок
+    };
   };
   differentiation: {
     title: string;

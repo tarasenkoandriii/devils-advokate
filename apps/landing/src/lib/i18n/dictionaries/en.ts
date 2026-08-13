@@ -450,6 +450,24 @@ export const en: Dictionary = {
         description: 'Calibrate against real outcomes over time, not just this one talk.',
       },
     ],
+    overlay: {
+      stages: [
+        { label: 'PREPARE', description: 'Set the goal and key questions.' },
+        { label: 'TALK', description: 'Listen, speak, and capture the exchange.' },
+        { label: 'CLARIFY', description: 'Surface context, questions, and signals.' },
+        { label: 'ANALYZE', description: 'Check evidence, patterns, and risks.' },
+        { label: 'LEARN & ACT', description: 'Turn insights into next steps.' },
+      ],
+      center: 'LISTEN • UNDERSTAND • ADVISE',
+      pipeline: [
+        'CAPTURE AUDIO',
+        'NOISE REDUCTION',
+        'SPEECH RECOGNITION',
+        'UNDERSTAND & ANALYZE',
+        'GENERATE SUGGESTION',
+        'DELIVER SUGGESTION',
+      ],
+    },
   },
   differentiation: {
     title: 'Not another pros-and-cons calculator',

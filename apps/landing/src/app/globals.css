@@ -97,7 +97,7 @@ h1 {
 }
 
 h2 {
-  font-size: clamp(26px, 3.4vw, 38px);
+  font-size: clamp(20px, 2vw, 28px);
 }
 
 p {
@@ -853,6 +853,90 @@ p {
 .cycle__title {
   max-width: 640px;
   margin-bottom: 48px;
+}
+
+.cycle__image-wrap {
+  position: relative;
+  margin-bottom: 48px;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.cycle__image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Текст поверх иллюстрации цикла — координаты ЦЕНТРА текстового
+ * блока (не top-left), сам JSON-биндинг задаёт align:"center" для
+ * всех текстовых слоёв — translate(-50%, -50%) центрирует блок
+ * относительно точки top/left, а не растягивает от неё вниз-вправо.
+ * Обоснование выбора именно bbox (не anchor) для позиционирования —
+ * см. комментарий в CycleSteps.tsx. */
+.cycle__overlay-label,
+.cycle__overlay-desc,
+.cycle__overlay-center,
+.cycle__overlay-pipeline {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  /* Тёмная подложка вместо расчёта только на text-shadow — гарантирует
+   * читаемость независимо от того, что на фото под текстом (лицо
+   * человека контрастирует с text-shadow заметно хуже, чем тёмный
+   * фон между кругами) — найдено визуальным рендером (Playwright),
+   * не предположением. */
+  background: rgba(10, 12, 16, 0.72);
+  border-radius: 6px;
+  padding: 3px 8px;
+  backdrop-filter: blur(2px);
+}
+
+.cycle__overlay-label {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: #f4f6f8;
+  letter-spacing: 0.02em;
+  width: max-content;
+  max-width: 170px;
+}
+
+.cycle__overlay-desc {
+  font-size: 11px;
+  color: #c7cdd6;
+  line-height: 1.3;
+  width: 170px;
+}
+
+.cycle__overlay-center {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: #f4f6f8;
+  letter-spacing: 0.03em;
+  width: max-content;
+  max-width: 210px;
+}
+
+.cycle__overlay-pipeline {
+  font-size: 10px;
+  font-weight: 600;
+  color: #d6dae1;
+  letter-spacing: 0.02em;
+  width: max-content;
+  padding: 2px 6px;
+}
+
+@media (max-width: 900px) {
+  .cycle__overlay-label,
+  .cycle__overlay-desc,
+  .cycle__overlay-center,
+  .cycle__overlay-pipeline {
+    display: none; /* мелкий текст поверх сложной картинки нечитаем на узком экране — та же логика, что скрытие technology__overlay-item */
+  }
 }
 
 .cycle__list {
