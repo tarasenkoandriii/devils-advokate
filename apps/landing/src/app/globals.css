@@ -238,17 +238,63 @@ p {
   color: var(--signal-calm);
 }
 
+/* ── Site top bar (слоган + лого + переключатель языка, одной
+ * прилипшей строкой, position: fixed на весь скролл) — та же
+ * "прилипшая" стилистика, что sticky-illustration ниже, только
+ * привязана к верхнему краю экрана, не к углам. ТОЛЬКО ДЕСКТОП
+ * (≥768px) — на мобильном своя, отдельная от этой, in-flow вёрстка
+ * (mobile-only-illustration--top + .hero__top-bar ниже). ────────── */
+
+.site-topbar {
+  position: fixed;
+  top: 20px;
+  left: 24px;
+  right: 24px;
+  z-index: 20; /* выше sticky-illustration (15) — панель поверх декоративных картинок при скролле */
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(var(--container-width) - 48px);
+  margin: 0 auto;
+  pointer-events: none; /* сама полоса не перехватывает клики фоном под собой */
+}
+
+.site-topbar__slogan-image {
+  display: block;
+  width: 64px;
+  height: auto;
+  border-radius: 10px;
+  opacity: 0.85;
+  filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.22));
+}
+
+.site-topbar__logo {
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+
+.site-topbar__spacer {
+  flex: 1;
+}
+
+.site-topbar .lang-dropdown {
+  pointer-events: auto; /* единственный реально интерактивный элемент в полосе — клики должны доходить */
+}
+
+@media (max-width: 767px) {
+  .site-topbar {
+    display: none; /* мобильный — своя in-flow вёрстка ниже, не эта прилипшая полоса */
+  }
+}
+
 /* ── Sticky illustrations (position: fixed на весь скролл) ──── */
 
 .sticky-illustration {
   position: fixed;
   z-index: 15;
   pointer-events: none; /* декоративные — не перехватывают клики по контенту под собой */
-}
-
-.sticky-illustration--top-left {
-  top: 88px; /* ниже верхнего бара hero (лого + переключатель языка) */
-  left: 24px;
 }
 
 .sticky-illustration--bottom-left {
@@ -272,10 +318,6 @@ p {
 .sticky-illustration--bottom-left .sticky-illustration__image {
   width: 190px;
   filter: drop-shadow(0 12px 30px rgba(226, 99, 79, 0.28));
-}
-
-.sticky-illustration--top-left .sticky-illustration__image {
-  filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.22));
 }
 
 .sticky-illustration--bottom-right .sticky-illustration__image {
@@ -340,6 +382,20 @@ p {
   background: radial-gradient(ellipse at center, #171b23 0%, var(--bg) 70%);
 }
 
+@media (min-width: 768px) {
+  .hero {
+    /* Раньше это пространство создавал .hero__top-bar в потоке
+     * документа (собственная высота + padding-bottom: 32px) — теперь
+     * та же роль у зафиксированной .site-topbar, контенту нужен явный
+     * отступ, чтобы не оказаться под ней. */
+    padding-top: 96px;
+  }
+
+  .hero__top-bar {
+    display: none; /* десктоп — заменена прилипшей .site-topbar выше */
+  }
+}
+
 .hero__top-bar {
   display: flex;
   align-items: center;
@@ -349,7 +405,7 @@ p {
 
 .hero__logo {
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: 16px;
   color: var(--text-faint);
   letter-spacing: 0.04em;
 }

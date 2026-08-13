@@ -4,23 +4,30 @@ import { Locale } from '../lib/i18n/config';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { TELEGRAM_URL } from '../lib/telegram-url';
 
-// Slogan/Hell/Lawyer — position: fixed (не sticky в буквальном CSS-
-// смысле, см. обоснование ниже), закреплены за углами вьюпорта на весь
-// скролл лендинга, не только в пределах hero — НА ДЕСКТОПЕ. CSS
+// Hell/Lawyer — position: fixed (не sticky в буквальном CSS-смысле, см.
+// обоснование ниже), закреплены за углами вьюпорта на весь скролл
+// лендинга, не только в пределах hero — НА ДЕСКТОПЕ. CSS
 // `position: sticky` требует, чтобы элемент оставался частью
 // нормального потока родителя и "отлипает", когда родитель прокручен
 // до конца — для "весь лендинг" это означало бы городить общий
-// обёрточный контейнер вокруг всех секций специально под 3 декоративные
+// обёрточный контейнер вокруг всех секций специально под декоративные
 // картинки. `position: fixed` даёт тот же зрительный результат
 // ("прилипло к углу экрана") надёжнее и без этой возни.
 //
-// На мобильных (<768px) три fixed-иллюстрации скрыты целиком (см.
-// media query в globals.css — три картинки, постоянно перекрывающие
-// контент на весь скролл на маленьком экране, реальная проблема
-// читаемости). Вместо этого — по прямому запросу — слоган показан ОДИН
-// РАЗ в начале вёрстки (в потоке документа, не fixed), адвокат — ОДИН
-// РАЗ в самом конце страницы (после футера, см. page.tsx). Ад на
-// мобильных не показывается вовсе — этого явно не просили вернуть.
+// Слоган — по прямому запросу больше НЕ в углу отдельно, а объединён в
+// одну прилипшую верхнюю полосу (.site-topbar) вместе с лого и
+// переключателем языка — та же position: fixed стилистика, но в одну
+// строку у самого верхнего края экрана, не как отдельная угловая
+// картинка.
+//
+// На мобильных (<768px) .site-topbar и bottom-left/bottom-right
+// fixed-иллюстрации скрыты целиком (см. media query в globals.css —
+// постоянно перекрывающие контент на весь скролл на маленьком экране,
+// реальная проблема читаемости). Вместо этого — по прямому запросу —
+// слоган+лого+переключатель показаны ОДИН РАЗ в потоке документа в
+// начале вёрстки, адвокат — ОДИН РАЗ в самом конце страницы (после
+// футера, см. page.tsx). Ад на мобильных не показывается вовсе — этого
+// явно не просили вернуть.
 //
 // Courtroom-иллюстрация — вернулась по прямому запросу, справа от
 // текста в главной hero-строке, с 6 callout-карточками ниже (переведены
@@ -37,16 +44,20 @@ import { TELEGRAM_URL } from '../lib/telegram-url';
 export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
   return (
     <>
-      <div className="sticky-illustration sticky-illustration--top-left" aria-hidden="true">
+      <div className="site-topbar" aria-hidden="false">
         <Image
           src="/images/hero-slogan.png"
           alt=""
           width={1536}
           height={1024}
           priority
-          className="sticky-illustration__image"
-          sizes="(max-width: 767px) 0px, 200px"
+          aria-hidden="true"
+          className="site-topbar__slogan-image"
+          sizes="(max-width: 767px) 0px, 96px"
         />
+        <span className="site-topbar__logo">Devil&apos;s Advocate</span>
+        <div className="site-topbar__spacer" />
+        <LanguageSwitcher current={lang} />
       </div>
 
       <div className="sticky-illustration sticky-illustration--bottom-left" aria-hidden="true">
@@ -74,7 +85,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
       <header className="hero">
         {/* Мобильный вариант слогана — в потоке документа, не fixed,
          * показывается ТОЛЬКО <768px (на десктопе эту роль играет
-         * sticky-illustration--top-left выше). */}
+         * .site-topbar выше). */}
         <div className="mobile-only-illustration mobile-only-illustration--top" aria-hidden="true">
           <Image
             src="/images/hero-slogan.png"
