@@ -113,7 +113,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
                 width={1536}
                 height={1024}
                 className="hero__courtroom-image"
-                sizes="(max-width: 640px) 100vw, 510px"
+                sizes="(max-width: 640px) 100vw, 400px"
               />
             </div>
           </div>
