@@ -17,11 +17,13 @@ import { TELEGRAM_URL } from '../lib/telegram-url';
 // Слоган — по прямому запросу отдельно от лого/переключателя, в
 // углу экрана (не в общей строке с ними — при попытке объединить в
 // одну полосу картинка при скролле мешала читать текст ниже). Лого +
-// переключатель языка — отдельная тонкая прилипшая полоса
-// (.site-topbar) у самого верхнего края, position: fixed, не
-// возвращается в обычный поток документа на десктопе.
+// переключатель языка — тоже отдельно ДРУГ ОТ ДРУГА, два узких
+// компактных элемента (.site-logo слева над иллюстрацией слогана,
+// .site-lang справа), не одна широкая полоса — широкая полоса тоже
+// перекрывала прокручивающийся контент. Оба position: fixed, не
+// возвращаются в обычный поток документа на десктопе.
 //
-// На мобильных (<768px) .site-topbar и bottom-left/bottom-right
+// На мобильных (<768px) .site-logo/.site-lang и bottom-left/bottom-right
 // fixed-иллюстрации скрыты целиком (см. media query в globals.css —
 // постоянно перекрывающие контент на весь скролл на маленьком экране,
 // реальная проблема читаемости). Вместо этого — по прямому запросу —
@@ -45,9 +47,11 @@ import { TELEGRAM_URL } from '../lib/telegram-url';
 export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
   return (
     <>
-      <div className="site-topbar" aria-hidden="false">
-        <span className="site-topbar__logo">Devil&apos;s Advocate</span>
-        <div className="site-topbar__spacer" />
+      <span className="site-logo" aria-hidden="false">
+        Devil&apos;s Advocate
+      </span>
+
+      <div className="site-lang" aria-hidden="false">
         <LanguageSwitcher current={lang} />
       </div>
 
