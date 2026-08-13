@@ -1,0 +1,47 @@
+# Обнаружено при аудите: .gitignore отсутствовал во всём монорепо —
+# реальный риск, что .env с настоящими ключами (OPENAI_API_KEY,
+# TELEGRAM_BOT_TOKEN и т.д.) попал бы в git. Один файл на корень
+# монорепо, не по одному на каждый apps/* — npm workspaces имеют общий
+# node_modules в корне, паттерны ниже покрывают все apps/* через **/.
+
+# Зависимости
+node_modules/
+**/node_modules/
+
+# Секреты — .env.example коммитится, реальные .env — никогда
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Next.js
+.next/
+**/.next/
+out/
+**/out/
+
+# NestJS / TypeScript
+dist/
+**/dist/
+*.tsbuildinfo
+
+# Prisma
+apps/api/prisma/migrations/dev.db*
+
+# Логи
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ОС/редакторы
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Vercel
+.vercel
+
+# Тестовое покрытие
+coverage/

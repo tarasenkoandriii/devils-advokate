@@ -1,0 +1,1277 @@
+/* Дизайн-направление — по разделу 5 devils-advocate-landing-tz.md:
+ * сдержанная палитра, не generic AI-эстетика, не шаблонный тёплый
+ * крем+терракота SaaS-лендинг. Тёмная спокойная база — рифмуется с
+ * настроением "спокойствие после разрешения" из hero-брифа и с тёмной
+ * hero-фотографией.
+ *
+ * Акцентная триада green/amber/red — перенесённый из продукта
+ * индикатор накала разговора (calm→rising→high→critical) — единственный
+ * по-настоящему уникальный для этого продукта визуальный мотив,
+ * используется как сигнатурная тонкая линия-разделитель между
+ * секциями, не как декоративная заливка кнопок повсюду.
+ */
+
+:root {
+  --bg: #11141a;
+  --bg-elevated: #171b23;
+  --bg-card: #1c212b;
+  --border: #2a303c;
+  --text: #eceef1;
+  --text-muted: #9aa3b2;
+  --text-faint: #667085;
+
+  --signal-calm: #3fbf7f;
+  --signal-caution: #e8b84b;
+  --signal-critical: #e2634f;
+
+  --font-display: var(--font-unbounded), 'Helvetica Neue', Arial, sans-serif;
+  --font-body: var(--font-inter), 'Helvetica Neue', Arial, sans-serif;
+
+  --container-width: 1120px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+a {
+  color: inherit;
+}
+
+.container {
+  max-width: var(--container-width);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.section {
+  padding: 88px 0;
+}
+
+@media (max-width: 640px) {
+  .section {
+    padding: 56px 0;
+  }
+}
+
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--signal-calm);
+  margin: 0 0 12px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: 1.15;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(26px, 2.6vw, 36px);
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: clamp(26px, 3.4vw, 38px);
+}
+
+p {
+  margin: 0;
+}
+
+.lede {
+  font-size: 18px;
+  color: var(--text-muted);
+  max-width: 620px;
+}
+
+.tension-divider {
+  height: 3px;
+  width: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--signal-calm) 0%,
+    var(--signal-caution) 50%,
+    var(--signal-critical) 100%
+  );
+  opacity: 0.5;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 28px;
+  border-radius: 999px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button--primary {
+  background: var(--signal-calm);
+  color: #0b1410;
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--signal-calm);
+  outline-offset: 2px;
+}
+
+/* ── Language dropdown (с флагами) ─────────────────────────── */
+
+.lang-dropdown {
+  position: relative;
+}
+
+.lang-dropdown__trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(23, 27, 35, 0.75);
+  backdrop-filter: blur(6px);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lang-dropdown__code {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.lang-dropdown__chevron {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.lang-dropdown__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 160px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.lang-dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.lang-dropdown__item:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.lang-dropdown__item--active {
+  color: var(--signal-calm);
+}
+
+/* ── Sticky illustrations (position: fixed на весь скролл) ──── */
+
+.sticky-illustration {
+  position: fixed;
+  z-index: 15;
+  pointer-events: none; /* декоративные — не перехватывают клики по контенту под собой */
+}
+
+.sticky-illustration--top-left {
+  top: 88px; /* ниже верхнего бара hero (лого + переключатель языка) */
+  left: 24px;
+}
+
+.sticky-illustration--bottom-left {
+  bottom: 24px;
+  left: 24px;
+}
+
+.sticky-illustration--bottom-right {
+  bottom: 24px;
+  right: 24px;
+}
+
+.sticky-illustration__image {
+  display: block;
+  width: 200px;
+  height: auto;
+  border-radius: 18px;
+  opacity: 0.85;
+}
+
+.sticky-illustration--bottom-left .sticky-illustration__image {
+  width: 190px;
+  filter: drop-shadow(0 12px 30px rgba(226, 99, 79, 0.28));
+}
+
+.sticky-illustration--top-left .sticky-illustration__image {
+  filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.22));
+}
+
+.sticky-illustration--bottom-right .sticky-illustration__image {
+  filter: drop-shadow(0 12px 30px rgba(180, 140, 90, 0.22));
+}
+
+/* На мобильных — скрыты полностью, не только уменьшены. Три
+ * зафиксированных за углы картинки, постоянно перекрывающие контент на
+ * маленьком экране на протяжении ВСЕГО скролла — не то же самое, что
+ * временно занимать угол одной hero-секции (как было раньше); на узкой
+ * ширине это будет мешать читать текст каждой секции, не только hero. */
+@media (max-width: 767px) {
+  .sticky-illustration {
+    display: none;
+  }
+}
+
+/* ── Mobile-only иллюстрации (слоган сверху, адвокат в самом низу) ── */
+
+.mobile-only-illustration {
+  display: none; /* по умолчанию скрыто — показывается только в media query ниже */
+}
+
+.mobile-only-illustration__image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@media (max-width: 767px) {
+  .mobile-only-illustration {
+    display: block;
+  }
+
+  .mobile-only-illustration--top {
+    /* Верх hero — над top-bar, во всю ширину контейнера с небольшими
+     * полями, не full-bleed край-в-край. */
+    padding: 20px 20px 0;
+  }
+
+  .mobile-only-illustration--top .mobile-only-illustration__image {
+    border-radius: 16px;
+    filter: drop-shadow(0 12px 30px rgba(232, 184, 75, 0.2));
+  }
+
+  .mobile-only-illustration--bottom {
+    /* Буквально последний элемент документа — после футера, без
+     * дополнительного контента под ней. */
+    padding: 0;
+  }
+
+  .mobile-only-illustration--bottom .mobile-only-illustration__image {
+    border-radius: 0; /* край в край — самый низ страницы, не карточка */
+  }
+}
+
+/* ── Hero ───────────────────────────────────────────────────── */
+
+.hero {
+  position: relative;
+  padding: 28px 0 56px;
+  background: radial-gradient(ellipse at center, #171b23 0%, var(--bg) 70%);
+}
+
+.hero__top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 32px;
+}
+
+.hero__logo {
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+
+/* Текст+картинка и callout-карточки — РАЗНЫЕ строки, не колонки одной
+ * grid-строки. Первая версия сажала 6 карточек по бокам ОДНОВРЕМЕННО с
+ * 420px-картинкой в одну строку с текстом — при контейнере 1120px
+ * тексту оставалось ~150px и заголовок разваливался на слово-в-строку.
+ * Обнаружено визуальным рендером, не статическим анализом (баланс
+ * скобок такую ошибку в принципе не ловит). */
+.hero__main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+  flex-wrap: wrap;
+}
+
+.hero__text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 560px;
+  text-align: center;
+}
+
+.hero__text::before {
+  /* Сигнатурное свечение позади текста — даёт hero фокус-центр, найдено
+   * необходимым при визуальной проверке рендера (плоско без него). */
+  content: '';
+  position: absolute;
+  inset: -60px -40px;
+  z-index: -1;
+  background: radial-gradient(ellipse at center, rgba(63, 191, 127, 0.08) 0%, transparent 70%);
+}
+
+.hero__subheadline {
+  color: #d3d7de;
+}
+
+/* Courtroom-иллюстрация — "правее центра" реализовано порядком flex
+ * (текст первый, картинка вторая — при переносе на новую строку на
+ * узких экранах текст идёт первым) и тем, что вся hero__main-строка
+ * центрирована как целое, а внутри неё картинка справа от текста. */
+.hero__courtroom {
+  flex-shrink: 0;
+}
+
+.hero__courtroom-image {
+  width: 340px;
+  height: auto;
+  border-radius: 20px;
+  filter: drop-shadow(0 16px 48px rgba(0, 0, 0, 0.5));
+}
+
+.hero__callouts-row {
+  margin-top: 56px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+}
+
+.hero__callout {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(23, 27, 35, 0.6);
+}
+
+.hero__callout-title {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.hero__callout-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+@media (max-width: 1180px) {
+  .hero__callouts-row {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .hero__callouts-row {
+    display: none; /* компактный экран — приоритет тексту+CTA+картинке, не 6 доп. карточкам */
+  }
+}
+
+@media (max-width: 640px) {
+  .hero {
+    padding: 20px 0 40px;
+  }
+  .hero__logo {
+    display: none; /* на узком экране логотип и так есть в футере, здесь только занимает место */
+  }
+  .hero__courtroom-image {
+    width: 100%;
+    max-width: 320px;
+  }
+}
+
+/* ── Technology ("we are not...") ──────────────────────────── */
+
+.technology {
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.technology__title {
+  max-width: 640px;
+  margin-top: 4px;
+}
+
+.technology__subtitle {
+  margin-top: 16px;
+}
+
+/* position: relative — точка отсчёта для абсолютно позиционированных
+ * текстовых наложений ниже (в процентах от размера этого контейнера,
+ * который в точности совпадает с размером картинки благодаря
+ * next/image + display:block без доп. паддингов). */
+.technology__image-wrap {
+  position: relative;
+  margin-top: 48px;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.technology__image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Текст поверх картинки, привязан к позиции пиктограммы — координаты
+ * заданы в JSX через inline style (top/left/maxWidth в процентах от
+ * 1536×1024, см. комментарий в Technology.tsx про то, как они сняты).
+ * translateY(-50%) — вертикальное центрирование ОТНОСИТЕЛЬНО y-координаты
+ * иконки, не относительно верха текстового блока. */
+.technology__overlay-item {
+  position: absolute;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none; /* декоративный текстовый слой, не мешает кликам под собой */
+}
+
+.technology__overlay-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f4f6f8;
+  line-height: 1.25;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); /* читаемость поверх любого фрагмента фото/картинки под текстом */
+}
+
+.technology__overlay-desc {
+  font-size: 11px;
+  color: #c7cdd6;
+  line-height: 1.35;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+/* Нижняя строка — места меньше по вертикали (плашки в ряд, не колонкой),
+ * только заголовок пункта, без описания — иначе текст не влезает и
+ * перекрывает соседний сегмент. */
+.technology__overlay-item--compact .technology__overlay-text {
+  font-size: 12px;
+}
+
+/* ── Phone mockup — реальный HTML-экран поверх картинки ────────
+ * Границы (left/top/width/height) заданы в JSX инлайн-стилем, в
+ * процентах от technology__image-wrap — сняты вручную тем же методом,
+ * что и позиции callout'ов (сканирование границ корпуса телефона на
+ * исходном изображении).
+ *
+ * ИСПРАВЛЕНИЕ КЛЮЧЕВОГО БАГА первой версии: вертикальные секции
+ * (status-bar/header/waveform/rows/agenda/toolbar) распределяются
+ * через `flex: N 0 0%` (flex-grow с обнулённым flex-basis), НЕ через
+ * `padding: X%` — проценты в padding в CSS ВСЕГДА считаются от ШИРИНЫ
+ * containing block, включая padding-top/bottom, даже если контейнер
+ * узкий и высокий (как этот телефон). flex-basis внутри
+ * flex-direction:column — единственное место, где процент корректно
+ * считается от высоты (это его прямое назначение, main-axis sizing).
+ * Пропорции (3/9/8/35/25/20, сумма 100) сняты с реальных пиксельных
+ * замеров экрана на референсе, не взяты на глаз. */
+
+.phone-mockup {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  color: #e8eaed;
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+
+.phone-mockup__status-bar {
+  flex: 3 0 0%;
+  display: flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 0 8%;
+}
+
+.phone-mockup__header {
+  flex: 9 0 0%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8%;
+}
+
+.phone-mockup__shield {
+  width: 13px;
+  height: 13px;
+  color: var(--signal-calm);
+  flex-shrink: 0;
+}
+
+.phone-mockup__shield svg {
+  width: 100%;
+  height: 100%;
+}
+
+.phone-mockup__brand {
+  font-size: 9.5px;
+  font-weight: 600;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.phone-mockup__live {
+  font-size: 6.5px;
+  font-weight: 700;
+  color: var(--signal-calm);
+  background: rgba(63, 191, 127, 0.15);
+  border: 1px solid var(--signal-calm);
+  border-radius: 999px;
+  padding: 1px 5px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.phone-mockup__waveform {
+  flex: 8 0 0%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 0 8%;
+}
+
+.phone-mockup__waveform-bars {
+  flex: 1;
+  height: 40%;
+  display: flex;
+  align-items: flex-end;
+  gap: 1.2px;
+}
+
+.phone-mockup__waveform-bars span {
+  flex: 1;
+  min-width: 1px;
+  background: var(--signal-calm);
+  border-radius: 1px;
+}
+
+.phone-mockup__waveform-time {
+  font-size: 6.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.phone-mockup__rows {
+  flex: 35 0 0%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2% 8%;
+}
+
+.phone-mockup__row {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  border: 1px solid;
+  padding: 0 7px;
+}
+
+.phone-mockup__row-icon {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.phone-mockup__row-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.phone-mockup__row-time {
+  font-size: 6.5px;
+  color: inherit;
+  flex: 1;
+  text-align: right;
+}
+
+.phone-mockup__row-chevron {
+  font-size: 10px;
+  opacity: 0.7;
+  line-height: 1;
+}
+
+.phone-mockup__row--red {
+  border-color: var(--signal-critical);
+  background: rgba(226, 99, 79, 0.1);
+  color: var(--signal-critical);
+}
+
+.phone-mockup__row--amber {
+  border-color: var(--signal-caution);
+  background: rgba(232, 184, 75, 0.1);
+  color: var(--signal-caution);
+}
+
+.phone-mockup__row--green {
+  border-color: var(--signal-calm);
+  background: rgba(63, 191, 127, 0.1);
+  color: var(--signal-calm);
+}
+
+.phone-mockup__row--blue {
+  border-color: #4a9eff;
+  background: rgba(74, 158, 255, 0.1);
+  color: #4a9eff;
+}
+
+.phone-mockup__agenda {
+  flex: 25 0 0%;
+  display: flex;
+  flex-direction: column;
+  padding: 3% 8% 0;
+}
+
+.phone-mockup__agenda-label {
+  display: block;
+  font-size: 7.5px;
+  color: var(--text-muted);
+  margin-bottom: 5%;
+}
+
+.phone-mockup__agenda-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.phone-mockup__agenda-item {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  border: 1px solid var(--text-faint);
+  flex-shrink: 0;
+}
+
+.phone-mockup__agenda-item--checked {
+  border-color: var(--signal-calm);
+  background: var(--signal-calm);
+}
+
+.phone-mockup__agenda-item--selected {
+  border-color: var(--signal-calm);
+  background: radial-gradient(circle, var(--signal-calm) 40%, transparent 42%);
+}
+
+.phone-mockup__toolbar {
+  flex: 20 0 0%;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 8%;
+}
+
+.phone-mockup__toolbar-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  color: var(--text-muted);
+}
+
+.phone-mockup__toolbar-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.phone-mockup__toolbar-icon--mic {
+  color: var(--signal-calm);
+  border-color: var(--signal-calm);
+  background: rgba(63, 191, 127, 0.08);
+}
+
+@media (max-width: 900px) {
+  /* На узких экранах картинка сжимается сильнее, чем текст (у шрифта
+   * есть физический минимальный читаемый размер) — оверлей на реальном
+   * скриншоте телефона/900px+ macbook ещё разборчив, но на 375px-экране
+   * 23 фрагмента текста поверх мелкой картинки стали бы нечитаемым
+   * шумом. Скрываем весь оверлей на мобильных, картинка остаётся чисто
+   * иллюстративной (как есть, без текста) — честнее, чем нечитаемый
+   * микротекст. Экран телефона (phone-mockup) — та же логика, тот же
+   * порог. */
+  .technology__overlay-item,
+  .phone-mockup {
+    display: none;
+  }
+}
+
+/* ── Cycle ──────────────────────────────────────────────────── */
+
+.cycle__title {
+  max-width: 640px;
+  margin-bottom: 48px;
+}
+
+.cycle__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 24px;
+}
+
+.cycle__step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.cycle__index {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--signal-calm);
+}
+
+.cycle__step-title {
+  font-size: 17px;
+}
+
+.cycle__step-desc {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 900px) {
+  .cycle__list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .cycle__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Differentiation ────────────────────────────────────────── */
+
+.differentiation {
+  background: var(--bg-elevated);
+}
+
+.differentiation__grid h2 {
+  max-width: 560px;
+  margin-bottom: 40px;
+}
+
+.differentiation__compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.differentiation__col {
+  padding: 24px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+}
+
+.differentiation__col--them {
+  opacity: 0.6;
+}
+
+.differentiation__col--us {
+  border-color: var(--signal-calm);
+  background: rgba(63, 191, 127, 0.06);
+}
+
+.differentiation__label {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: var(--text-faint);
+}
+
+.differentiation__col--us .differentiation__label {
+  color: var(--signal-calm);
+}
+
+.differentiation__col p {
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  .differentiation__compare {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Privacy ────────────────────────────────────────────────── */
+
+.privacy {
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.privacy h2 {
+  max-width: 620px;
+}
+
+.privacy__intro {
+  margin-top: 16px;
+}
+
+.privacy__points {
+  margin-top: 48px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+}
+
+.privacy__point-title {
+  font-size: 17px;
+  margin-bottom: 8px;
+  color: var(--signal-calm);
+}
+
+.privacy__point-desc {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.privacy__policy-link {
+  display: inline-block;
+  margin-top: 40px;
+  font-size: 14px;
+  text-decoration: underline;
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .privacy__points {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Features ───────────────────────────────────────────────── */
+
+.features__list {
+  margin-top: 40px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.features__item {
+  position: relative;
+}
+
+.features__marker {
+  display: block;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  margin-bottom: 20px;
+}
+
+.features__marker[data-signal='0'] {
+  background: var(--signal-calm);
+}
+.features__marker[data-signal='1'] {
+  background: var(--signal-caution);
+}
+.features__marker[data-signal='2'] {
+  background: var(--signal-critical);
+}
+
+.features__item-title {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.features__item-desc {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .features__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── How it works ───────────────────────────────────────────── */
+
+.how-it-works__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+/* ── FAQ ────────────────────────────────────────────────────── */
+
+.faq__list {
+  margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 720px;
+}
+
+.faq__item {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.faq__question {
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 16px;
+  list-style: none;
+}
+
+.faq__question::-webkit-details-marker {
+  display: none;
+}
+
+.faq__question::after {
+  content: '+';
+  float: right;
+  color: var(--signal-calm);
+}
+
+.faq__item[open] .faq__question::after {
+  content: '−';
+}
+
+.faq__answer {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 15px;
+  max-width: 620px;
+}
+
+/* ── Final CTA ──────────────────────────────────────────────── */
+
+.final-cta {
+  background: var(--bg-elevated);
+  text-align: center;
+}
+
+.final-cta__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.final-cta__inner .lede {
+  max-width: none;
+}
+
+/* ── Privacy Policy illustrated (последняя секция) ─────────────
+ * Впервые из всех изображений на лендинге — точные координаты
+ * пиктограмм пришли готовыми (privacy_policy_en.json, anchor: {x,y}),
+ * не вычислялись вручную. Позиционирование label'ов — по тому же
+ * принципу translateY(-50%)-центрирования, что в Technology.tsx, но с
+ * 4 направлениями вместо одного (right/left/above/below — см. dir в
+ * ANCHORS в компоненте), т.к. группы расположены по-разному вокруг
+ * картинки, не только колонками. */
+
+.privacy-policy-illustrated {
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+}
+
+.privacy-policy-illustrated__title {
+  max-width: 640px;
+  margin-top: 4px;
+}
+
+.privacy-policy-illustrated__subtitle {
+  margin-top: 16px;
+}
+
+.privacy-policy-illustrated__image-wrap {
+  position: relative;
+  margin-top: 48px;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.privacy-policy-illustrated__image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.privacy-policy-illustrated__label {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 150px;
+  pointer-events: none;
+}
+
+/* ВСЕ ЗАГЛАВНЫЕ, жирные — по референсу с реальным текстом
+ * (file_000000008f7c81f484f2b80d5dc39ec4.png). Первая версия
+ * использовала обычный regular-текст без text-transform — отсюда и
+ * жалоба "подписи не получились хорошо". */
+.privacy-policy-illustrated__label-text {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #f4f6f8;
+  line-height: 1.25;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+/* Описание — только там, где showDesc:true в ANCHORS (central_network,
+ * bottom_security_controls), как в референсе: у левой и правой колонки
+ * его нет вообще, только заголовок. */
+.privacy-policy-illustrated__label-desc {
+  font-size: 9.5px;
+  font-weight: 400;
+  text-transform: none;
+  color: #c7cdd6;
+  line-height: 1.3;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+/* Нумерованные бейджи (1-8) центрального круга — позиционированы
+ * ПРЯМО на иконке (те же x/y-координаты, что у самой иконки в
+ * ANCHORS), не рядом с текстом лейбла. Небольшой сдвиг вверх-вправо
+ * от центра иконки — имитирует то, как бейдж сидит в углу круга на
+ * референсе, не строго по центру. */
+.privacy-policy-illustrated__badge {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1.5px solid var(--signal-calm);
+  color: var(--signal-calm);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Направление — сдвигает блок так, чтобы точка привязки (top/left в %
+ * из JSX) оказалась на нужном краю текста, а не всегда в его левом
+ * верхнем углу по умолчанию. */
+.privacy-policy-illustrated__label--right {
+  transform: translateY(-50%);
+  padding-left: 14px;
+  text-align: left;
+}
+
+.privacy-policy-illustrated__label--left {
+  transform: translate(-100%, -50%);
+  padding-right: 14px;
+  text-align: right;
+  align-items: flex-end;
+}
+
+.privacy-policy-illustrated__label--above {
+  transform: translate(-50%, -100%);
+  padding-bottom: 12px;
+  text-align: center;
+  align-items: center;
+}
+
+.privacy-policy-illustrated__label--below {
+  transform: translateX(-50%);
+  padding-top: 12px;
+  text-align: center;
+  align-items: center;
+}
+
+/* Больше отступа, когда под заголовком есть ещё и описание (2 строки
+ * вместо одной) — иначе выросший блок текста наезжает на саму иконку.
+ * Отдельный модификатор, не общее увеличение padding у --above/--below
+ * (это сломало бы компактные группы вроде top_pipeline, где просторнее
+ * не требуется и не помещается). */
+.privacy-policy-illustrated__label--above.privacy-policy-illustrated__label--with-desc {
+  padding-bottom: 38px;
+}
+
+.privacy-policy-illustrated__label--below.privacy-policy-illustrated__label--with-desc {
+  padding-top: 38px;
+}
+
+@media (max-width: 900px) {
+  /* Та же логика, что для technology__overlay-item и .phone-mockup —
+   * 39 текстовых меток поверх сжатой на мобильном экране картинки
+   * стали бы нечитаемым шумом. */
+  .privacy-policy-illustrated__label,
+  .privacy-policy-illustrated__badge {
+    display: none;
+  }
+}
+
+/* ── Footer ─────────────────────────────────────────────────── */
+
+.footer {
+  padding: 56px 0 32px;
+  border-top: 1px solid var(--border);
+}
+
+.footer__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 32px;
+}
+
+.footer__logo {
+  font-family: var(--font-display);
+  font-size: 15px;
+}
+
+.footer__tagline {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 280px;
+}
+
+.footer__links {
+  display: flex;
+  gap: 20px;
+  font-size: 14px;
+}
+
+.footer__links a {
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+.footer__links a:hover {
+  color: var(--text);
+}
+
+.footer__bottom {
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.footer__note,
+.footer__legal {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+

@@ -1,0 +1,10 @@
+{
+  "name": "devils-advocate",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "api:dev": "npm run start:dev --workspace=apps/api"
+  }
+}

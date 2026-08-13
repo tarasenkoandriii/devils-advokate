@@ -1,0 +1,2531 @@
+/* apps/tma: минимальные функциональные стили для проверки флоу.
+ * НЕ финальный дизайн — иконочная система и растровые активы
+ * (см. docs/devils-advocate-illustrations-tz.md) сюда ещё не
+ * интегрированы, это отдельный, более поздний проход. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--tg-theme-bg-color, #ffffff);
+  color: var(--tg-theme-text-color, #1a1a1a);
+}
+
+.page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/* Аудит вёрстки — глобального стиля <button> не было вообще: только
+ * ~10 из ~38 кнопок по всему приложению стилизованы через специфичные
+ * родительские селекторы (.people-list__row button и т.п.), остальные
+ * рендерились нативным браузерным видом (серая 3D-рамка), визуально
+ * выбиваясь из интерфейса. Element-селектор — самая низкая
+ * специфичность из возможных, ни один существующий класс-стиль не
+ * переопределяется этим правилом задним числом, только заполняет
+ * пробел там, где стиля не было вообще. */
+button {
+  padding: 8px 14px;
+  border: 1px solid var(--tg-theme-button-color, #2481cc);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tg-theme-button-color, #2481cc);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.page--loading,
+.page--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.consent-gate {
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.consent-gate__error {
+  color: #c0392b;
+}
+
+.dilemma-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.dilemma-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.dilemma-form textarea,
+.dilemma-form input {
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.dilemma-form button,
+.consent-gate button {
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tg-theme-button-color, #2481cc);
+  color: var(--tg-theme-button-text-color, #ffffff);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.dilemma-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.generation-error {
+  padding: 12px;
+  border-radius: 8px;
+  background: #fdecea;
+  color: #c0392b;
+  margin-bottom: 16px;
+}
+
+.arguments-list {
+  display: flex;
+  gap: 16px;
+}
+
+.arguments-list__column {
+  flex: 1;
+}
+
+.arguments-list__column h3 {
+  margin-top: 0;
+}
+
+.arguments-list__column--pro h3 {
+  color: #2e7d32;
+}
+
+.arguments-list__column--con h3 {
+  color: #c0392b;
+}
+
+.arguments-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arguments-list li {
+  padding: 8px;
+  border-radius: 8px;
+  background: #f5f5f5;
+  font-size: 14px;
+}
+
+.arguments-list__source-tag {
+  margin-left: 6px;
+}
+
+.arguments-list__weight {
+  margin-left: 6px;
+  font-weight: bold;
+}
+
+/* Пункт 23 (backend) → TMA UI: Argument Lifecycle. */
+
+.arguments-list__lifecycle-select {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.arguments-list__failure-insight {
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #842029;
+  background: #fff5f5;
+  border-left: 3px solid #dc3545;
+  border-radius: 4px;
+}
+
+.engine-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.engine-selector select {
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.project-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-list li a {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f5f5f5;
+  text-decoration: none;
+  color: inherit;
+}
+
+.project-list__question {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
+.project-list__meta {
+  font-size: 12px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.project-detail__goal {
+  color: #666;
+  font-size: 14px;
+}
+
+.share-button {
+  margin-top: 12px;
+  padding: 10px 16px;
+  border: 1px solid var(--tg-theme-button-color, #2481cc);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tg-theme-button-color, #2481cc);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.objective-toggle {
+  display: block;
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px dashed #d0d0d0;
+  border-radius: 8px;
+  background: transparent;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
+.decision-objective-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+}
+
+.decision-objective-form h3 {
+  margin: 0;
+}
+
+.decision-objective-form__hint {
+  margin: 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.decision-objective-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.decision-objective-form input,
+.decision-objective-form textarea {
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-size: 16px;
+  font-family: inherit;
+}
+
+.decision-objective-form button {
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tg-theme-button-color, #2481cc);
+  color: var(--tg-theme-button-text-color, #ffffff);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.people-section {
+  margin: 16px 0;
+}
+
+.people-section h3 {
+  margin-bottom: 4px;
+}
+
+.people-section__hint {
+  font-size: 13px;
+  color: #666;
+}
+
+.people-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.people-list__item {
+  padding: 10px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+}
+
+/* Аудит вёрстки — раньше имя фигуранта делило один flex-ряд с
+ * select+3 кнопками: на узком экране порядок переноса зависел от
+ * длины имени (у короткого — 3 контрола влезали на первую строку, у
+ * длинного — только 1-2), непредсказуемо для пользователя между
+ * разными строками списка. Имя вынесено в свой блок сверху — .people-list__row
+ * теперь всегда содержит только контролы, перенос одинаковый для всех. */
+.people-list__name {
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.people-list__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.people-list__row button {
+  padding: 6px 12px;
+  border: 1px solid var(--tg-theme-button-color, #2481cc);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tg-theme-button-color, #2481cc);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* Пункт 30 (аудит) — кнопка удаления из проекта, визуально отделена
+ * от нейтральных действий (Steelman/Подробнее) — необратимое действие,
+ * не должно теряться среди обычных кнопок. Селектор
+ * .people-list__row .people-list__remove (не просто .people-list__remove)
+ * — та же специфичность (0,1,1), что у .people-list__row button выше,
+ * чтобы порядок объявления в файле решал победителя предсказуемо, без
+ * !important. */
+.people-list__row .people-list__remove {
+  border-color: #dc3545;
+  color: #dc3545;
+  padding: 6px 10px;
+}
+
+.people-section__add {
+  display: flex;
+  gap: 8px;
+}
+
+.people-section__add input {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.people-section__add button {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tg-theme-button-color, #2481cc);
+  color: var(--tg-theme-button-text-color, #ffffff);
+  cursor: pointer;
+}
+
+.steelman-cases {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+}
+
+.steelman-case {
+  font-size: 14px;
+}
+
+.steelman-case__label {
+  font-weight: bold;
+  margin-bottom: 2px;
+  color: #666;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+/* Пункт 21 (backend) → TMA UI: Source Conflict Resolver. */
+
+.source-conflicts {
+  margin-top: 10px;
+}
+
+.source-conflicts__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.source-conflict {
+  border: 1px solid #ffc107;
+  background: #fffbea;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.source-conflict__description {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.source-conflict__fact {
+  font-size: 13px;
+  color: #444;
+}
+
+.source-conflict__question {
+  font-size: 13px;
+  font-style: italic;
+  color: #856404;
+}
+
+/* Пункт 22 (backend) → TMA UI: Stale Fact Alert — переиспользован
+ * в двух местах (карточка разговора, PeopleSection), общие классы. */
+
+.stale-facts {
+  margin-top: 8px;
+}
+
+.stale-facts__item {
+  font-size: 13px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border-left: 3px solid #6c757d;
+  background: #f8f9fa;
+}
+
+.stale-facts__age {
+  font-weight: bold;
+  color: #495057;
+}
+
+/* Пункт 39 (backend) → TMA UI: Communication Profile. */
+
+.communication-profile {
+  margin-top: 8px;
+}
+
+.communication-profile__list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.communication-profile__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-left: 3px solid #6c757d;
+  background: #f8f9fa;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.communication-profile__trait {
+  font-weight: bold;
+}
+
+.communication-profile__source {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Пункт 43 (backend) → TMA UI: Relationship — блок связей на
+ * карточке персоны + подсказки по совместному участию в разговоре. */
+
+.relationships-block {
+  margin-top: 8px;
+}
+
+.relationships-block__list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.relationships-block__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.relationship-suggestions {
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: #f1f3f5;
+  border-radius: 8px;
+}
+
+.relationship-suggestions__list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+}
+
+.relationship-suggestions__item {
+  font-size: 13px;
+  padding: 3px 0;
+}
+
+/* Пункт 45 (backend) → TMA UI: Precedent Search. */
+
+.precedent-search-block {
+  margin-top: 8px;
+}
+
+.precedent-search-block__conclusion {
+  font-size: 13px;
+  font-weight: bold;
+  margin: 6px 0;
+}
+
+.precedent-search-block__list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.precedent-search-block__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.precedent-search-block__item--analogous {
+  background: #fff8e6;
+  border-left: 3px solid #fd7e14;
+}
+
+.precedent-search-block__item--partially_similar {
+  background: #f1f3f5;
+  border-left: 3px solid #6c757d;
+}
+
+.precedent-search-block__item--contrasting {
+  background: #eafaf0;
+  border-left: 3px solid #28a745;
+}
+
+.precedent-search-block__badge {
+  font-weight: bold;
+}
+
+.precedent-search-block__source {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Пункты 27/28 (backend) → TMA UI: повестка / защищённые заметки. */
+
+.protected-notes {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.protected-notes__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.protected-notes__type {
+  font-weight: bold;
+  font-size: 13px;
+}
+
+.protected-notes__trigger {
+  font-size: 13px;
+  font-style: italic;
+  color: #666;
+}
+
+/* Пункт 13 (backend) → TMA UI: Conversation Dossier — тот же паттерн
+ * блока, что .people-section выше, не переизобретён заново. */
+
+.conversations-section {
+  margin: 16px 0;
+}
+
+.conversations-section__hint {
+  color: #666;
+  font-size: 14px;
+}
+
+.conversations-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.conversations-list__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.conversations-list__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.conversation-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eee;
+  color: #444;
+}
+
+.conversation-status--transcribing,
+.conversation-status--analyzing {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.conversation-status--transcribed,
+.conversation-status--analyzed {
+  background: #d4edda;
+  color: #155724;
+}
+
+.conversation-status--failed {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.conversation-detail {
+  margin-top: 10px;
+  border-top: 1px solid #eee;
+  padding-top: 10px;
+}
+
+.transcript-segments {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.transcript-segments__item {
+  margin-bottom: 8px;
+}
+
+.transcript-segments__speaker {
+  display: block;
+  font-weight: bold;
+  font-size: 12px;
+  color: #666;
+  text-transform: uppercase;
+}
+
+/* Пункт 26 (backend) → TMA UI: сопоставление диаризации фигурантам. */
+
+.participant-assignment {
+  margin: 8px 0 14px;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #f8f9fa;
+}
+
+.participant-assignment__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+/* Пункт 15 (backend) → TMA UI: поворотные точки — метка прямо под
+ * репликой, на которой их нашла детекция. */
+
+.turning-point {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-left: 3px solid #ffc107;
+  background: #fffbea;
+  border-radius: 4px;
+}
+
+.turning-point__badge {
+  font-size: 12px;
+  font-weight: bold;
+  color: #856404;
+}
+
+.turning-point__description {
+  font-size: 13px;
+  color: #444;
+}
+
+/* Пункт 36 (backend) → TMA UI: Manipulation Detector — тот же
+ * визуальный паттерн, что turning-point, красный акцент вместо
+ * жёлтого (приём аргументации — не нейтральное наблюдение). */
+.manipulation-point {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: #fff0f0;
+  border-left: 3px solid #dc3545;
+  border-radius: 4px;
+}
+
+.manipulation-point__badge {
+  font-size: 12px;
+  font-weight: bold;
+  color: #842029;
+}
+
+.manipulation-point__description {
+  font-size: 13px;
+  color: #444;
+}
+
+/* Пункт 37 (backend) → TMA UI: Discrepancy Analysis — три уровня
+ * шкалы расхождений (§3.16 ТЗ), цвет градуирован по серьёзности. */
+.discrepancy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.discrepancy--inaccuracy {
+  background: #fff8e6;
+  border-left: 3px solid #fd7e14;
+}
+
+.discrepancy--discrepancy {
+  background: #fff0f0;
+  border-left: 3px solid #dc3545;
+}
+
+.discrepancy--strong_discrepancy {
+  background: #f8e9ff;
+  border-left: 3px solid #6f42c1;
+}
+
+.discrepancy__badge {
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.discrepancy__source {
+  font-size: 13px;
+  color: #444;
+}
+
+.discrepancy__confirmed {
+  font-size: 12px;
+  font-style: italic;
+  color: #666;
+}
+
+/* Пункт 40 (backend) → TMA UI: ручная проверка по ссылке пользователя. */
+
+.source-check-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.source-check-result--confirmed {
+  background: #eafaf0;
+  border-left: 3px solid #28a745;
+}
+
+.source-check-result--contradicted {
+  background: #fff0f0;
+  border-left: 3px solid #dc3545;
+}
+
+.source-check-result--insufficient {
+  background: #f1f3f5;
+  border-left: 3px solid #6c757d;
+}
+
+.source-check-result__badge {
+  font-weight: bold;
+}
+
+/* Пункт 41 (backend) → TMA UI: выгрузка списка для ручной проверки. */
+
+.facts-export {
+  margin-top: 8px;
+}
+
+.facts-export__textarea {
+  width: 100%;
+  min-height: 200px;
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+/* Пункт 18 (backend) → TMA UI: Do Not Say — та же визуальная логика,
+ * что .turning-point выше, свои цвета (красноватый акцент — риск, не
+ * нейтральная находка). */
+
+.do-not-say-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-left: 3px solid #dc3545;
+  background: #fff5f5;
+  border-radius: 4px;
+}
+
+.do-not-say-warning__badge {
+  font-size: 12px;
+  font-weight: bold;
+  color: #842029;
+}
+
+.do-not-say-warning__why {
+  font-size: 13px;
+  color: #444;
+}
+
+.do-not-say-warning__alternative {
+  font-size: 13px;
+  color: #1a7a3c;
+  font-style: italic;
+}
+
+/* Пункт 18 → карточка разговора: та же логика, что .do-not-say-warning
+ * выше, свои классы — карточка не переиспользует ConversationsSection
+ * напрямую (отдельная страница). */
+
+.self-risk-warnings {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.self-risk-warnings__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-left: 3px solid #dc3545;
+  background: #fff5f5;
+  border-radius: 4px;
+}
+
+.self-risk-warnings__category {
+  font-size: 13px;
+  font-weight: bold;
+  color: #842029;
+}
+
+.self-risk-warnings__why {
+  font-size: 13px;
+  color: #444;
+}
+
+.self-risk-warnings__alternative {
+  font-size: 13px;
+  color: #1a7a3c;
+  font-style: italic;
+}
+
+/* Пункт 19 (backend) → TMA UI: Best Next Move — на весь разговор
+ * целиком, не бейджем на реплике, поэтому свой блок с 4 карточками. */
+
+.best-next-move {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.best-next-move__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+.best-next-move__item--avoid {
+  border-color: #dc3545;
+  background: #fff5f5;
+}
+
+.best-next-move__label {
+  font-size: 12px;
+  font-weight: bold;
+  color: #666;
+  text-transform: uppercase;
+}
+
+/* Пункт 20 (§3.55 ТЗ) — поля whyNotAlternative/whatCouldChange
+ * визуально приглушены относительно основных 4 (bestAction/
+ * alternative/avoid/why) — дополнительный контекст, не основной вывод. */
+.best-next-move__item--secondary {
+  border-style: dashed;
+  background: #f8f9fa;
+}
+
+.conversations-section__add {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+}
+
+.conversations-section__add label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #444;
+}
+
+.conversations-section__privacy-note {
+  font-size: 12px;
+  color: #666;
+}
+
+.conversations-section__add-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Пункт 14 (backend) → TMA UI: Commitment Tracker — переиспользует
+ * .conversations-section__add/.generation-error, свои классы только
+ * там, где визуально отличается (чекбокс-строка, просрочка). */
+
+.commitments-section {
+  margin: 16px 0;
+}
+
+.commitments-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.commitments-list__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.commitments-list__item--overdue {
+  border-color: #dc3545;
+  background: #fff5f5;
+}
+
+.commitments-list__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.commitments-list__row input[type='checkbox'] {
+  margin-top: 3px;
+}
+
+.commitments-list__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.commitments-list__owner {
+  font-size: 12px;
+  font-weight: bold;
+  color: #666;
+  text-transform: uppercase;
+}
+
+.commitments-list__due {
+  font-size: 12px;
+  color: #666;
+}
+
+.commitments-list__item--overdue .commitments-list__due {
+  color: #dc3545;
+  font-weight: bold;
+}
+
+/* Пункт 16 (backend) → TMA UI: Missing Information. */
+
+.missing-information-section {
+  margin: 16px 0;
+}
+
+.missing-information-section__list {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.missing-information-section__list li {
+  margin-bottom: 6px;
+}
+
+/* Пункт 17 (backend) → TMA UI: Evidence Gap. */
+
+.evidence-gap-section {
+  margin: 16px 0;
+}
+
+.evidence-gap-section__categories {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.evidence-gap-category {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.evidence-gap-category__label {
+  display: block;
+  font-weight: bold;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.evidence-gap-category__list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
+.evidence-gap-category__list li {
+  margin-bottom: 4px;
+}
+
+/* Пункт 24 (backend) → TMA UI: Open Loops. */
+
+.open-loops-section {
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.open-loops-section__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: bold;
+  color: #856404;
+}
+
+.open-loops-section__details {
+  margin-top: 10px;
+  cursor: default;
+}
+
+.open-loops-section__details ul {
+  margin: 4px 0 10px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+/* Пункт 25 (backend) → TMA UI: Prediction vs Reality. */
+
+/* Аудит вёрстки — обёртка <section className="predictions-section">
+ * использовалась с самого создания компонента, но не имела
+ * собственного CSS-правила: только дочерний .predictions-list был
+ * стилизован. Тот же паттерн отступа, что у всех остальных секций
+ * страницы проекта (.commitments-section/.evidence-gap-section/
+ * .missing-information-section — все margin: 16px 0). */
+.predictions-section {
+  margin: 16px 0;
+}
+
+.predictions-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.predictions-list__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.predictions-list__predicted {
+  font-weight: bold;
+  margin: 0 0 8px;
+}
+
+.predictions-list__resolved {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #ddd;
+}
+
+/* Пункт 38 (backend) → TMA UI: Archetype Perspective Simulation. */
+
+.archetype-perspectives-section {
+  margin: 16px 0;
+}
+
+.archetype-perspectives-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.archetype-perspectives-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.archetype-perspectives-list__label {
+  font-weight: bold;
+  font-size: 13px;
+}
+
+/* Пункт 44 (backend) → TMA UI: Stakeholder Map. */
+
+.stakeholder-map-section {
+  margin: 16px 0;
+}
+
+.stakeholder-map__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.stakeholder-map__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.stakeholder-map__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.stakeholder-map__name {
+  font-weight: bold;
+}
+
+.stakeholder-map__role {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e7f0ff;
+  color: #1a56c4;
+}
+
+.stakeholder-map__arguments {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.stakeholder-map__argument {
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.stakeholder-map__argument--pro {
+  background: #eafaf0;
+  border-left: 3px solid #28a745;
+}
+
+.stakeholder-map__argument--con {
+  background: #fff0f0;
+  border-left: 3px solid #dc3545;
+}
+
+.stakeholder-suggestions {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f1f3f5;
+  border-radius: 8px;
+}
+
+.stakeholder-suggestions__list,
+.stakeholder-suggestions__gaps {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.stakeholder-suggestions__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+/* Пункт 47 (backend) → TMA UI: Outcome Forecasting. */
+
+.outcome-scenarios-section {
+  margin: 16px 0;
+}
+
+.outcome-scenarios-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.outcome-scenarios-list__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.outcome-scenarios-list__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.outcome-scenarios-list__type {
+  font-weight: bold;
+}
+
+.outcome-scenarios-list__confidence {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.outcome-scenarios-list__confidence--low {
+  background: #f1f3f5;
+  color: #495057;
+}
+
+.outcome-scenarios-list__confidence--medium {
+  background: #fff8e6;
+  color: #b8860b;
+}
+
+.outcome-scenarios-list__confidence--high {
+  background: #e7f0ff;
+  color: #1a56c4;
+}
+
+.outcome-scenarios-list__note {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+  margin: 4px 0 0;
+}
+
+/* Пункт 48 (backend) → TMA UI: Photo Verification. */
+
+.photo-verification-section {
+  margin: 16px 0;
+}
+
+.photo-verification-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.photo-verification-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.photo-verification-list__badge {
+  font-weight: bold;
+  color: #b8860b;
+}
+
+.photo-verification-list__note {
+  color: #444;
+}
+
+.photo-verification-list__disclaimer {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+
+.card-section {
+  margin: 16px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.card-section h3 {
+  margin-bottom: 6px;
+}
+
+.card-section__empty {
+  color: #999;
+  font-size: 14px;
+  font-style: italic;
+}
+
+.card-argument-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.script-text {
+  padding: 10px;
+  background: #f5f5f5;
+  border-radius: 8px;
+  font-style: italic;
+}
+
+.script-generate-button {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--tg-theme-button-color, #2481cc);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tg-theme-button-color, #2481cc);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.script-generate-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Аудит вёрстки — .disclaimer использовался в LaunchDisclaimer.tsx с
+ * самого первого чекпоинта (MVP-фича 13), но не имел собственного
+ * CSS-правила вообще — экран держался только на .page (базовый
+ * контейнер) и браузерных дефолтах для <p>/<h1>. Первый экран, который
+ * видит пользователь, блокирующий, с серьёзным содержанием — заслуживает
+ * комфортного межстрочного/межабзацного интервала, не тесных дефолтов. */
+.disclaimer p {
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.disclaimer__lead {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.privacy-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 8px;
+}
+
+.privacy-row button {
+  padding: 6px 10px;
+  border: 1px solid var(--tg-theme-button-color, #2481cc);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tg-theme-button-color, #2481cc);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.privacy-delete-confirm {
+  border-color: #c0392b !important;
+  color: #c0392b !important;
+}
+
+.safe-share-preview {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.safe-share-preview__notice {
+  color: #c0392b;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.safe-share-preview__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.safe-share-preview__actions button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--tg-theme-button-color, #2481cc);
+  color: var(--tg-theme-button-text-color, #ffffff);
+  cursor: pointer;
+}
+
+.safe-share-preview__cancel {
+  background: transparent !important;
+  border: 1px solid #d0d0d0 !important;
+  color: #666 !important;
+}
+
+.retention-note {
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+}
+
+.retention-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 8px;
+}
+
+.retention-row__title {
+  font-size: 14px;
+}
+
+.retention-row__period {
+  font-size: 12px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.onboarding-field select,
+.onboarding-field input {
+  padding: 8px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+/* Пункт 49 (backend) → TMA UI: гео-подсказка онбординга + Reconciliation Arguments. */
+
+.onboarding-geo-suggestion {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed #ddd;
+}
+
+.onboarding-geo-suggestion__card {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #fff8e6;
+  border-radius: 8px;
+}
+
+.onboarding-geo-suggestion__reasoning {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.reconciliation-arguments-section {
+  margin: 16px 0;
+}
+
+.reconciliation-arguments-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.reconciliation-arguments-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.reconciliation-arguments-list__reference {
+  font-weight: bold;
+  color: #1a56c4;
+}
+
+/* Пункт 51 (TMA UI): Scheduler. */
+
+.scheduler-section {
+  margin: 16px 0;
+}
+
+.scheduler-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.scheduler-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.scheduler-list__note {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.scheduler-list__link {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* Пункт 53 (TMA UI): Decision Track Record (§3.2 ТЗ). */
+
+.decision-outcome-section {
+  margin: 16px 0;
+}
+
+.calibration-block {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.calibration-block__note {
+  font-size: 13px;
+  color: #444;
+  margin-top: 4px;
+}
+
+/* Пункт 54 (TMA UI): §3.17 ТЗ — критика собственной позиции. */
+
+.archetype-perspectives-section__checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+/* Пункт 55 (TMA UI): Sparring / Red Team. */
+
+.sparring-section {
+  margin: 16px 0;
+}
+
+.sparring-session-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.sparring-session-list__item {
+  margin-bottom: 6px;
+}
+
+.sparring-session-list__item button {
+  width: 100%;
+  text-align: left;
+}
+
+.sparring-chat {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sparring-chat__message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  max-width: 85%;
+}
+
+.sparring-chat__message--opponent {
+  background: #f1f3f5;
+  align-self: flex-start;
+}
+
+.sparring-chat__message--user {
+  background: #e7f0ff;
+  align-self: flex-end;
+}
+
+.sparring-chat__role {
+  font-size: 11px;
+  font-weight: bold;
+  color: #666;
+}
+
+/* Пункт 56 (TMA UI): Public Discussion. */
+
+.public-discussion-section__link {
+  font-size: 13px;
+  word-break: break-all;
+  background: #f1f3f5;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin: 8px 0;
+}
+
+.public-discussion-section__moderation-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.public-discussion-section__moderation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.public-discussion-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.public-discussion-page__join {
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: #f1f3f5;
+  border-radius: 8px;
+}
+
+.public-discussion-page__arguments,
+.public-discussion-page__submissions,
+.public-discussion-page__comments {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.public-discussion-page__argument {
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.public-discussion-page__argument--pro {
+  background: #eafaf0;
+  border-left: 3px solid #28a745;
+}
+
+.public-discussion-page__argument--con {
+  background: #fff0f0;
+  border-left: 3px solid #dc3545;
+}
+
+.public-discussion-page__submission {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.public-discussion-page__comment {
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.public-discussion-page__comment-author {
+  font-weight: bold;
+}
+
+/* Пункт 57 (TMA UI): Library. */
+
+.library-submit-section {
+  margin: 16px 0;
+}
+
+.library-moderation-list,
+.library-page__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.library-moderation-list__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.library-moderation-list__arguments {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.library-page,
+.library-entry-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.library-page__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+/* Пункт 58 (TMA UI): PersonFactsSection + EXIF-предупреждение. */
+
+.person-facts-section {
+  margin-top: 8px;
+}
+
+.person-facts-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.person-facts-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.person-facts-section__source-note {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.person-facts-section__geo-warning {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #fff0f0;
+  border-left: 3px solid #dc3545;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+/* Пункт 59 (TMA UI): Motive Analysis. */
+
+.motive-analysis-section {
+  margin-top: 8px;
+}
+
+.motive-analysis-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.motive-analysis-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.motive-analysis-section__confidence {
+  font-size: 11px;
+  font-weight: bold;
+  align-self: flex-start;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.motive-analysis-section__confidence--low {
+  background: #f1f3f5;
+  color: #666;
+}
+
+.motive-analysis-section__confidence--medium {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.motive-analysis-section__confidence--high {
+  background: #d1e7dd;
+  color: #0f5132;
+}
+
+.motive-analysis-section__note {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Пункт 60 (TMA UI): Working Materials. */
+
+.working-materials-section {
+  margin: 16px 0;
+}
+
+.working-materials-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.working-materials-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.working-materials-section__version {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.working-materials-section__prompt {
+  font-size: 12px;
+  color: #444;
+  font-family: monospace;
+}
+
+/* Пункт 61 (TMA UI): Chat Import. */
+
+.chat-import-section {
+  margin: 16px 0;
+}
+
+/* Пункт 62 (TMA UI): Protocol. */
+
+.protocol-section {
+  margin: 16px 0;
+}
+
+.protocol-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.protocol-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+/* Пункт 63 (TMA UI): SpeakButton (озвучка через ElevenLabs). */
+
+.speak-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 14px;
+  margin-left: 6px;
+}
+
+/* Пункт 64 (TMA UI): SituationalContentSection + /settings. */
+
+.situational-content-section {
+  margin: 16px 0;
+}
+
+.situational-content-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.situational-content-section__source {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.settings-page__section {
+  margin: 16px 0;
+}
+
+.settings-page__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 14px;
+}
+
+/* Пункт 65 (TMA UI): VenueRecommendationSection. */
+
+.venue-recommendation-section {
+  margin-top: 8px;
+}
+
+.venue-recommendation-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.venue-recommendation-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.venue-recommendation-section__reason {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Пункт 66 (TMA UI): Venue Application. */
+
+.venue-apply-page__candidates {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.venue-apply-page__candidates li {
+  margin-bottom: 6px;
+}
+
+.venue-apply-page__candidates button {
+  width: 100%;
+  text-align: left;
+}
+
+.venue-moderation-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.venue-moderation-list__item {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+/* Пункт 67 (TMA UI): Venue Monetization — метка "Реклама". */
+
+.venues-page__ad-label {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: bold;
+  color: #856404;
+  background: #fff3cd;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+
+/* Пункт 68 (TMA UI): ReligiousReminderBanner. */
+
+.religious-reminder-banner {
+  background: #f8f4e9;
+  border: 1px solid #e0d5b8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.religious-reminder-banner ul {
+  margin: 0 0 8px 0;
+  padding-left: 18px;
+}
+
+/* Пункт 70 (TMA UI): CompromiseSheetSection. */
+
+.compromise-sheet-section {
+  margin-top: 12px;
+}
+
+.compromise-sheet-section__sheet {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.compromise-sheet-section__items {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.compromise-sheet-section__items li {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}
+
+/* Пункт 71 (TMA UI): UserVoiceRecordingSection — суфлёр. */
+
+.user-voice-recording__teleprompter {
+  max-height: 200px;
+  overflow-y: auto;
+  background: #1a1a1a;
+  color: #f0f0f0;
+  padding: 16px;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1.6;
+  margin: 10px 0;
+}
+
+.user-voice-recording__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.user-voice-recording__options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Пункт 72 (TMA UI): ClosingMessageSection. */
+
+.closing-message-section {
+  margin: 16px 0;
+}
+
+.closing-message-section__message {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.closing-message-section__quote {
+  font-style: italic;
+  font-size: 13px;
+  color: #555;
+  margin-top: 6px;
+}
+
+/* Пункт 74 (TMA UI): предложение смены статуса персона→фигурант. */
+
+.motive-analysis-section__suggestion {
+  background: #fff3cd;
+  border: 1px solid #ffe69c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+/* Пункт 75 (TMA UI): ProjectLogSection. */
+
+.project-log-section {
+  margin: 16px 0;
+}
+
+.project-log-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.project-log-section__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-left: 3px solid #ccc;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.project-log-section__item--red {
+  border-left-color: #d9534f;
+}
+
+.project-log-section__item--green {
+  border-left-color: #5cb85c;
+}
+
+.project-log-section__dot {
+  font-size: 11px;
+}
+
+/* Пункт 76 (TMA UI): WeatherForecastSection. */
+
+.weather-forecast-section {
+  margin-top: 8px;
+}
+
+.weather-forecast-section__result {
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+  border-left: 3px solid #ccc;
+}
+
+.weather-forecast-section__result--proceed {
+  border-left-color: #5cb85c;
+}
+
+.weather-forecast-section__result--reconsider {
+  border-left-color: #f0ad4e;
+}
+
+/* Пункт 77 (TMA UI): LocationConsentPrompt. */
+
+.location-consent-prompt {
+  background: #eef6fb;
+  border: 1px solid #cde3f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+/* Пункт 78 (TMA UI): мягкое предупреждение о погоде в форме создания встречи. */
+
+.scheduler-weather-warning {
+  background: #fff8e6;
+  border: 1px solid #f0ad4e;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+/* Пункт 79 (TMA UI): SchedulerAdviceSection. */
+
+.scheduler-advice-section {
+  margin-bottom: 16px;
+}
+
+.scheduler-advice-section__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.scheduler-advice-section__list li {
+  border-left: 3px solid #ccc;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+/* Пункт 80 (TMA UI): протокол и итог на публичной странице обсуждения. */
+
+.public-discussion-page__protocol,
+.public-discussion-page__closing {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+/* Пункт 81 (TMA UI): CooldownNudgeSession — экспериментальная живая сессия. */
+
+.cooldown-nudge-session {
+  border: 1px dashed #999;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.cooldown-nudge-session__banner {
+  background: #fff3cd;
+  border: 1px solid #ffe69c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+/* Пункт 82 (TMA UI): LiveHintsSession. */
+
+.live-hints-session {
+  border: 1px dashed #999;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.live-hints-session__banner {
+  background: #eef6fb;
+  border: 1px solid #cde3f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+/* Пункт 83 (TMA UI): AssistanceScreen. */
+
+.assistance-screen {
+  border: 1px dashed #999;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.assistance-screen__indicator {
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  text-align: center;
+  font-size: 14px;
+}
+
+.assistance-screen__indicator--calm {
+  background: #e6f4ea;
+}
+
+.assistance-screen__indicator--rising {
+  background: #fff8e1;
+}
+
+.assistance-screen__indicator--high {
+  background: #ffe8cc;
+}
+
+.assistance-screen__indicator--critical {
+  background: #fdecea;
+}
+
+.assistance-screen__flags {
+  margin: 10px 0;
+}
+
+.assistance-screen__flag {
+  border-left: 3px solid #d9534f;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+/* Пункт 84 (TMA UI): breaking-вопросы + трекинг аргументов в AssistanceScreen. */
+
+.assistance-screen__questions {
+  background: #eef6fb;
+  border: 1px solid #cde3f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.assistance-screen__tracking {
+  margin: 10px 0;
+}
+
+.assistance-screen__tracking ul {
+  list-style: none;
+  padding: 0;
+}
+
+.assistance-screen__tracked-arg {
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.assistance-screen__tracked-arg--not_mentioned,
+.assistance-screen__tracked-arg--needs_repeat {
+  background: #fff;
+  border: 1px solid #ddd;
+}
+
+.assistance-screen__tracked-arg--sufficiently_mentioned {
+  background: #f5f5f5;
+  color: #999;
+}
+
+.assistance-screen__tracked-arg--genuinely_accepted {
+  background: #e6f4ea;
+  color: #1e7e34;
+  font-weight: 600;
+}
+
+/* Пункт 86 (TMA UI): детектор прощупывания в AssistanceScreen. */
+
+.assistance-screen__flag--probing {
+  border-left-color: #f0ad4e;
+}
+
+/* Пункт 87 (TMA UI): VoiceEnrollmentSection + VoiceBiometricConsentPrompt. */
+
+.voice-enrollment-section,
+.voice-biometric-consent-prompt {
+  border: 1px dashed #999;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+/* Пункт 91 (TMA UI): MaterialChatSection. */
+
+.material-chat-section {
+  border: 1px dashed #999;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.material-chat-section__sessions {
+  list-style: none;
+  padding: 0;
+}
+
+.material-chat-section__refined-prompt {
+  background: #eef6fb;
+  border: 1px solid #cde3f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+/* Аудит v3/v4 — AgendaSection + ProtectedNotesSection. */
+
+.agenda-section__items {
+  list-style: disc;
+  padding-left: 20px;
+}
+
+.protected-notes-section__group {
+  margin: 10px 0;
+}
+
+.protected-notes-section__note {
+  border-left: 3px solid #999;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}

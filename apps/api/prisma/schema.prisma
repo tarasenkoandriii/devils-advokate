@@ -1,0 +1,4231 @@
+// ═══════════════════════════════════════════════════════════════
+// Devil's Advocate — Prisma Schema
+// Чекпоинт 1: пункты 1-7 (факт-система, AIInference, Observation,
+// ConversationSignal, AI Router, реестр моделей, Prompt Registry + AI
+// Evaluation Gate) — вся AI-инфраструктурная часть чекпоинта закрыта.
+// Компаньон: devils-advocate-tz.md §4.2/4.2a/4.2b/4.2c/§3.15/§7.1,
+// implementation-ready §1.2/§2.10/§6
+//
+// Пункт 1: Person → PersonFact → FactSource → FactAssertion с FactScope,
+// плюс минимальный контекст (User, Project, ProjectPerson со статусом
+// персона/фигурант — §3.38).
+//
+// Пункты 2-3: AIInference — единая сущность происхождения AI-вывода;
+// Observation — промежуточный слой сырых наблюдений в цепочке
+// Source → Observation → Fact → Inference.
+//
+// Пункт 4: ConversationSignal — единый объект вместо перегруженного
+// ContradictionFlag, polymorphic single table по signalType.
+//
+// Пункты 5-6: AI Router (AIJob) + реестр моделей (AIProvider/AIModel/
+// AIModelVersion/AIModelCapability). AIInference.modelVersion — FK.
+//
+// Пункт 7: PromptVersion (lifecycle draft→testing→active→deprecated→
+// rollback) + AI Evaluation Gate (EvaluationDataset/Run/Metric/Result/
+// ReleaseGate, полиморфен по subjectType). Весь технический долг вокруг
+// AI-инфраструктуры закрыт.
+//
+// Пункт 8: ConsentRecord (§7.2) — единая модель согласий на
+// recording/external_ai/ephemeral_server/location/religious_content/
+// public_sharing/person_research/voice_processing. LocationPermission
+// смоделирована как ConsentRecord(consentType=LOCATION, purposes[]),
+// не отдельной таблицей. User.privacyProcessingMode (§4.6) добавлен
+// как инфраструктурное поле для AI Router.
+//
+// Пункт 9: ProjectLogEntry (UX-слой) отдельно от AuditLogEntry
+// (append-only security-след) — единственное разделение вместо
+// унификации в этом чекпоинте, так как природа моделей разная.
+//
+// Пункт 10 (этот проход): Prompt Injection защита + PII redaction
+// (§8 ТЗ, пп. 18-19). ContentScanResult/ContentScanDetection —
+// полиморфный лог результата скана (пока цель — только AIJob.input,
+// Safe Share Preflight и file upload подключатся через externalRef до
+// появления их моделей на фичевых пунктах MVP). AIJob получил поле
+// inputScanStatus. ЖЁСТКОЕ ПРАВИЛО: ContentScanDetection не хранит
+// сырое обнаруженное значение (реальный телефон/email) — только тип,
+// действие и маскированный превью, см. комментарий в схеме.
+//
+// Явно НЕ входит в этот проход (будет добавлено следующими пунктами
+// чекпоинта 1): TMA auth (пункт 11), полноценный secret manager
+// integration (пункт 12).
+// ═══════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+  // Деплой на Vercel (Node.js serverless, Amazon Linux 2 под капотом) —
+  // локальная разработка использует "native", продакшн-функция требует
+  // rhel-openssl-3.0.x (текущий рантайм Vercel Node 18/20). Без этого
+  // Prisma Client, собранный локально/в CI без учёта таргета,
+  // выбросит "Query Engine not found" на первом же холодном старте —
+  // не гипотетический риск, реальная и частая причина падений Prisma
+  // на serverless, если про это забыть.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  // DATABASE_URL — пулированное соединение (Supabase pgbouncer, порт
+  // 6543, ?pgbouncer=true), не прямое. directUrl — прямое соединение
+  // (порт 5432), нужно ТОЛЬКО для `prisma migrate` (миграции не
+  // работают через пулер в transaction-режиме). Подробности и точные
+  // значения — VERCEL.md в корне apps/api.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────────────────────────────────────────
+// Контекстные модели (минимальная версия — полная реализация
+// придёт вместе с пунктами auth/consent чекпоинта 1)
+// ───────────────────────────────────────────────────────────
+
+enum PrivacyProcessingMode {
+  MAXIMUM_PRIVACY
+  BALANCED
+  MAXIMUM_QUALITY
+}
+
+// Пункт 68 (§3.24 ТЗ) — "варианты «при каждом входе / раз в день /
+// выключено»", буквально ТЗ.
+enum ReligiousReminderFrequency {
+  EVERY_LAUNCH
+  ONCE_PER_DAY
+  OFF
+}
+
+model User {
+  id         String   @id @default(cuid())
+  telegramId String   @unique
+  createdAt  DateTime @default(now())
+
+  // §4.6 — влияет на то, допустим ли EPHEMERAL_SERVER без явного
+  // per-operation согласия (MAXIMUM_PRIVACY запрещает его вовсе).
+  privacyProcessingMode PrivacyProcessingMode @default(BALANCED)
+
+  // MVP-фича 13 (§3.36 ТЗ, "слово тоже оружие") — обязательный экран
+  // при первом запуске, блокирует доступ к основному интерфейсу до
+  // подтверждения. NULL = ещё не подтверждено. disclaimerVersion
+  // хранит, под какой версией текста подтвердил пользователь — если
+  // текст меняется существенно (CURRENT_DISCLAIMER_VERSION растёт),
+  // старое acknowledgedAt перестаёт засчитываться, экран показывается
+  // повторно (см. LaunchDisclaimerService).
+  launchDisclaimerAcknowledgedAt DateTime?
+  launchDisclaimerVersion        String?
+
+  // Онбординг-данные (§3.24 ТЗ) — вне 13 пунктов MVP, добавлены
+  // отдельным проходом по запросу. ИСТОРИЯ РЕШЕНИЯ (важно для
+  // понимания следующих трёх строк): изначально city/religion были
+  // добавлены БЕЗ страны и БЕЗ гео-автоподсказки — это было P0-
+  // исправлением более раннего аудита ("автоподсказка конфессии по
+  // стране была прямо признана неприемлемой даже как просто
+  // подсказка"). country и гео-автоподсказка добавлены СЕЙЧАС по
+  // прямому запросу пользователя, СОЗНАТЕЛЬНО ОТМЕНЯЮЩЕМУ то более
+  // раннее P0-решение — не молчаливый откат, явное новое решение
+  // поверх старого, см. подробности в apps/api/prisma/README.md,
+  // «Пункт 49». Смягчение риска, оставшееся от старого решения:
+  // подсказка религии по стране — AI-догадка (см. OnboardingService),
+  // не статичный "факт", явно помечена как необязательная, "не
+  // указывать" остаётся видимым по умолчанию вариантом, не скрыт.
+  religion String?
+  city     String?
+  country  String?
+
+  // Пункт 64 (§3.25 ТЗ) — "дополнение к 3.24: то, что раньше было
+  // разовыми кнопками в карточке проекта, дублируется как
+  // настраиваемое поведение по умолчанию". Независимы от частоты
+  // ежедневного религиозного напоминания (та часть §3.24 всё ещё не
+  // реализована — другая механика, не строится здесь заодно).
+  alwaysShowQuote    Boolean @default(false)
+  alwaysShowAnecdote Boolean @default(false)
+
+  // Пункт 68 (§3.24 ТЗ, "Ежедневное религиозное напоминание") —
+  // недостающая часть §3.24, честно не реализованная в Пункте 64
+  // (та фича закрыла только контекстные цитаты/анекдоты, §3.25).
+  // "Частота — настраиваемая... по умолчанию — не самый навязчивый
+  // вариант" (буквально ТЗ) — ONCE_PER_DAY, не EVERY_LAUNCH.
+  religiousReminderFrequency   ReligiousReminderFrequency @default(ONCE_PER_DAY)
+  religiousReminderLastShownAt DateTime?
+
+  // Пункт 57 (§3.5 ТЗ) — "модерируемая база" публичной библиотеки
+  // аргументов требует роли, отдельной от владения проектом (в отличие
+  // от Пункта 56, где владелец модерирует только СВОЁ обсуждение).
+  // Минимальный флаг, НЕ полноценная RBAC-система — в проекте нет
+  // концепции ролей вообще, заводить её целиком ради одной фичи было
+  // бы избыточной инфраструктурой. НЕ self-service — включается вручную
+  // в БД тем, кто управляет деплойментом, честно задокументировано в
+  // library.service.ts, не предполагает регистрационной формы "стать
+  // модератором".
+  isLibraryModerator Boolean @default(false)
+
+  // Пункт 66 (§3.23 ТЗ) — «ручная модерация» заявок владельцев
+  // заведений. ОТДЕЛЬНЫЙ флаг от isLibraryModerator, не переиспользован
+  // тот же — разные домены ответственности (модерация текстового
+  // контента библиотеки vs проверка легитимности бизнеса/контактов/
+  // фото заведения требует другого суждения), тот же принцип
+  // "минимальный флаг, не RBAC", что и у isLibraryModerator.
+  isVenueModerator Boolean @default(false)
+
+  projects       Project[]
+  createdPeople  Person[]
+  consentRecords ConsentRecord[]
+  safeShareActions SafeShareAction[]
+  submittedLibraryEntries LibraryEntry[]
+  submittedVenueApplications VenueApplication[]
+  venueBookingConfirmations VenueBookingConfirmation[]
+  // Пункт 87: голосовой отпечаток (один на пользователя)
+  voiceEmbedding VoiceEmbedding?
+
+  @@map("users")
+}
+
+model Project {
+  id      String @id @default(cuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  question String
+  goal     String?
+
+  // Пункт 56 (§4.5 ТЗ) — null = не вынесен на публичное обсуждение.
+  // Случайный непредсказуемый токен, не полноценная аутентификация
+  // участника — см. подробное обоснование над моделями
+  // PublicParticipant/PublicArgumentSubmission ниже в этом файле.
+  publicShareToken String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  people         ProjectPerson[]
+  facts          PersonFact[] // только для scope=PROJECT — см. PersonFact.scope
+  consentRecords ConsentRecord[]
+  logEntries     ProjectLogEntry[]
+  arguments      Argument[]
+  objective      DecisionObjective?
+  boundaries     NegotiationBoundaries?
+  steelmanCases  SteelmanCase[]
+  scripts        ConversationScript[]
+  safeShareActions SafeShareAction[]
+  // Пункт 12: Conversation Dossier
+  conversations  Conversation[]
+  agendas        ConversationAgenda[]
+  protectedNotes ProtectedNote[]
+  // Пункт 14: Commitment Tracker
+  commitments    Commitment[]
+  // Пункт 16: Missing Information
+  missingInformationChecks MissingInformationCheck[]
+  // Пункт 25: Prediction vs Reality
+  predictions Prediction[]
+  // Пункт 38: Archetype Perspective Simulation
+  archetypePerspectives ArchetypePerspective[]
+  // Пункт 50: запланированные разговоры
+  scheduledConversations ScheduledConversation[]
+  // Пункт 52: зафиксированный исход решения (не более одного на проект)
+  decisionOutcome DecisionOutcome?
+  // Пункт 55: сессии интерактивного спарринга (Red Team)
+  sparringSessions SparringSession[]
+  // Пункт 56: публичное обсуждение по ссылке
+  publicParticipants PublicParticipant[]
+  publicSubmissions  PublicArgumentSubmission[]
+  publicComments     PublicComment[]
+  // Пункт 57: запись в публичной библиотеке, если проект был в неё отправлен (не более одной)
+  libraryEntry LibraryEntry?
+  // Пункт 59: гипотезы о мотивах фигурантов, сгенерированные в рамках этого проекта
+  motiveHypotheses MotiveHypothesis[]
+  // Пункт 60: материалы для критики/доработки перед спаррингом
+  workingMaterials WorkingMaterial[]
+  // Пункт 62: протоколы/соглашения по итогам решения
+  protocols Protocol[]
+  // Пункт 64: цитаты/анекдоты по текущей ситуации проекта
+  situationalQuotes    SituationalQuote[]
+  situationalAnecdotes SituationalAnecdote[]
+  // Пункт 72: завершающие сообщения (§3.35 ТЗ)
+  closingMessages ClosingMessage[]
+  // Пункт 79: советы планировщика (пункт 58 общего списка)
+  schedulerAdvice SchedulerAdvice[]
+  // Пункт 81: события живого режима (§3.31 ТЗ)
+  cooldownNudgeEvents CooldownNudgeEvent[]
+  // Пункт 82: live-подсказки (§3.4 ТЗ)
+  liveHintEvents LiveHintEvent[]
+  // Пункт 83: live-детектор уловок (§3.33 ТЗ)
+  liveManipulationFlags LiveManipulationFlag[]
+  // Пункт 84: breaking-вопросы + трекинг аргументов (§3.33 ТЗ)
+  breakingQuestionSets BreakingQuestionSet[]
+  liveArgumentTrackingStatuses LiveArgumentTrackingStatus[]
+  // Пункт 85: след категории накала во времени (§3.34 ТЗ)
+  escalationCategoryEvents EscalationCategoryEvent[]
+  // Пункт 86: отслеживаемые темы прощупывания (§3.37 ТЗ)
+  probingTopics ProbingTopic[]
+
+  @@map("projects")
+}
+
+// ───────────────────────────────────────────────────────────
+// MVP-фича 6: DecisionObjective (§3.42 ТЗ) — структурированная цель
+// решения вместо расплывчатого Project.goal. 1:1 с Project (unique
+// projectId). constraints/nonNegotiables/negotiables — Postgres native
+// array (String[]), не отдельные таблицы: это простые списки коротких
+// текстовых пунктов, не сущности с собственным жизненным циклом —
+// нормализация здесь была бы избыточной сложностью без пользы.
+// ───────────────────────────────────────────────────────────
+
+model DecisionObjective {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  desiredOutcome           String?
+  idealOutcome             String?
+  minimumAcceptableOutcome String?
+  unacceptableOutcome      String?
+  deadline                 DateTime?
+
+  constraints    String[]
+  nonNegotiables String[]
+  negotiables    String[]
+  // MVP-фича 8: облегчённая версия "не стоит упоминать" (§3.53 ТЗ) —
+  // ручной список, не AI-детекция рисков на основе истории разговоров
+  // (§3.17, v3-фича). Здесь пользователь сам записывает то, что не
+  // стоит поднимать в разговоре — так же просто, как остальные списки
+  // выше, без отдельной модели данных.
+  doNotSay       String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("decision_objectives")
+}
+
+// ───────────────────────────────────────────────────────────
+// MVP-фича 9: NegotiationBoundaries — BATNA/WATNA (§3.45 ТЗ). 1:1 с
+// Project, тот же паттерн, что DecisionObjective. walkAwayPoint — то,
+// после чего выгоднее выйти из переговоров, чем соглашаться на
+// худшие условия; используется Conversation Card (фича 8) как
+// проверочная граница для компромиссов (полноценная автоматическая
+// сверка компромиссного листа с этой границей — post-MVP фича 3.41,
+// здесь только хранение и отображение).
+// ───────────────────────────────────────────────────────────
+
+model NegotiationBoundaries {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  idealOutcome      String?
+  acceptableOutcome String?
+  batna             String?
+  watna             String?
+  walkAwayPoint     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("negotiation_boundaries")
+}
+// MVP-фича 1: Argument (§3.10 ТЗ) — первая сущность, реально
+// потребляющая AI-инфраструктуру чекпоинта 1. derivedFrom —
+// единственный источник provenance (P0 #2 финального аудита,
+// implementation-ready §3.2): ссылается РОВНО на одно из двух —
+// PersonFact (публичный факт/личная запись) или AIInference
+// (AI-догадка). sourceType для UI (🔵🟢🟡⚪) вычисляется из этой
+// связи на уровне сервиса, не хранится отдельным полем — так и было
+// зафиксировано в исправлении аудита, здесь наконец применяется
+// на практике, а не только в комментариях.
+// ───────────────────────────────────────────────────────────
+
+enum ArgumentStance {
+  PRO
+  CON
+  // Пункт 49 (§3.14 ТЗ) — не "за"/"против" ситуации, а аргументы для
+  // СНИЖЕНИЯ конфликта, отдельная семантическая категория. "Используется
+  // как отдельная опция в генерации аргументов — наравне с обычными
+  // 'за' и 'против'" (буквально из ТЗ) — тот же список Argument, не
+  // параллельная модель.
+  RECONCILIATION
+  // Пункт 70 (§3.41 ТЗ) — компромиссные пункты для CompromiseSheet.
+  // Отдельная семантическая категория от RECONCILIATION (та
+  // специфична для религиозных первоисточников) — компромиссное
+  // предложение не обязательно религиозно обосновано.
+  COMPROMISE_PROPOSAL
+}
+
+// Пункт 44: Stakeholder Map (§3.8 ТЗ) — доводит до конца пункт 20
+// v3-роадмапа, зависимость которого (граф связей) закрыта в Пункте 43.
+// Роли буквально из текста ТЗ: "прямых решающих, влияющих советчиков,
+// блокеров, союзников".
+enum StakeholderRole {
+  DECISION_MAKER
+  ADVISOR
+  BLOCKER
+  ALLY
+}
+
+enum ArgumentLifecycleStatus {
+  DRAFT
+  TESTED
+  USED
+  ACCEPTED
+  REJECTED
+  COUNTERED
+  EXPIRED
+  VERIFIED
+}
+
+model Argument {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  text   String
+  stance ArgumentStance
+  weight Float? // 0..1, субъективный вес — опционален, не все аргументы взвешены явно
+
+  // Пункт 44 (§3.8 ТЗ) — "для каждого фигуранта отдельно строится
+  // набор аргументов — то, что убедит именно его". Nullable — null
+  // означает обычный общепроектный аргумент (поведение до этого
+  // пункта не меняется), непустое значение — аргумент адресован
+  // КОНКРЕТНОМУ стейкхолдеру, не смешивается с общим списком
+  // (см. StakeholderMapService.listByStakeholder() — группирует
+  // отдельно, "разные фигуранты могут требовать противоречащих друг
+  // другу аргументов — система это явно показывает, не сводит к
+  // одному общему списку").
+  targetPersonId String?
+  targetPerson   Person? @relation(fields: [targetPersonId], references: [id], onDelete: SetNull)
+
+  // Пункт 49 (§3.14 ТЗ) — осмысленно только для stance=RECONCILIATION.
+  // "Ссылка на конкретное место (книга/глава/стих)" — тег 🔵
+  // "публичный факт" (реальный, проверяемый первоисточник), отдельно
+  // от `text` (интерпретация "как применимо к ситуации" — 🟡 "догадка
+  // ИИ", тот же неявный тег, что уже несут все AI-сгенерированные
+  // текстовые поля этого проекта). Не отдельная модель — тот же
+  // принцип, что уже применён к targetPersonId выше: валидация
+  // "осмысленно только для одного значения stance" — в service-слое.
+  scriptureReference String?
+
+  // Пункт 56 — обратная сторона PublicArgumentSubmission.promotedToArgumentId,
+  // если этот аргумент возник из принятой публичной заявки, не создан
+  // пользователем/AI напрямую.
+  promotedFromSubmission PublicArgumentSubmission?
+
+  // derivedFrom — полиморфная ссылка, "ровно одно из двух", инвариант
+  // service-слоя (тот же паттерн, что AIInferenceSource/ConversationSignalEvidence).
+  derivedFromPersonFactId String?
+  derivedFromPersonFact   PersonFact?  @relation(fields: [derivedFromPersonFactId], references: [id], onDelete: SetNull)
+  derivedFromInferenceId  String?
+  derivedFromInference    AIInference? @relation(fields: [derivedFromInferenceId], references: [id], onDelete: SetNull)
+
+  lifecycleStatus ArgumentLifecycleStatus @default(DRAFT)
+  isPublic        Boolean                 @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Пункт 23: Argument Lifecycle — история переходов статуса
+  lifecycleEvents ArgumentLifecycleEvent[]
+  // Пункт 70: включения в компромиссные листы (§3.41 ТЗ)
+  compromiseSheetItems CompromiseSheetItem[]
+  // Пункт 82: подсказки, предложившие этот аргумент (§3.4 ТЗ)
+  liveHintEvents LiveHintEvent[]
+  // Пункт 84: статус живого трекинга этого аргумента (§3.33 ТЗ)
+  liveArgumentTrackingStatus LiveArgumentTrackingStatus?
+
+  @@index([projectId, stance])
+  @@map("arguments")
+}
+
+// ───────────────────────────────────────────────────────────
+// Person и связь с проектом (§3.38 — статус персона/фигурант,
+// хранится на связке project↔person, не глобально на Person)
+// ───────────────────────────────────────────────────────────
+
+model Person {
+  id              String   @id @default(cuid())
+  createdByUserId String
+  createdByUser   User     @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  // Обнаружено при реализации фичи 7 (Steelman): без отображаемого
+  // имени невозможно показать список фигурантов в UI для выбора, для
+  // кого строить Steelman-кейс — модель из чекпоинта содержала только
+  // id/createdByUserId. displayName — просто ярлык-заметка для себя
+  // ("Начальник Иван"), не тегированный PersonFact и не персональные
+  // данные фигуранта в юридическом смысле — как единственный человек,
+  // видящий этот ярлык, это сам пользователь (см. приватность §3.9).
+  displayName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  facts        PersonFact[]
+  projectLinks ProjectPerson[]
+  logEntryLinks ProjectLogEntryPerson[]
+  steelmanCases SteelmanCase[]
+  // Пункт 39: Person Communication Profile
+  communicationTraits PersonCommunicationTrait[]
+  // Пункт 43: Relationship — граф связей, обе стороны
+  relationshipsAsPersonA Relationship[] @relation("RelationshipsAsPersonA")
+  relationshipsAsPersonB Relationship[] @relation("RelationshipsAsPersonB")
+  // Пункт 44: аргументы, адресованные конкретно этой персоне
+  targetedArguments Argument[]
+  // Пункт 45: найденные прецеденты поведения (из личных записей)
+  behaviorPrecedents BehaviorPrecedent[]
+  // Пункт 46: перспективы, сгенерированные для этого человека как реального фигуранта
+  archetypePerspectivesAsRealPerson ArchetypePerspective[]
+  // Пункт 50: запланированные разговоры с этим фигурантом
+  scheduledConversations ScheduledConversation[]
+  // Пункт 55: сессии спарринга, симулирующие этого человека как оппонента
+  sparringSessions SparringSession[]
+  // Пункт 59: гипотезы о вероятных мотивах этого человека
+  motiveHypotheses MotiveHypothesis[]
+  conversationScripts ConversationScript[]
+  // Пункт 12: Conversation Dossier — сопоставление диаризации этому человеку
+  conversationParticipations ConversationParticipant[]
+  // Пункт 14: Commitment Tracker
+  commitments Commitment[]
+  // Пункт 21: Source Conflict Resolver
+  sourceConflicts SourceConflict[]
+
+  @@index([createdByUserId])
+  @@map("people")
+}
+
+enum PersonStatus {
+  PERSONA
+  FIGURANT
+}
+
+enum StatusTrigger {
+  MANUAL
+  CONFLICT_DETECTOR_SUGGESTED
+}
+
+model ProjectPerson {
+  id        String  @id @default(cuid())
+  projectId String
+  personId  String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  person    Person  @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  status          PersonStatus   @default(PERSONA)
+  statusChangedAt DateTime?
+  statusTrigger   StatusTrigger?
+
+  // Пункт 44 (§3.8 ТЗ) — роль в круге лиц, влияющих на это конкретное
+  // решение. Nullable — большинство персон не размечены как
+  // стейкхолдеры, только явно добавленные в карту. Роль ПРЕДЛАГАЕТ AI
+  // (StakeholderMapService.suggestRoles(), не персистит сама), но
+  // проставляется только явным подтверждением пользователя — тот же
+  // принцип "AI предлагает, пользователь подтверждает", что уже
+  // применён к переключению status выше по этому же файлу.
+  stakeholderRole            StakeholderRole?
+  stakeholderRoleConfirmedByUser Boolean @default(false)
+
+  // §3.38, §7 implementation-ready: автопереключение на FIGURANT запрещено —
+  // детектор конфликта может только предложить, статус меняется только
+  // при statusConfirmedByUser = true (проверяется в service-слое, не только здесь).
+  statusConfirmedByUser Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, personId])
+  @@index([personId])
+  @@map("project_people")
+}
+
+// ───────────────────────────────────────────────────────────
+// Факт-система (§4.2) — заменяет прежний Person.factsBlob.
+// PersonFact хранит факт с явным scope; FactSource — привязку
+// к первоисточнику (без хранения самого файла на сервере,
+// см. раздел 2 ТЗ); FactAssertion — конкретную формулировку
+// факта в моменте (факт может переформулироваться со временем).
+// ───────────────────────────────────────────────────────────
+
+enum FactScope {
+  PROJECT // default — факт виден только в проекте, где получен
+  PERSON_GLOBAL // явный перенос пользователем, не автоматически
+  PRIVATE_TO_USER // не публикуется ни при каких обстоятельствах
+  PUBLIC_DERIVED_ONLY // из факта можно построить Argument, сам факт не публикуется
+}
+
+enum FactSourceType {
+  PUBLIC_FACT // 🔵
+  PERSONAL_RECORD // 🟢
+  USER_GUESS // ⚪
+  // AI-догадка (🟡) сюда не входит — это AIInference, отдельная сущность
+  // из следующего пункта чекпоинта (§4.2a), а не PersonFact.
+}
+
+enum FactStatus {
+  ACTIVE
+  DISPUTED
+  EXPIRED
+}
+
+model PersonFact {
+  id       String @id @default(cuid())
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  // Обязателен при scope=PROJECT, null для остальных scope-значений.
+  // Проверяется в service-слое (см. README §"Инварианты").
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  scope      FactScope      @default(PROJECT)
+  content    String
+  sourceType FactSourceType
+  confidence Float? // 0..1, применимо в первую очередь к USER_GUESS
+  status     FactStatus     @default(ACTIVE)
+
+  validFrom      DateTime?
+  validUntil     DateTime?
+  lastVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sources    FactSource[]
+  // Пункт 48: результаты реверс-поиска фото для этого факта
+  photoVerifications PhotoVerification[]
+  assertions FactAssertion[]
+  aiInferenceLinks AIInferenceSource[]
+  signalEvidence ConversationSignalEvidence[]
+  derivedArguments Argument[]
+  steelmanLinks SteelmanSupportingFact[]
+  // Пункт 21: Source Conflict Resolver — этот факт может участвовать
+  // в конфликте как факт A ИЛИ как факт B, обе обратные связи нужны
+  // (иначе Prisma не сможет резолвить две именованные связи на одну
+  // и ту же модель без явного разделения на две стороны).
+  conflictsAsFactA SourceConflict[] @relation("SourceConflictFactA")
+  conflictsAsFactB SourceConflict[] @relation("SourceConflictFactB")
+
+  @@index([personId, scope])
+  @@index([projectId])
+  @@map("person_facts")
+}
+
+model FactSource {
+  id           String     @id @default(cuid())
+  personFactId String
+  personFact   PersonFact @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+
+  // Раздел 2 ТЗ: сырые файлы не персистятся на сервере — здесь только
+  // клиентская ссылка (для UI "открыть первоисточник на устройстве"),
+  // не сам файл. conversationId — FK на Conversation (Пункт 12,
+  // Conversation Dossier) — до этого чекпоинта была свободная строка,
+  // см. историю в README "Технический долг".
+  fileRef String?
+  url     String?
+
+  // Пункт 58 (§3.19 ТЗ) — результат проверки EXIF/метаданных на GPS-
+  // координаты, выполненной ЦЕЛИКОМ на клиенте (браузере), ДО того как
+  // fileRef вообще определился — сырой файл на сервер не передаётся
+  // даже для этой проверки, тот же принцип locality, что и у самих
+  // fileRef/url выше. NULL — проверка неприменима (источник не фото/
+  // видео, например только url или PERSONAL_RECORD без вложения).
+  hasGeoTag        Boolean?
+  metadataStripped Boolean?
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  timestamp DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([personFactId])
+  @@index([conversationId])
+  @@map("fact_sources")
+}
+
+model FactAssertion {
+  id           String     @id @default(cuid())
+  personFactId String
+  personFact   PersonFact @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+
+  assertedText String
+  assertedAt   DateTime @default(now())
+  disputed     Boolean  @default(false)
+
+  @@index([personFactId])
+  @@map("fact_assertions")
+}
+
+// ───────────────────────────────────────────────────────────
+// Observation (§4.2b) — сырое наблюдение до того, как оно
+// становится PersonFact или AIInference. Используется как
+// промежуточный слой для транскриптов, OCR, импортированных
+// переписок, поведенческих сигналов — источники этих типов
+// (Conversation, импортированный чат и т.д.) появятся в
+// последующих пунктах, поэтому sourceId/sourceType здесь —
+// свободные поля, не FK (см. README "Технический долг").
+// ───────────────────────────────────────────────────────────
+
+enum ObservationSourceType {
+  TRANSCRIPT_SEGMENT
+  OCR_DOCUMENT
+  IMPORTED_CHAT
+  BEHAVIORAL_SIGNAL
+}
+
+model Observation {
+  id String @id @default(cuid())
+
+  sourceId   String
+  sourceType ObservationSourceType
+
+  subject String? // например personId, если наблюдение о конкретном человеке
+  content String
+
+  timestamp DateTime?
+  speakerId String?
+  confidence Float?
+
+  createdAt DateTime @default(now())
+
+  inferenceLinks AIInferenceSource[]
+  signalEvidence ConversationSignalEvidence[]
+
+  @@index([sourceType, sourceId])
+  @@map("observations")
+}
+
+// ───────────────────────────────────────────────────────────
+// AIInference (§4.2a) — единый слой происхождения AI-вывода.
+// Заменяет разрозненные поля confidence/sourceType, которые
+// раньше дублировались в Argument/Scenario/SteelmanCase/
+// PersonMotiveAnalysis. Эти сущности (появятся в фичевых
+// пунктах MVP, не в этом чекпоинте) будут ссылаться сюда через
+// derivedFrom, а не хранить собственную копию уверенности.
+// ───────────────────────────────────────────────────────────
+
+model AIInference {
+  id String @id @default(cuid())
+
+  output String
+
+  // Пункты 6-7: model/modelVersion/promptVersion полностью мигрированы
+  // из строк в FK — технический долг предыдущих проходов закрыт.
+  modelVersionId String?
+  modelVersion   AIModelVersion? @relation(fields: [modelVersionId], references: [id])
+  promptVersionId String?
+  promptVersion   PromptVersion? @relation(fields: [promptVersionId], references: [id])
+
+  aiJobId String?
+  aiJob   AIJob?  @relation(fields: [aiJobId], references: [id])
+
+  inferenceType String // например: argument | scenario | steelman | motive_analysis — держим строкой до появления реальных потребителей, чтобы не гадать enum заранее
+
+  confidence  Float? // 0..1
+  uncertainty String? // произвольное текстовое пояснение неопределённости, не только число
+
+  userVerified Boolean @default(false)
+  userDisputed Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  sourceLinks AIInferenceSource[]
+  signalEvidence ConversationSignalEvidence[]
+  derivedArguments Argument[]
+  steelmanCases SteelmanCase[]
+  conversationScripts ConversationScript[]
+  // Пункт 12: Conversation Dossier — повестка следующего разговора, сформированная этим выводом
+  generatedAgendas ConversationAgenda[]
+  // Пункт 16: Missing Information — список уточняющих вопросов, сформированный этим выводом
+  generatedMissingInformationChecks MissingInformationCheck[]
+  // Пункт 19: Best Next Move — рекомендация, сформированная этим выводом
+  generatedBestNextMoveRecommendations BestNextMoveRecommendation[]
+  // Пункт 21: Source Conflict Resolver — конфликт, найденный этим выводом
+  generatedSourceConflicts SourceConflict[]
+  // Пункт 25: Prediction vs Reality — анализ разницы/вывода, сформированный этим выводом
+  generatedPredictionAnalyses Prediction[]
+  // Пункт 38: Archetype Perspective Simulation — перспектива, сформированная этим выводом
+  generatedArchetypePerspectives ArchetypePerspective[]
+  // Пункт 39: Person Communication Profile — признак, извлечённый этим выводом
+  generatedCommunicationTraits PersonCommunicationTrait[]
+
+  @@index([inferenceType])
+  @@index([aiJobId])
+  @@map("ai_inferences")
+}
+
+// Связка AIInference с его источниками (PersonFact и/или Observation).
+// Полиморфная ссылка через два nullable FK — инвариант "ровно одно из
+// двух заполнено" проверяется в service-слое (см. README), Prisma/Postgres
+// не поддерживают декларативный XOR-констрейнт без raw SQL.
+model AIInferenceSource {
+  id            String      @id @default(cuid())
+  aiInferenceId String
+  aiInference   AIInference @relation(fields: [aiInferenceId], references: [id], onDelete: Cascade)
+
+  personFactId String?
+  personFact   PersonFact? @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+
+  observationId String?
+  observation   Observation? @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([aiInferenceId])
+  @@map("ai_inference_sources")
+}
+
+// ───────────────────────────────────────────────────────────
+// ConversationSignal (§4.2c) — заменяет ContradictionFlag.
+// Единая таблица с дискриминатором signalType; type-specific
+// поля nullable и осмысленны только для соответствующего типа
+// (см. README "Какие поля к какому signalType относятся").
+// participantId/transcriptSegmentId — FK на ConversationParticipant/
+// TranscriptSegment (Пункт 12, Conversation Dossier) — до этого
+// чекпоинта были свободные строки speakerId/segmentRef, см. историю
+// в README "Технический долг". Оба nullable — сигнал может быть не
+// привязан к конкретному сегменту транскрипта (например, выведен
+// из совокупности разговора целиком, не одной реплики).
+// ───────────────────────────────────────────────────────────
+
+enum ConversationSignalType {
+  FACTUAL_DISCREPANCY
+  MANIPULATION_PATTERN
+  PROBING_PATTERN
+  SELF_RISK
+  EMOTIONAL_SHIFT
+  ARGUMENT_ACCEPTANCE
+}
+
+enum SignalSeverity {
+  INACCURACY
+  DISCREPANCY
+  STRONG_DISCREPANCY
+}
+
+enum SelfRiskCategory {
+  ESCALATION
+  LEVERAGE
+}
+
+model ConversationSignal {
+  id String @id @default(cuid())
+
+  signalType ConversationSignalType
+
+  participantId String?
+  participant   ConversationParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  transcriptSegmentId String?
+  transcriptSegment   TranscriptSegment? @relation(fields: [transcriptSegmentId], references: [id], onDelete: SetNull)
+
+  confidence Float?
+
+  // ── Поля, осмысленные только для FACTUAL_DISCREPANCY ──
+  severity                          SignalSeverity?
+  // Выставляется ТОЛЬКО пользователем вручную (§3.16 ТЗ) — сервис
+  // никогда не проставляет это поле сам, независимо от confidence.
+  userConfirmedIntentionalFalsehood Boolean         @default(false)
+
+  // ── Поля, осмысленные только для PROBING_PATTERN ──
+  probedTopic String?
+  repeatCount Int?
+
+  // ── Поле, осмысленное только для SELF_RISK ──
+  riskCategory SelfRiskCategory?
+
+  // ── Поле, осмысленное только для ARGUMENT_ACCEPTANCE ──
+  // false, если подтверждение аргумента совпало по времени с
+  // сигналом MANIPULATION_PATTERN — проверяется в service-слое
+  // при создании (§3.33 ТЗ), не в схеме.
+  confirmedGenuinely Boolean?
+
+  disputed  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  evidence ConversationSignalEvidence[]
+
+  @@index([signalType])
+  @@index([participantId])
+  @@index([transcriptSegmentId])
+  @@map("conversation_signals")
+}
+
+// Доказательная база сигнала — та же полиморфная схема, что и
+// AIInferenceSource, но с тремя возможными типами ссылки (факт,
+// наблюдение, AI-вывод), так как сигналы могут опираться на любой
+// из трёх. Инвариант "хотя бы одно поле заполнено" — service-слой,
+// не БД. §3.16 ТЗ: DISCREPANCY/STRONG_DISCREPANCY без записи здесь
+// не должны создаваться выше severity=INACCURACY — тоже service-слой.
+model ConversationSignalEvidence {
+  id                   String             @id @default(cuid())
+  conversationSignalId String
+  conversationSignal   ConversationSignal @relation(fields: [conversationSignalId], references: [id], onDelete: Cascade)
+
+  personFactId  String?
+  personFact    PersonFact?  @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+  observationId String?
+  observation   Observation? @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  aiInferenceId String?
+  aiInference   AIInference? @relation(fields: [aiInferenceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationSignalId])
+  @@map("conversation_signal_evidence")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 12: Conversation Dossier (раздел 2 ТЗ, MVP v2 — фундамент) —
+// запись разговора (встроенная или загруженная), транскрибация,
+// диаризация, повестка следующего разговора, защищённые заметки
+// (туз в рукаве / план Б).
+//
+// ЗАКРЫВАЕТ технический долг, явно отложенный в предыдущих
+// чекпоинтах именно до этого момента (см. комментарии выше по
+// файлу на момент их появления):
+// - FactSource.conversationId — была строка, теперь FK на Conversation
+// - ConversationSignal.speakerId/segmentRef — были свободные строки,
+//   теперь FK на ConversationParticipant/TranscriptSegment
+//
+// Observation.sourceId ОСТАЁТСЯ полиморфной строкой намеренно —
+// у неё 4 разных типа источника (TRANSCRIPT_SEGMENT/OCR_DOCUMENT/
+// IMPORTED_CHAT/BEHAVIORAL_SIGNAL), не один, полиморфный FK здесь
+// не был бы упрощением. Когда сегмент транскрипта нужно провести
+// через существующий пайплайн Observation → AIInferenceSource (для
+// извлечения аргументов/фактов через уже существующий AIInference),
+// заводится Observation(sourceType=TRANSCRIPT_SEGMENT,
+// sourceId=segment.id) — TranscriptSegment не дублирует эту связь
+// собственным полем, наблюдение и есть точка входа в AI-пайплайн.
+//
+// "Хронология по фигуранту" (раздел 2 ТЗ) — сознательно НЕ отдельная
+// модель. Это агрегирующий запрос service-слоя (все Conversation
+// через ConversationParticipant.personId + все ProjectLogEntry через
+// ProjectLogEntryPerson.personId + PersonFact.personId, для одного
+// personId), не персистентная сущность — та же причина, по которой
+// не заводится "TimelineEntry" ради того, что и так реляционно
+// выводимо из существующих таблиц.
+//
+// Приватность (раздел 2 ТЗ): сырые файлы разговора НЕ хранятся на
+// сервере (кроме временной EPHEMERAL_SERVER-обработки одной операции
+// с явным согласием — ConsentRecord(consentType=RECORDING), уже
+// существующий тип, новый не заводится). rawFileRef — клиентская
+// ссылка ("открыть на устройстве"), тот же паттерн, что уже
+// использован в FactSource.fileRef. Метаданные без геопривязки —
+// только occurredAt, поля координат/места в модели физически нет.
+// ───────────────────────────────────────────────────────────
+
+enum ConversationSourceType {
+  LIVE_RECORDING // встроенная запись в приложении
+  UPLOADED_AUDIO
+  UPLOADED_VIDEO
+  UPLOADED_PHOTO // скриншот переписки/фото доски/рукописной заметки
+  // Пункт 61 (§3.29 ТЗ) — импорт текстовой переписки (WhatsApp/
+  // Telegram-экспорт), тот же аналитический конвейер, что аудио, но
+  // без шага транскрибации: текст уже текст. См. подробное
+  // обоснование над ChatImportService.
+  TEXT_IMPORT
+}
+
+enum ConversationProcessingStatus {
+  UPLOADED
+  TRANSCRIBING
+  TRANSCRIBED
+  ANALYZING
+  ANALYZED
+  FAILED
+}
+
+model Conversation {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  sourceType ConversationSourceType
+  status     ConversationProcessingStatus @default(UPLOADED)
+
+  // §2 ТЗ: только время самого разговора, без геопривязки. Для
+  // загруженных файлов — метаданные времени создания файла (EXIF/
+  // media metadata), не время загрузки в сервис — проверяется в
+  // service-слое на импорте, не здесь.
+  occurredAt DateTime
+
+  durationSeconds Int?
+
+  // Клиентская ссылка на первоисточник, не сам файл (см. комментарий
+  // к блоку выше). Может быть null, если пользователь уже удалил
+  // локальную копию — производные артефакты (транскрипт, аргументы)
+  // остаются доступны независимо от исходного файла.
+  rawFileRef String?
+
+  // Пункт 13: интеграция STT/диаризации (AssemblyAI, см. README) —
+  // provider отслеживается через уже существующий реестр AIModelVersion
+  // (не через AIJob — та модель жёстко завязана на PromptVersion,
+  // осмысленный только для prompt-completion LLM-флоу, не для аудио
+  // "просто отправь файл, получи транскрипт"; заводить фиктивный
+  // PromptVersion ради формального соответствия было бы неправильной
+  // унификацией). externalJobId — id транскрипции на стороне AssemblyAI,
+  // нужен для сопоставления входящего webhook с конкретным Conversation.
+  transcriptionProviderVersionId String?
+  transcriptionProviderVersion   AIModelVersion? @relation(fields: [transcriptionProviderVersionId], references: [id])
+  externalTranscriptionJobId     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants  ConversationParticipant[]
+  transcript    Transcript?
+  factSources   FactSource[]
+  agendas       ConversationAgenda[] @relation("AgendaBasedOnConversations")
+  // Пункт 14: Commitment Tracker — обязательства, извлечённые из этого разговора
+  commitments   Commitment[]
+  // Пункт 19: Best Next Move — рекомендации, сформированные по этому разговору
+  bestNextMoveRecommendations BestNextMoveRecommendation[]
+  // Пункт 23: Argument Lifecycle — переходы статуса, произошедшие в контексте этого разговора
+  argumentLifecycleEvents ArgumentLifecycleEvent[]
+  // Пункт 50: обратная сторона ScheduledConversation.linkedConversationId
+  // — тот план, из которого этот реальный разговор возник, если был
+  // запланирован заранее (не обязателен — большинство разговоров не
+  // планируются через календарь).
+  scheduledFrom ScheduledConversation?
+
+  @@index([projectId])
+  @@index([projectId, occurredAt])
+  @@index([externalTranscriptionJobId])
+  @@map("conversations")
+}
+
+// Диаризация → реальные люди. Один speaker-лейбл диаризации
+// ("SPEAKER_00", "SPEAKER_01"...) сопоставляется человеку через эту
+// связку — включая самого пользователя (isSelf=true, personId=null),
+// не только фигурантов: самопроверка (§3.17, ConversationSignal
+// riskCategory=SELF_RISK) анализирует и реплики пользователя, не
+// только собеседника.
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  diarizationLabel String // "SPEAKER_00" — сохраняется и после сопоставления, для повторного анализа без переобучения диаризации
+
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+  isSelf   Boolean @default(false) // сам пользователь — отдельная Person-запись на себя не заводится
+
+  createdAt DateTime @default(now())
+
+  segments TranscriptSegment[]
+  signals  ConversationSignal[]
+
+  @@unique([conversationId, diarizationLabel])
+  @@index([personId])
+  @@map("conversation_participants")
+}
+
+model Transcript {
+  id             String       @id @default(cuid())
+  conversationId String       @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  language String? // код языка, определённый STT-движком, если применимо
+
+  createdAt DateTime @default(now())
+
+  segments TranscriptSegment[]
+
+  @@map("transcripts")
+}
+
+model TranscriptSegment {
+  id           String     @id @default(cuid())
+  transcriptId String
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  participantId String?
+  participant   ConversationParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  text       String
+  startMs    Int
+  endMs      Int
+  confidence Float?
+
+  createdAt DateTime @default(now())
+
+  signals ConversationSignal[]
+  // Пункт 14: Commitment Tracker — обязательство может ссылаться на конкретную реплику как первоисточник
+  commitments Commitment[]
+
+  @@index([transcriptId])
+  @@index([participantId])
+  @@map("transcript_segments")
+}
+
+// MVP v2, фича 15 (раздел 2 ТЗ, "Повестка следующего разговора") —
+// AI формирует повестку на основе прошлых Conversation с фигурантом
+// + текущей DecisionObjective проекта. generatedByInferenceId —
+// тот же паттерн provenance, что Argument.derivedFromInferenceId.
+model ConversationAgenda {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  items String[] // пункты повестки — тот же паттерн простого списка, что DecisionObjective.constraints
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  basedOnConversations Conversation[] @relation("AgendaBasedOnConversations")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@map("conversation_agendas")
+}
+
+// MVP v2, фича 16 (раздел 2 ТЗ, "Туз в рукаве" / "План Б/В") —
+// защищённые заметки с триггерами. type различает две разные
+// природы записи: ACE_IN_THE_HOLE (сильный аргумент/факт про запас)
+// не имеет триггера — система напоминает о нём, когда разговор
+// заходит в тупик (детектируется через ConversationSignal в
+// service-слое, не полем здесь); FALLBACK_PLAN (План Б/В) имеет
+// явный triggerCondition текстом ("если оппонент скажет X").
+enum ProtectedNoteType {
+  ACE_IN_THE_HOLE
+  FALLBACK_PLAN
+}
+
+model ProtectedNote {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  type             ProtectedNoteType
+  content          String
+  triggerCondition String? // осмысленно только для FALLBACK_PLAN
+  planOrder        Int? // для нескольких fallback (План Б, План В...) — порядок отступления, осмысленно только для FALLBACK_PLAN
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, type])
+  @@map("protected_notes")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункты 5-6: AI Router и реестр моделей (§3.15, §7.1 implementation-ready)
+//
+// AIProvider/AIModel/AIModelVersion/AIModelCapability — декларативный
+// реестр того, что вообще доступно (не как настраивается конкретный
+// вызов). AIJob — контракт конкретного вызова: какая версия модели,
+// какой промпт, какой статус, retry/fallback.
+//
+// credentialRef на AIProvider — НЕ сам ключ (§7.3, secrets management).
+// Настоящий секрет живёт в secret manager/environment secrets, здесь —
+// только ссылка на него. Даже на этом проходе, до формального пункта 12
+// чекпоинта, эта дисциплина соблюдается с первого дня — проще не давать
+// себе возможности положить сюда сырой ключ, чем потом чистить.
+// ───────────────────────────────────────────────────────────
+
+model AIProvider {
+  id     String @id @default(cuid())
+  name   String @unique // "openai" | "anthropic" | "xai" | ...
+  region String? // юрисдикция хостинга, для privacyClass-решений (4.6)
+
+  privacyPolicyUrl String?
+
+  apiEndpoint  String?
+  authMethod   String? // "bearer" | "api-key-header" | ...
+  credentialRef String? // ссылка на secret manager, НИКОГДА не сырой ключ
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models AIModel[]
+
+  @@map("ai_providers")
+}
+
+model AIModel {
+  id         String     @id @default(cuid())
+  providerId String
+  provider   AIProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  name String // "gpt-4.1" | "claude-sonnet-5" | "grok-4" | ...
+
+  createdAt DateTime @default(now())
+
+  versions AIModelVersion[]
+
+  @@unique([providerId, name])
+  @@map("ai_models")
+}
+
+model AIModelVersion {
+  id      String  @id @default(cuid())
+  modelId String
+  model   AIModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  version      String
+  releasedAt   DateTime?
+  deprecatedAt DateTime?
+
+  // Параметры вызова по умолчанию для этой версии (температура,
+  // max tokens и т.п.) — свободный JSON, конкретная форма не
+  // фиксируется схемой намеренно (слишком по-разному у разных
+  // провайдеров, чтобы типизировать сейчас).
+  defaultParams Json?
+
+  createdAt DateTime @default(now())
+
+  capabilities AIModelCapability[]
+  inferences   AIInference[]
+  jobs         AIJob[]              @relation("AIJobModelVersion")
+  fallbackJobs AIJob[]              @relation("AIJobFallbackModelVersion")
+  evaluationRuns EvaluationRun[]
+  // Пункт 13: STT/диаризация (AssemblyAI) — Conversation.transcriptionProviderVersionId
+  transcribedConversations Conversation[]
+
+  @@unique([modelId, version])
+  @@map("ai_model_versions")
+}
+
+model AIModelCapability {
+  id             String         @id @default(cuid())
+  modelVersionId String
+  modelVersion   AIModelVersion @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+
+  taskType String // "generation" | "classification" | "extraction" | "vision_analysis" | "audio_transcription" | ... — держим строкой по тому же принципу, что inferenceType
+
+  structuredOutput Boolean @default(false)
+  streaming        Boolean @default(false)
+  vision           Boolean @default(false)
+  audio            Boolean @default(false)
+  maxContext       Int?
+
+  latencyClass String? // "low" | "medium" | "high" — свободная строка, см. README про причину не enum'ить заранее
+  privacyClass String? // характеристика провайдера по хранению данных — влияет на выбор в privacyProcessingMode (4.6), конкретные значения — на усмотрение при первой реализации
+  costClass    String? // "low" | "medium" | "high"
+  availability String  @default("active") // "active" | "beta" | "deprecated"
+
+  createdAt DateTime @default(now())
+
+  @@index([modelVersionId, taskType])
+  @@map("ai_model_capabilities")
+}
+
+enum AIJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  TIMEOUT
+  CANCELLED
+}
+
+enum SchemaValidationResult {
+  PENDING
+  PASS
+  FAIL
+}
+
+model AIJob {
+  id        String @id @default(cuid())
+  inputHash String // для идемпотентности повторных запросов (implementation-ready §7)
+
+  modelVersionId String
+  modelVersion   AIModelVersion @relation("AIJobModelVersion", fields: [modelVersionId], references: [id])
+
+  // Пункт 7: мигрировано из строки в FK.
+  promptVersionId String?
+  promptVersion   PromptVersion? @relation(fields: [promptVersionId], references: [id])
+
+  status      AIJobStatus @default(QUEUED)
+  retryCount  Int         @default(0)
+  retryPolicy String? // текстовое описание политики (например "3 attempts, exponential backoff") — не типизируем структуру раньше первой реализации
+
+  fallbackModelVersionId String?
+  fallbackModelVersion   AIModelVersion? @relation("AIJobFallbackModelVersion", fields: [fallbackModelVersionId], references: [id])
+
+  schemaValidation SchemaValidationResult @default(PENDING)
+  partialResult    String? // на случай FAILED/TIMEOUT с частичным результатом — не теряем, что успело прийти
+
+  // Пункт 10: результат prompt injection/PII проверки входных данных
+  // ДО отправки в AI-движок — заполняется ContentSanitizationService
+  // перед переводом статуса из QUEUED в RUNNING. BLOCKED не даёт джобе
+  // перейти в RUNNING (проверка — service-слой, см. README).
+  inputScanStatus InputScanStatus @default(PENDING)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  inferences        AIInference[]
+  contentScanResults ContentScanResult[]
+
+  @@index([status])
+  @@index([inputHash])
+  @@map("ai_jobs")
+}
+
+enum InputScanStatus {
+  PENDING
+  PASSED
+  BLOCKED
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 7: Prompt Registry + AI Evaluation Gate (§7.1 ТЗ,
+// implementation-ready §6)
+//
+// Архитектурное отклонение от буквального списка сущностей в
+// implementation-ready: там отдельно назван "PromptEvaluation"
+// (promptVersionId, datasetVersion, metrics, passed, evaluatedAt)
+// рядом с общим "AI Evaluation gate" (EvaluationDataset/Run/Metric/
+// Result/ReleaseGate) для моделей. Здесь это ОДНА система: EvaluationRun
+// полиморфен по subjectType (PROMPT_VERSION | MODEL_VERSION) — тот же
+// принцип унификации, что уже применён к ConversationSignal вместо
+// набора отдельных флагов. Если предпочитаете строго по документу
+// (два параллельных механизма) — можно откатить, но дублирование
+// одинаковой by-design логики ради двух смежных, но разных субъектов
+// оценки выглядит как то, чего сам аудит просил избегать. См. README.
+// ───────────────────────────────────────────────────────────
+
+enum PromptVersionStatus {
+  DRAFT
+  TESTING
+  ACTIVE
+  DEPRECATED
+  ROLLBACK
+}
+
+model PromptVersion {
+  id String @id @default(cuid())
+
+  promptId String // логическая группа промпта, например "argument-generation" | "steelman" | "red-team"
+  version  String
+
+  template  String
+  changelog String?
+
+  status PromptVersionStatus @default(DRAFT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  evaluationRuns EvaluationRun[]
+  aiInferences   AIInference[]
+  aiJobs         AIJob[]
+
+  @@unique([promptId, version])
+  @@index([promptId, status])
+  @@map("prompt_versions")
+}
+
+model EvaluationDataset {
+  id String @id @default(cuid())
+
+  name        String
+  version     String
+  description String?
+
+  createdAt DateTime @default(now())
+
+  runs EvaluationRun[]
+
+  @@unique([name, version])
+  @@map("evaluation_datasets")
+}
+
+enum EvaluationSubjectType {
+  PROMPT_VERSION
+  MODEL_VERSION
+}
+
+enum EvaluationRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model EvaluationRun {
+  id String @id @default(cuid())
+
+  subjectType EvaluationSubjectType
+
+  // Полиморфная ссылка на субъект оценки — ровно одно из двух заполнено,
+  // инвариант проверяется в service-слое (тот же паттерн, что
+  // AIInferenceSource/ConversationSignalEvidence выше по файлу).
+  promptVersionId String?
+  promptVersion   PromptVersion? @relation(fields: [promptVersionId], references: [id], onDelete: Cascade)
+  modelVersionId  String?
+  modelVersion    AIModelVersion? @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+
+  evaluationDatasetId String
+  evaluationDataset   EvaluationDataset @relation(fields: [evaluationDatasetId], references: [id])
+
+  status      EvaluationRunStatus @default(RUNNING)
+  startedAt   DateTime            @default(now())
+  completedAt DateTime?
+
+  results     EvaluationResult[]
+  releaseGate ReleaseGate?
+
+  @@index([subjectType])
+  @@map("evaluation_runs")
+}
+
+model EvaluationMetric {
+  id   String @id @default(cuid())
+  name String @unique // "accuracy" | "hallucination_rate" | "false_positive_rate" | "precision" | "recall" | ...
+  description String?
+
+  results EvaluationResult[]
+
+  @@map("evaluation_metrics")
+}
+
+model EvaluationResult {
+  id              String        @id @default(cuid())
+  evaluationRunId String
+  evaluationRun   EvaluationRun @relation(fields: [evaluationRunId], references: [id], onDelete: Cascade)
+
+  evaluationMetricId String
+  evaluationMetric   EvaluationMetric @relation(fields: [evaluationMetricId], references: [id])
+
+  value     Float
+  threshold Float?
+  passed    Boolean
+
+  createdAt DateTime @default(now())
+
+  @@index([evaluationRunId])
+  @@map("evaluation_results")
+}
+
+// Итоговое решение по прогону оценки — единая точка "можно ли в прод".
+// PromptVersion.status = ACTIVE и AIModelCapability.availability = "active"
+// не должны выставляться в service-слое без прохода через ReleaseGate.passed
+// = true для соответствующего EvaluationRun (implementation-ready §6:
+// "Model/Prompt → Evaluation → Pass? → PROD/BLOCK").
+model ReleaseGate {
+  id              String        @id @default(cuid())
+  evaluationRunId String        @unique
+  evaluationRun   EvaluationRun @relation(fields: [evaluationRunId], references: [id], onDelete: Cascade)
+
+  passed     Boolean
+  gateType   String // "prompt_promotion" | "model_activation"
+  decidedAt  DateTime @default(now())
+  decidedBy  String? // "system" | id ревьюера, если решение потребовало ручного подтверждения
+
+  @@map("release_gates")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 8: ConsentRecord (§7.2 ТЗ, implementation-ready §1.2)
+//
+// Архитектурное решение: отдельная модель LocationPermission из
+// implementation-ready ER-диаграммы НЕ создаётся как самостоятельная
+// сущность — единый геосогласие (§3.32, "один экран согласия вместо
+// разрозненных промптов") реализуется как ConsentRecord с
+// consentType=LOCATION и заполненным purposes[]. Причина та же, что
+// в пункте 7: LocationPermission по факту дублировала бы структуру
+// ConsentRecord (userId, granted, grantedAt) ради одного типа согласия,
+// когда generic-модель уже покрывает это через consentType + purposes.
+// Если предпочитаете отдельную таблицу — откатить несложно, см. README.
+// ───────────────────────────────────────────────────────────
+
+enum ConsentType {
+  RECORDING
+  EXTERNAL_AI
+  EPHEMERAL_SERVER
+  LOCATION
+  RELIGIOUS_CONTENT
+  PUBLIC_SHARING
+  PERSON_RESEARCH
+  VOICE_PROCESSING
+  // Пункт 87 — намеренно ОТДЕЛЬНЫЙ от VOICE_PROCESSING тип согласия.
+  // VOICE_PROCESSING — "мы синтезируем/обрабатываем ваш голос для
+  // конкретной задачи" (TTS, суфлёр). VOICE_BIOMETRIC — принципиально
+  // другое обещание: "мы храним постоянный биометрический
+  // идентификатор вашего голоса для сопоставления в будущем". Смешение
+  // этих согласий ввело бы пользователя в заблуждение о том, на что
+  // он реально соглашается — тот же принцип, что уже применялся к
+  // разделению EPHEMERAL_SERVER/PUBLIC_SHARING выше.
+  VOICE_BIOMETRIC
+  // Пункт 48 (§4.4 ТЗ) — намеренно ОТДЕЛЬНЫЙ от EPHEMERAL_SERVER тип
+  // согласия: EPHEMERAL_SERVER обещает "файл временно побудет на НАШЕМ
+  // сервере и удалится", это фото временно станет ПУБЛИЧНО ДОСТУПНЫМ
+  // В ИНТЕРНЕТЕ по ссылке (не просто нашему серверу) — разные по силе
+  // обещания пользователю, смешивать их в одном типе согласия
+  // это значит вводить пользователя в заблуждение относительно того, на
+  // что он реально соглашается.
+  PUBLIC_IMAGE_SEARCH
+}
+
+model ConsentRecord {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  consentType ConsentType
+
+  // Применимо только к consentType=LOCATION (§3.32) — например
+  // ["onboarding_city", "weather", "venue_search"]. Пусто для
+  // остальных типов согласия.
+  purposes String[]
+
+  // Версия текста согласия/политики, под которой подписался
+  // пользователь — важно при обновлении Privacy Policy/ToS понимать,
+  // на какую именно версию он соглашался.
+  version String
+
+  granted   Boolean   @default(true)
+  grantedAt DateTime?
+  revokedAt DateTime?
+
+  source String // экран/фича, откуда получено согласие (например "onboarding" | "conversation-record-modal")
+
+  // Если согласие не глобальное, а привязано к конкретному проекту
+  // (например EPHEMERAL_SERVER-согласие на одну конкретную запись).
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, consentType])
+  @@map("consent_records")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 9: Project Log vs Audit Log (§3.39, §7.2)
+//
+// Здесь — НЕ унификация, в отличие от пунктов 7-8. ТЗ прямо требует
+// два раздельных лога с разной природой: ProjectLogEntry — то, что
+// видит пользователь (эскалация, смена статуса, поворотная точка),
+// AuditLogEntry — append-only security/compliance-след. Смешивать их
+// было бы четвёртым подряд "решением по унификации" ради унификации,
+// а не по существу — здесь разная семантика (UX vs security), не
+// дублирующая структура, так что разделение остаётся как в документе.
+// ───────────────────────────────────────────────────────────
+
+enum ProjectLogEventType {
+  STATUS_CHANGE
+  ESCALATION_THRESHOLD
+  SIGNAL_RAISED
+  SIGNAL_RESOLVED
+}
+
+enum LogColorTone {
+  GREEN
+  RED
+}
+
+model ProjectLogEntry {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  eventType ProjectLogEventType
+
+  // §3.39: обязателен при наличии colorTone — не проверяется схемой,
+  // см. README "Пункт 9", инвариант про обязательность involvedPersons.
+  colorTone LogColorTone?
+
+  description String
+  // Свободная ссылка на источник события (ID ConversationSignal,
+  // ProjectPerson-переход и т.п.) — не FK, потому что источники разные
+  // по типу (не вводим ещё одну полиморфную join-таблицу ради поля,
+  // которое используется только для "показать откуда взялась запись").
+  sourceRef String?
+
+  involvedPersons ProjectLogEntryPerson[]
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("project_log_entries")
+}
+
+model ProjectLogEntryPerson {
+  id                String          @id @default(cuid())
+  projectLogEntryId String
+  projectLogEntry   ProjectLogEntry @relation(fields: [projectLogEntryId], references: [id], onDelete: Cascade)
+  personId          String
+  person            Person          @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@unique([projectLogEntryId, personId])
+  @@map("project_log_entry_people")
+}
+
+// Append-only по конвенции приложения, не по констрейнту БД (Postgres
+// не запрещает UPDATE/DELETE декларативно без триггеров — если нужна
+// db-level гарантия неизменяемости, добавляется REVOKE UPDATE/DELETE на
+// уровне роли приложения отдельной миграцией, не как часть Prisma-схемы).
+model AuditLogEntry {
+  id String @id @default(cuid())
+
+  // Не FK — может быть "system" для автоматических событий
+  // (pg_cron джобы, каскадные удаления, AI-инициированные действия),
+  // не только реальный пользователь.
+  actorId String?
+
+  action     String // "person.deleted" | "fact.created" | "consent.revoked" | ...
+  resource   String // "PersonFact" | "Project" | "ConsentRecord" | ...
+  resourceId String
+
+  before Json?
+  after  Json?
+
+  requestId  String?
+  deviceMeta Json? // только там, где юридически уместно (ip/устройство) — не по умолчанию для всех записей
+
+  createdAt DateTime @default(now())
+
+  @@index([resource, resourceId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_log_entries")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 10: Prompt Injection защита + PII redaction (§8 ТЗ, пп. 18-19)
+//
+// Сам пайплайн (Content Sanitization → PII/Injection Scan → Trusted
+// Context Extraction → AI) — преимущественно сервисный код, не таблицы.
+// Здесь — только то, что действительно нужно как персистентная модель:
+// результат скана, что было обнаружено, что с этим сделано. Полиморфная
+// цель скана (targetType) — вход AIJob уже сейчас, Safe Share Preflight
+// и загрузка файлов подключатся, когда появятся их модели на фичевых
+// пунктах MVP (Safe Share — пункт 12 MVP-роадмапа, вне этого чекпоинта);
+// пока для них — externalRef как свободная строка, тот же паттерн
+// поэтапной миграции, что применялся к promptVersion/modelVersion выше.
+//
+// КРИТИЧЕСКОЕ ПРАВИЛО, НЕ ТОЛЬКО ДЛЯ РЕВЬЮ КОДА, НО ДЛЯ ЭТОЙ СХЕМЫ:
+// ContentScanDetection НЕ хранит сам обнаруженный чувствительный текст
+// (реальный номер телефона, реальный email и т.п.) — только тип, действие
+// и позиционную ссылку. Логирование "что именно нашли" дословно
+// воссоздало бы утечку, которую весь пайплайн должен предотвращать.
+// Даже в debug/audit целях — только маскированный превью, не сырое
+// значение (реализация маскирования — service-слой, но поле для сырого
+// значения в схеме НЕ создаётся вообще, по тому же принципу, что
+// AIProvider.credentialRef в пункте 6 — проще не давать себе возможности
+// положить туда чувствительные данные, чем потом чистить).
+// ───────────────────────────────────────────────────────────
+
+enum ScanTargetType {
+  AI_JOB_INPUT
+  SAFE_SHARE_PREFLIGHT
+  FILE_UPLOAD
+}
+
+model ContentScanResult {
+  id String @id @default(cuid())
+
+  targetType ScanTargetType
+
+  aiJobId String?
+  aiJob   AIJob?  @relation(fields: [aiJobId], references: [id], onDelete: Cascade)
+
+  // Для целей скана, у которых ещё нет собственной модели на этом
+  // проходе (Safe Share Preflight, загрузка файлов) — свободная строка,
+  // мигрирует в FK, когда появится соответствующая модель.
+  externalRef String?
+
+  scannedAt DateTime @default(now())
+
+  detections ContentScanDetection[]
+
+  @@index([targetType])
+  @@index([aiJobId])
+  @@map("content_scan_results")
+}
+
+enum ScanDetectionType {
+  PII_PHONE
+  PII_EMAIL
+  PII_ADDRESS
+  PII_PASSPORT
+  PII_BANKING
+  PII_FACE
+  PII_LICENSE_PLATE
+  PROMPT_INJECTION
+}
+
+enum ScanAction {
+  REMOVED
+  ALIASED
+  KEPT
+  BLOCKED
+}
+
+model ContentScanDetection {
+  id                  String            @id @default(cuid())
+  contentScanResultId String
+  contentScanResult   ContentScanResult @relation(fields: [contentScanResultId], references: [id], onDelete: Cascade)
+
+  detectionType ScanDetectionType
+  action        ScanAction
+  confidence    Float?
+
+  // Позиционная ссылка (например смещение в тексте) или маскированный
+  // превью ("+380•••••67") — НИКОГДА не сырое обнаруженное значение.
+  // См. предупреждение в комментарии к блоку выше — это не опция,
+  // а жёсткое правило схемы.
+  maskedPreview String?
+
+  createdAt DateTime @default(now())
+
+  @@index([contentScanResultId])
+  @@map("content_scan_detections")
+}
+
+// ───────────────────────────────────────────────────────────
+// MVP-фича 7: SteelmanCase (§3.43 ТЗ) — симметричная пара к Red Team
+// (3.1): не атака на позицию пользователя, а построение сильнейшей
+// версии позиции фигуранта. Для MVP не требует полноценной карты
+// круга лиц/симуляции перспектив (v3-фичи) — опирается на то, что уже
+// есть: Person, PersonFact (с учётом FactScope — 4.2), AIInference.
+// ───────────────────────────────────────────────────────────
+
+model SteelmanCase {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  personId  String
+  person    Person  @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  strongestArgument String
+  reasonableness    String? // почему позиция может быть разумной с точки зрения фигуранта
+  whatUserMayMiss   String?
+
+  derivedFromInferenceId String?
+  derivedFromInference   AIInference? @relation(fields: [derivedFromInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  supportingFacts SteelmanSupportingFact[]
+
+  @@index([projectId, personId])
+  @@map("steelman_cases")
+}
+
+// Связка с фактами, на которые опирается Steelman-кейс — тот же
+// паттерн join-таблицы, что AIInferenceSource/ConversationSignalEvidence.
+// Для MVP связывается со всеми PersonFact, использованными при
+// построении промпта (не с отдельными предложениями внутри аргумента —
+// более гранулярная атрибуция осталась бы для post-MVP уточнения).
+model SteelmanSupportingFact {
+  id             String       @id @default(cuid())
+  steelmanCaseId String
+  steelmanCase   SteelmanCase @relation(fields: [steelmanCaseId], references: [id], onDelete: Cascade)
+  personFactId   String
+  personFact     PersonFact   @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+
+  @@unique([steelmanCaseId, personFactId])
+  @@map("steelman_supporting_facts")
+}
+
+// ───────────────────────────────────────────────────────────
+// MVP-фича 10: ConversationScript — скрипты открытия/закрытия
+// разговора (§3.46 ТЗ). Последняя недостающая секция Conversation
+// Card (фича 8), которая до этого прохода честно показывала "эта
+// часть карточки ещё не реализована".
+//
+// personId опционален: скрипт может быть общим (без адресата) или
+// адресован конкретному фигуранту. §3.46 упоминает учёт
+// коммуникационного профиля фигуранта (§3.11) — это v3-фича
+// (Person.communicationProfile ещё не существует в схеме), здесь
+// скрипт строится на Decision Objective/BATNA без него — честное
+// упрощение для MVP, не притворяется учётом того, чего физически нет.
+// ───────────────────────────────────────────────────────────
+
+enum ConversationScriptType {
+  OPENING
+  CLOSING
+}
+
+model ConversationScript {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  personId  String?
+  person    Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  type ConversationScriptType
+  text String
+
+  derivedFromInferenceId String?
+  derivedFromInference   AIInference? @relation(fields: [derivedFromInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, type])
+  @@map("conversation_scripts")
+}
+
+// ───────────────────────────────────────────────────────────
+// MVP-фича 12: SafeShareAction (§3.48 ТЗ) — последняя фича MVP v1,
+// закрывает пробел, зафиксированный при реализации Privacy Center
+// (фича 11): "журнал Safe Share — фича 12 не готова".
+//
+// contentType — String, не enum: единственный реально существующий
+// в MVP тип контента для шеринга — "arguments-summary" (то, что уже
+// умел ShareButton с фичи 4, но БЕЗ прогона через content scan —
+// реальный пробел, закрытый именно в этом проходе). Compromise sheet
+// (§3.41), протокол (§3.30), публичное обсуждение (§4.5) — post-MVP
+// фичи, тип расширится, когда они появятся — тот же принцип "не
+// гадаем enum значения до реальных потребителей", что и в других
+// местах схемы.
+//
+// НЕТ полей shareToken (entropy/expiresAt/revoked/passwordProtected) —
+// implementation-ready описывал их для защиты публичных ссылок
+// (§4.5), которых в MVP не существует. Шеринг в этом проходе — через
+// t.me/share/url (открывает выбор чата в Telegram), не постоянная
+// ссылка, которую нужно защищать токеном — эти поля защищали бы
+// механизм, которого физически нет.
+// ───────────────────────────────────────────────────────────
+
+model SafeShareAction {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  contentType String
+
+  previewShownAt DateTime
+  // NULL = превью показано, но отправка ещё не подтверждена. confirm()
+  // не может проставить sentAt без прохождения preflight — см. сервис.
+  sentAt DateTime?
+
+  detectedItemsCount Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("safe_share_actions")
+}
+
+// ───────────────────────────────────────────────────────────
+// TTL-настройки — RetentionClass (§4.7 ТЗ). Честно про объём этого
+// прохода: это ИНФОРМАЦИОННАЯ часть — глобальный справочник политик
+// хранения по категориям данных, читаемый в Privacy Center. Реальное
+// автоматическое удаление по истечении срока (pg_cron sweep,
+// проверяющий createdAt каждой таблицы против её RetentionClass) —
+// НЕ реализовано в этом проходе. Это отдельная инфраструктурная
+// задача: требует решить, к какому провайдеру планировщика привязана
+// джоба (Supabase pg_cron — паттерн, уже используемый в других
+// проектах стека, но настройка specific к окружению деплоя, не то,
+// что можно "просто добавить моделью"). Обманывать пользователя
+// текстом "данные удаляются через N дней", когда на самом деле ничего
+// их не удаляет — хуже, чем честно показать текущую политику как
+// декларацию намерения, пока не реализован механизм принуждения.
+//
+// НЕТ FK-связи с другими таблицами (RetentionClass.classKey не
+// привязан к записям через relation) — это глобальный справочник
+// политик, не привязка конкретной записи к конкретному классу.
+// Маппинг "какая таблица к какому классу относится" — смысловой,
+// задокументирован в seed.ts и README, не выражен схемой: делать это
+// через реальный FK на каждую из ~15 моделей ради классификации,
+// которая пока ничего не включает (нет enforcement), было бы
+// преждевременной инфраструктурой под механизм, которого ещё нет —
+// тот же принцип, что уже применялся к отсутствующим shareToken-полям
+// в SafeShareAction.
+// ───────────────────────────────────────────────────────────
+
+enum DeletionBehavior {
+  HARD_DELETE
+  ANONYMIZE
+  ARCHIVE
+}
+
+model RetentionClass {
+  id       String @id @default(cuid())
+  classKey String @unique // "RAW_LOCAL" | "DERIVED_PRIVATE" | "AI_INFERENCE" | "PUBLIC_CONTENT" | "AUDIT_LOG" | "CONSENT_LOG" | "SHARE_LOG"
+
+  displayName String
+  description String
+
+  // NULL = хранится бессрочно (пока не удалено явно пользователем/каскадом
+  // от удаления связанной сущности) — не то же самое, что "забыли указать".
+  defaultRetentionDays Int?
+
+  userOverrideAllowed Boolean          @default(false)
+  legalHold           Boolean          @default(false)
+  deletionBehavior     DeletionBehavior @default(HARD_DELETE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("retention_classes")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 14: Commitment Tracker (§3.49 ТЗ, MVP v2, первая из 11 фич
+// поверх Conversation Dossier) — непрерывный трекинг договорённостей
+// в рамках длительных отношений с фигурантом, отдельно от разового
+// протокола по итогам решения (§3.30, не реализован в этом ТЗ).
+//
+// Провенанс: обязательство может быть извлечено из постфактум-разбора
+// конкретного разговора (extractedFromConversationId/SegmentId) ИЛИ
+// добавлено вручную пользователем (оба поля null) — тот же принцип
+// "опциональная связь с источником", что уже применён в
+// Argument.derivedFrom/derivedFromPersonFact.
+//
+// status — ТОЛЬКО IN_PROGRESS/COMPLETED хранится явно, "просрочено"
+// НЕ отдельное персистентное значение. Заводить статус, для смены
+// которого нужна фоновая cron-джоба (которой в проекте нет — см.
+// комментарий выше по файлу про RetentionClass enforcement, тот же
+// класс решения), было бы преждевременной инфраструктурой под
+// механизм, которого ещё нет. "Просрочено" вычисляется на чтении
+// (dueDate < now && status=IN_PROGRESS) в service-слое.
+//
+// "Напоминания о невыполненных обязательствах — как в планировщике
+// (§3.20)" — §3.20 (Conversation Scheduler, push-уведомления) сам НЕ
+// реализован ни в v1, ни здесь: push-инфраструктуры (исходящие
+// сообщения через Telegram Bot API, календарь) в проекте не существует
+// вообще. Напоминания честно НЕ реализованы на этом проходе — вычисление
+// "просрочено" при чтении не выдаётся за push-уведомление, которого нет.
+// ───────────────────────────────────────────────────────────
+
+enum CommitmentOwner {
+  USER // обязательство самого пользователя перед фигурантом
+  FIGURANT // обязательство фигуранта перед пользователем
+}
+
+enum CommitmentStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+model Commitment {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  owner       CommitmentOwner
+  description String
+  dueDate     DateTime?
+  status      CommitmentStatus @default(IN_PROGRESS)
+  completedAt DateTime?
+
+  extractedFromConversationId String?
+  extractedFromConversation   Conversation?      @relation(fields: [extractedFromConversationId], references: [id], onDelete: SetNull)
+  extractedFromSegmentId      String?
+  extractedFromSegment        TranscriptSegment? @relation(fields: [extractedFromSegmentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([personId, status])
+  @@map("commitments")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 16: Missing Information (§3.51 ТЗ) — третья из 11 фич MVP v2.
+//
+// Форма данных почти буквально повторяет ConversationAgenda
+// (String[] + projectId + generatedByInferenceId) — ВТОРОЙ похожий
+// случай подряд после прецедента унификации из Пункта 8
+// (LocationPermission/ConversationSignal/EvaluationRun, объединены
+// после ТРЕТЬЕГО повтора). Здесь — только второй раз, и семантически
+// разные артефакты в разных местах UI (повестка для БУДУЩЕГО
+// разговора vs. список неизвестных, блокирующих текущий анализ) —
+// осознанно НЕ унифицировано в общую модель. Если появится третий
+// похожий случай — тогда обоснованно вернуться к вопросу об общей
+// generic-модели, не раньше.
+//
+// Снимок, не мутируемый список: повторная детекция создаёт НОВУЮ
+// запись, не отмечает старые вопросы "устаревшими" — тот же принцип,
+// что уже применён к ConversationAgenda (новая повестка = новая
+// запись, не апдейт старой).
+// ───────────────────────────────────────────────────────────
+
+model MissingInformationCheck {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  questions String[] // уточняющие вопросы — тот же паттерн простого списка, что DecisionObjective.constraints/ConversationAgenda.items
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("missing_information_checks")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 19: Best Next Move (§3.54 ТЗ) — шестая из 11 фич MVP v2.
+//
+// НЕ такая же форма данных, как ConversationAgenda/MissingInformationCheck
+// (String[] снимок) — здесь 4 РАЗНЫХ именованных текстовых поля
+// (лучшее действие / альтернатива / чего избегать / почему), не список
+// однородных пунктов. Отдельная модель оправдана структурой данных, не
+// только тем, что "похожая идея" — тот же принцип, что уже
+// сформулирован при решении НЕ унифицировать MissingInformationCheck с
+// ConversationAgenda (Пункт 16): форма данных решает, не тема фичи.
+//
+// "После постфактум-разбора (раздел 2)" — привязано к конкретному
+// Conversation (не к Project целиком, в отличие от ConversationAgenda/
+// MissingInformationCheck) — рекомендация имеет смысл именно в
+// контексте того, что произошло в ЭТОМ разговоре, требует TRANSCRIBED
+// как и Turning Points/Do Not Say.
+//
+// Снимок, не мутируемый: повторная детекция создаёт НОВУЮ запись, тот
+// же принцип, что уже применён к MissingInformationCheck/ConversationAgenda.
+//
+// Пункт 20 (§3.55 ТЗ, "Объяснение почему не") добавил whyNotAlternative
+// и whatCouldChange — НЕ новая параллельная модель. §3.55 буквально
+// расширяет ту же структуру, что уже здесь: "рекомендовано: X" =
+// bestAction, "почему X" = why (оба уже были), "почему не Y" — НЕ то
+// же самое, что просто alternative (та поле лишь называет альтернативу,
+// не объясняет отказ от неё) — whyNotAlternative добавлен как отдельное
+// поле, alternative не переиспользован под двойной смысл. "Что могло
+// бы изменить рекомендацию" — whatCouldChange, вообще нового смысла
+// не было ни у одного существующего поля.
+// ───────────────────────────────────────────────────────────
+
+model BestNextMoveRecommendation {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  bestAction  String
+  alternative String
+  avoid       String
+  why         String
+
+  // Пункт 20 (§3.55 ТЗ) — см. комментарий выше блока модели.
+  whyNotAlternative String?
+  whatCouldChange   String?
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId])
+  @@map("best_next_move_recommendations")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 21: Source Conflict Resolver (§3.56 ТЗ) — восьмая из 11 фич
+// MVP v2. "Логичное продолжение принципа обязательного источника
+// (3.10)" — но НЕ переиспользует существующий FactStatus.DISPUTED
+// напрямую: тот помечает ОДИН факт как оспоренный (уже использовалось
+// в Evidence Gap, Пункт 17, категория CONTRADICTORY), но не называет,
+// С КАКИМ ИМЕННО другим фактом он конфликтует, не даёт возможных
+// объяснений расхождения и не формулирует уточняющий вопрос — три
+// вещи, которых явно требует §3.56 и которых в FactStatus нет
+// физически (это просто enum-статус одной записи, не связь между
+// двумя). Новая модель здесь оправдана тем же критерием, что уже
+// применялся: форма данных (связь МЕЖДУ двумя записями + два новых
+// текстовых поля) не выводится из существующих полей одной записи.
+//
+// factA/factB — два конкретных PersonFact, между которыми AI нашёл
+// конфликт. Не самореференсная связь "все факты одного Person" —
+// именно ПАРА, потому что конфликт — это отношение между двумя
+// конкретными утверждениями, не свойство фигуранта в целом.
+//
+// possibleExplanations — String[] (не одна строка): ТЗ говорит
+// "возможные объяснения" во множественном числе, тот же паттерн
+// простого списка, что уже применялся к DecisionObjective.constraints/
+// MissingInformationCheck.questions.
+// ───────────────────────────────────────────────────────────
+
+model SourceConflict {
+  id       String @id @default(cuid())
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  factAId String
+  factA   PersonFact @relation("SourceConflictFactA", fields: [factAId], references: [id], onDelete: Cascade)
+  factBId String
+  factB   PersonFact @relation("SourceConflictFactB", fields: [factBId], references: [id], onDelete: Cascade)
+
+  conflictDescription  String
+  possibleExplanations String[]
+  clarifyingQuestion   String
+
+  // §3.56 ТЗ: "система не выбирает истину автоматически" — явно нет
+  // поля вроде resolvedFactId/winningFact. Единственное, что
+  // допустимо, — пользователь может отметить конфликт закрытым в
+  // своём понимании (resolvedAt), не то же самое, что "AI решил, кто
+  // прав" — резолюция остаётся действием пользователя, не системы.
+  resolvedAt DateTime?
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([personId])
+  @@map("source_conflicts")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 23: Argument Lifecycle — реальное завершение (§3.58 ТЗ),
+// десятая из 11 фич MVP v2.
+//
+// НАЙДЕННЫЙ ПРОБЕЛ ПЕРЕД НАЧАЛОМ РЕАЛИЗАЦИИ: Argument.lifecycleStatus
+// (enum ArgumentLifecycleStatus) существовал с чекпоинта 1 — но НИ
+// ОДИН сервис/контроллер не давал возможности его ИЗМЕНИТЬ. Поле
+// молча стояло на дефолтном DRAFT навсегда — данные были, самой фичи
+// не было. Проверено grep'ом по всему apps/api/src на "lifecycleStatus"
+// вне schema.prisma — ноль совпадений до этого чекпоинта.
+//
+// "Позволяет системе делать выводы вида «этот аргумент уже трижды не
+// сработал»" — ЭТО НЕВОЗМОЖНО получить из одного enum-поля с текущим
+// статусом. Одно поле хранит только ПОСЛЕДНЕЕ состояние — не сколько
+// раз аргумент проходил через REJECTED/COUNTERED. Нужна ИСТОРИЯ
+// переходов, не только текущий снимок — отсюда новая модель
+// ArgumentLifecycleEvent (append-only лог), Argument.lifecycleStatus
+// остаётся как есть (текущий статус, для быстрого фильтра/сортировки
+// без join'а на историю), но перестаёт быть единственным источником
+// правды о прошлом.
+// ───────────────────────────────────────────────────────────
+
+model ArgumentLifecycleEvent {
+  id         String @id @default(cuid())
+  argumentId String
+  argument   Argument @relation(fields: [argumentId], references: [id], onDelete: Cascade)
+
+  fromStatus ArgumentLifecycleStatus?
+  toStatus   ArgumentLifecycleStatus
+
+  // Опционально — в каком разговоре произошёл этот переход (аргумент
+  // "использован" или "отвергнут" именно в контексте конкретной
+  // беседы) — не обязательно для чисто ручных переходов
+  // (draft→tested пользователь может отметить сам, без привязки к
+  // записи разговора).
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  note String?
+
+  createdAt DateTime @default(now())
+
+  @@index([argumentId])
+  @@map("argument_lifecycle_events")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 25: Prediction vs Reality (§3.60 ТЗ) — вне изначально
+// запрошенного списка 11 фич (§3.49-3.59), но следующая по номеру в
+// том же разделе 3 ТЗ.
+//
+// "Расширяющий калибровку решений (3.2)" — §3.2 (Decision Track
+// Record: сравнение предсказанного веса аргументов с фактическим
+// исходом РАЗНЫХ решений НАКОПИТЕЛЬНО во времени, вывод паттернов
+// когнитивных искажений вида "ты постоянно переоцениваешь риски в
+// карьерных решениях") в этом проекте НЕ начата вообще ни в каком
+// виде — ни модели, ни сервиса. Строить §3.60 как полноценное
+// расширение поверх несуществующего §3.2 означало бы сначала
+// реализовать целиком другую, более крупную фичу, которую никто не
+// запрашивал в рамках этого чекпоинта.
+//
+// Вместо этого — построено МИНИМАЛЬНОЕ ядро, буквально то, что просит
+// сама структура §3.60 ("прогноз → фактический результат → в чём
+// разница → какой вывод сделать") для ОДНОГО конкретного прогноза, по
+// одному Project — без агрегированной статистики точности по многим
+// решениям сразу ("не просто число точности" — сама формулировка ТЗ
+// прямо исключает агрегатный счётчик из объёма ЭТОГО экрана, он
+// принадлежит базовому слою §3.2, которого нет).
+//
+// Двухфазная модель: prediction создаётся с predictedOutcome сразу
+// (до того, как известен исход), actualOutcome/difference/lesson —
+// все три nullable, заполняются ПОЗЖЕ отдельным вызовом
+// recordActualOutcome(), когда исход действительно стал известен —
+// то же дизайн-решение, что временной разрыв между "туз в рукаве"
+// (Пункт 12) и его использованием: не всё в модели заполняется в
+// момент создания записи.
+// ───────────────────────────────────────────────────────────
+
+model Prediction {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  predictedOutcome String
+  predictedAt      DateTime @default(now())
+
+  actualOutcome           String?
+  actualOutcomeRecordedAt DateTime?
+  difference              String? // "в чём разница" — AI-вывод, заполняется вместе с actualOutcome
+  lesson                  String? // "какой вывод сделать" — AI-вывод, заполняется вместе с actualOutcome
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("predictions")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 38: Archetype Perspective Simulation (§3.11 ТЗ) — третья и
+// последняя из фич MVP v3, отобранных как готовые СЕЙЧАС без новой
+// инфраструктуры (по итогам явного анализа "стоит ли выполнять MVP v3
+// сейчас"). См. также Пункты 36-37 (Manipulation Detector,
+// Discrepancy Analysis) — тот же заход.
+//
+// ЧЕСТНО ОГРАНИЧЕННЫЙ ОБЪЁМ — §3.11 ТЗ описывает ДВЕ ветки: "глазами
+// реальных фигурантов" (с учётом наблюдаемого коммуникационного
+// профиля, Person.communicationProfile) и "глазами архетипов
+// стороннего наблюдателя" (фиксированная библиотека ролей). Реализована
+// ТОЛЬКО вторая ветка — первая требует Person.communicationProfile,
+// которого в схеме НЕТ (это отдельный, ещё больший v3-пункт — §3.11
+// того же раздела ТЗ описывает его как "наблюдаемые, а не
+// предполагаемые признаки" с собственной evidence-моделью, не строится
+// походя внутри этого пункта). Архетипы не привязаны к конкретному
+// Person вообще — это внешние роли-наблюдатели ("не участвующие в
+// ситуации напрямую"), не фигуранты проекта.
+//
+// АРХИТЕКТУРНОЕ РЕШЕНИЕ: enum с фиксированным списком архетипов из
+// самого текста ТЗ (полицейский/юрист/бабушка у подъезда/финансовый
+// аналитик/психолог/ребёнок/ревнивая жена/скандалист) + CUSTOM с
+// текстовым описанием — ТЗ явно требует "возможность создать свой
+// кастомный профиль-наблюдателя".
+// ───────────────────────────────────────────────────────────
+
+enum ArchetypeType {
+  POLICE_OFFICER
+  LAWYER
+  NEIGHBORHOOD_GRANDMOTHER
+  FINANCIAL_ANALYST
+  PSYCHOLOGIST
+  CHILD
+  JEALOUS_SPOUSE
+  TROUBLEMAKER
+  CUSTOM
+  // Пункт 46: закрывает вторую ветку §3.11 ТЗ ("глазами реальных
+  // фигурантов"), честно отложенную в Пункте 38. Не архетип-роль, а
+  // симуляция взгляда КОНКРЕТНОГО добавленного в проект человека —
+  // targetPersonId обязателен только для этого значения (тот же
+  // принцип валидации, что уже применён к CUSTOM+customArchetypeDescription).
+  REAL_PERSON
+}
+
+model ArchetypePerspective {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  archetypeType              ArchetypeType
+  customArchetypeDescription String? // осмысленно только для CUSTOM — валидируется в service-слое, не схемой
+
+  // Пункт 46: осмысленно только для REAL_PERSON — та же валидационная
+  // развилка, что уже решена для CUSTOM/customArchetypeDescription,
+  // не превращается в CHECK-constraint на уровне БД.
+  targetPersonId String?
+  targetPerson   Person? @relation(fields: [targetPersonId], references: [id], onDelete: SetNull)
+
+  // Пункт 54 (§3.17 ТЗ) — "тот же механизм... но развёрнутый на 180°":
+  // false (по умолчанию) = обычная перспектива на СИТУАЦИЮ (Пункт 38/46);
+  // true = критика СОБСТВЕННОЙ ПОЗИЦИИ пользователя с этой точки
+  // зрения — "показывает слабые места собственной аргументации так,
+  // как их увидит оппонент". Тот же принцип расширения существующей
+  // модели полем-режимом, что уже применялся к ArchetypeType.REAL_PERSON
+  // и Argument.targetPersonId — не заведена параллельная модель ради
+  // другого фокуса того же по сути механизма.
+  focusOnOwnPositionWeaknesses Boolean @default(false)
+
+  // "Короткая реакция/вопрос/предупреждение с этой точки зрения, не
+  // 'правильный ответ'" (§3.11 ТЗ) — одно текстовое поле, не
+  // структура из нескольких полей, как у Steelman/Best Next Move: сама
+  // спецификация описывает результат как одну связную реакцию, не
+  // набор именованных граней.
+  reaction String
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("archetype_perspectives")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 39: Person Communication Profile (§3.11 ТЗ текст, роадмап-
+// пункт 24 v3 "Наблюдаемый коммуникационный профиль фигурантов") —
+// закрывает пробел, честно зафиксированный в Пункте 38: "глазами
+// реальных фигурантов" (вторая ветка §3.11) требовала этого поля,
+// которого не было — теперь есть.
+//
+// PERSON_GLOBAL, НЕ project-scoped — Person сам по себе глобальная
+// сущность (createdByUserId напрямую, не через проект, см. модель
+// выше), коммуникационный профиль описывает РЕАЛЬНОГО человека, не
+// его роль в одном конкретном проекте — тот же принцип, что уже
+// применялся к FactScope.PERSON_GLOBAL у PersonFact.
+//
+// НАКОПИТЕЛЬНОЕ ОБНОВЛЕНИЕ, не append-only лог — @@unique([personId,
+// traitType]) заставляет upsert на уровне БД, не на честном слове
+// сервисного кода: "уверенность и дата ПОСЛЕДНЕГО наблюдения" (§3.11
+// ТЗ) означает один эволюционирующий текущий признак на тип, не
+// историю всех прошлых наблюдений. Обновление вычисляется заново по
+// ВСЕЙ доступной истории при каждом refresh() (не diff-мерж дельты
+// новых данных с предыдущим значением — сложнее реализовать надёжно,
+// ТЗ этого явно не требует), но СОХРАНЕНИЕ накопительное — upsert, не
+// дублирующая запись при каждом обновлении.
+// ───────────────────────────────────────────────────────────
+
+enum CommunicationTraitType {
+  PREFERS_WRITTEN_COMMUNICATION
+  PREFERS_DIRECTNESS
+  NEEDS_TIME_TO_DECIDE
+  RESPONDS_TO_DATA
+  CONFLICT_AVOIDANCE
+  DECISION_MAKING_STYLE
+}
+
+model PersonCommunicationTrait {
+  id       String @id @default(cuid())
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  traitType CommunicationTraitType
+
+  // Текстовое описание НАБЛЮДЕНИЯ, не просто true/false — "нужно время
+  // на решение" осмысленно только с нюансом ("не соглашается сразу,
+  // просит день подумать"), не булевым флагом.
+  value String
+
+  confidence Float?
+
+  // "Ссылка на наблюдение (observedFrom, конкретный разговор/факт)"
+  // (§3.11 ТЗ) — текстовое описание источника, не структурная FK-
+  // ссылка: та же архитектурная развилка, что уже решена в Пункте 37
+  // (Discrepancy Analysis) тем же способом — нет прямой связи на
+  // произвольный TranscriptSegment из ЛЮБОГО из потенциально многих
+  // проанализированных разговоров, источник описывается текстом.
+  observedFrom   String
+  lastObservedAt DateTime
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([personId, traitType])
+  @@index([personId])
+  @@map("person_communication_traits")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 43: Relationship (§3.13 ТЗ) — первый слой графа связей
+// между фигурантами, разбор выполнимости пунктов 20/23 v3-роадмапа
+// ("карта круга лиц" §3.8, "прогноз по сценариям" §3.12). Схема
+// взята буквально из текста ТЗ, не спроектирована заново:
+// "Relationship(personA, personB, type: family|hierarchy|social,
+// direction, strength) — переиспользует сущность Person... не
+// дублирует данные".
+//
+// PERSON_GLOBAL, не project-scoped — тот же принцип, что уже
+// применялся к PersonCommunicationTrait (Пункт 39): связь "муж/жена"
+// или "начальник/подчинённый" — свойство самих людей, не одного
+// конкретного проекта.
+//
+// ЧЕСТНО ОГРАНИЧЕННЫЙ ОБЪЁМ ЭТОГО ПРОХОДА ("первый слой", по прямому
+// решению) — только БЕЗОПАСНЫЕ источники данных: (1) ручной ввод
+// пользователем, (2) подсказка по совместному участию в одном
+// разговоре (чистый детерминированный DB-запрос, НЕ AI-вызов — два
+// Person были участниками одной диаризованной записи, это факт, не
+// догадка). Извлечение связей из ТЕКСТА реплик ("мой брат сказал...")
+// сознательно НЕ реализовано здесь — риск неверного сопоставления
+// упомянутого имени с существующим Person (fuzzy matching) заслуживает
+// отдельного, более осторожного прохода, не одного захода с безопасной
+// частью.
+//
+// "direction" — не текстовое имя роли само по себе (это label),
+// а с чьей стороны она применяется: A_TO_B (label описывает A
+// относительно B, например "начальник" — A начальник для B),
+// B_TO_A (обратное), MUTUAL (симметрично — "братья", "коллеги").
+// ───────────────────────────────────────────────────────────
+
+enum RelationshipType {
+  FAMILY
+  HIERARCHY
+  SOCIAL
+}
+
+enum RelationshipDirection {
+  A_TO_B
+  B_TO_A
+  MUTUAL
+}
+
+model Relationship {
+  id String @id @default(cuid())
+
+  personAId String
+  personA   Person @relation("RelationshipsAsPersonA", fields: [personAId], references: [id], onDelete: Cascade)
+  personBId String
+  personB   Person @relation("RelationshipsAsPersonB", fields: [personBId], references: [id], onDelete: Cascade)
+
+  type      RelationshipType
+  label     String // конкретика: "муж", "непосредственный руководитель", "имеет неформальное влияние" — type=широкая категория, label=суть
+  direction RelationshipDirection
+  strength  Float? // 0..1, необязательно — не всегда есть основание оценивать силу связи числом
+
+  // §3.10 ТЗ тегирование источника — переиспользован FactSourceType
+  // (тот же 3-значный набор, что PersonFact): ручной ввод почти всегда
+  // PERSONAL_RECORD (пользователь лично знает эту связь) или
+  // USER_GUESS (предполагает, не уверен). PUBLIC_FACT — если связь
+  // подтверждена официальным документом/реестром. AI-происхождения
+  // (🟡) здесь пока не бывает — "первый слой" не включает AI-извлечение.
+  sourceType FactSourceType
+
+  createdByUserId String
+
+  createdAt DateTime @default(now())
+
+  @@index([personAId])
+  @@index([personBId])
+  @@map("relationships")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 45: BehaviorPrecedent (§3.9 ТЗ) — реализует ПОЛОВИНУ пункта
+// 21 v3-роадмапа ("поиск прецедентов поведения фигуранта — публичные
+// источники + личные записи"). Вторая половина (публичные источники —
+// интервью, новости, судебные решения) СОЗНАТЕЛЬНО НЕ РЕАЛИЗОВАНА —
+// это ровно тот автономный поиск информации о конкретном частном
+// человеке, от которого явно отказались раньше в этом заходе (см.
+// диалог перед Пунктом 40): технология поиска сама по себе нейтральна,
+// но направление запроса ("найди, что говорил и делал этот конкретный
+// человек, с которым у пользователя личный конфликт") — базовый
+// механизм инструмента слежки вне зависимости от упаковки. Отказ не
+// пересмотрен — реализована только честная, безопасная половина.
+//
+// "ИЗ ЛИЧНЫХ ЗАПИСЕЙ ПОЛЬЗОВАТЕЛЯ" — прошлые разговоры (транскрипты,
+// та же кросс-разговорная агрегация по personId, что уже построена в
+// Пунктах 37/39) + PersonFact. "Фото переписок/документов" из текста
+// ТЗ — НЕ реализовано: в проекте нет OCR/анализа изображений вообще,
+// эта часть требует инфраструктуры, которой не существует (честное
+// ограничение, не молчаливый пропуск).
+//
+// PERSON_GLOBAL — precedent описывает реального человека, не привязан
+// к одному конкретному проекту в хранении (тот же принцип, что уже
+// применялся к PersonCommunicationTrait/Relationship), хотя каждый
+// конкретный поиск запускается в контексте конкретной ситуации/проекта.
+// ───────────────────────────────────────────────────────────
+
+enum PrecedentSimilarity {
+  ANALOGOUS // аналогичный кейс
+  PARTIALLY_SIMILAR // частично похожий
+  CONTRASTING // контрастный пример — поступил иначе
+}
+
+model BehaviorPrecedent {
+  id       String @id @default(cuid())
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  // Ситуация, для которой искали прецедент — то, ЧТО спрашивали, не
+  // то, что нашли. Нужно, чтобы позже понять контекст найденного
+  // прецедента без повторного обращения к проекту.
+  situationDescription String
+
+  precedentDescription String // что конкретно произошло/было сказано в прошлом
+  similarity           PrecedentSimilarity
+  sourceDescription     String // "разговор от 12.03.2026" / "факт: ..." — текстовый провенанс, тот же паттерн, что sourceDescription у Discrepancy Analysis
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([personId])
+  @@map("behavior_precedents")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 47: OutcomeScenario (§3.12 ТЗ) — доводит пункт 23 v3-роадмапа
+// до конца, последний из группы 20-23. Собирает воедино ВСЁ, что уже
+// построено в этом заходе: аргументы (v1), роли стейкхолдеров (Пункт
+// 44), связи (Пункт 43), прецеденты (Пункт 45), защищённые заметки
+// (Пункт 28) — ни одного нового источника данных, только синтез уже
+// накопленного в прогноз.
+//
+// ЧЕТЫРЕ ТИПА СЦЕНАРИЕВ — буквально из текста ТЗ: "пустить на
+// самотёк" (базовый), "если цель фигуранта — навредить" (пессимистичная
+// гипотеза), "если цель фигуранта — помочь" (оптимистичная), и
+// пользовательские линии поведения (свободный текст пользователя).
+//
+// "ГРУБАЯ ОЦЕНКА ВЕРОЯТНОСТИ, А НЕ ЛОЖНАЯ ТОЧНОСТЬ" — ScenarioConfidence
+// это LOW/MEDIUM/HIGH, не число с плавающей точкой (не "73% вероятность"
+// — обманчивая точность, которой AI не может обладать).
+//
+// СВЯЗКА С "ТУЗОМ В РУКАВЕ"/"ПЛАНОМ Б" — protectedNoteHint текстом
+// (не строгая FK-ссылка на конкретную ProtectedNote) — тот же принцип,
+// что sourceDescription у Discrepancy Analysis: AI даёт текстовую
+// рекомендацию, не выбирает конкретную запись по ID (риск неверного
+// сопоставления, тот же класс решения, что уже применялся несколько
+// раз в этом заходе).
+// ───────────────────────────────────────────────────────────
+
+enum ScenarioType {
+  DO_NOTHING
+  ASSUME_HARM
+  ASSUME_HELP
+  USER_DEFINED
+}
+
+enum ScenarioConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model OutcomeScenario {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  scenarioType    ScenarioType
+  userDescription String? // осмысленно только для USER_DEFINED — формулировка сценария от самого пользователя
+
+  outcomeDescription String // краткое описание вероятного развития событий
+  precedentBasis      String? // "опора на прецеденты фигуранта" (§3.12 ТЗ) — текстом, "в похожих случаях..."
+  protectedNoteHint   String? // "при каком сценарии стоит доставать туз, когда переходить на план Б" — текстовая рекомендация
+
+  confidence ScenarioConfidence
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("outcome_scenarios")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 48: PhotoVerification (§4.4 ТЗ) — верификация фото
+// реверс-поиском со скорингом схожести (пункт 33 v3-роадмапа).
+//
+// АРХИТЕКТУРНОЕ РЕШЕНИЕ, ПРИНЯТОЕ ЯВНО, НЕ ПО УМОЛЧАНИЮ — по итогам
+// диалога перед этим пунктом: провайдер реверс-поиска (SerpApi)
+// принимает ТОЛЬКО публичный URL изображения, не бинарную загрузку
+// напрямую. Это означает, что фото временно размещается в Vercel
+// Blob с access:'public' — не просто "эфемерно на нашем сервере"
+// (EPHEMERAL_SERVER, §4.6), а РЕАЛЬНО ПУБЛИЧНО ДОСТУПНО В ИНТЕРНЕТЕ
+// на время поиска. Это осознанно принятый риск, не просмотренный —
+// см. отдельный тип согласия PUBLIC_IMAGE_SEARCH выше, с формулировкой,
+// честно называющей именно это, не переиспользующей более мягкую
+// формулировку EPHEMERAL_SERVER. Blob удаляется сразу после
+// завершения поиска (успешного или нет) — минимизация окна публичной
+// доступности, не устранение риска целиком.
+//
+// НЕЙТРАЛЬНОЕ НАБЛЮДЕНИЕ, НЕ ВЕРДИКТ (§4.4 ТЗ, буквально) —
+// "высокий процент схожести не превращается автоматически в вывод о
+// фейке" — verificationStatus описывает только факт нахождения
+// похожих изображений, не заключение о подлинности. matchType —
+// текстовое поле, не строгий enum: SerpApi не даёт надёжной
+// структурированной классификации типа совпадения (точное/похожее) в
+// самом ответе API, честно не выдумывается классификация, которой
+// провайдер не предоставляет.
+// ───────────────────────────────────────────────────────────
+
+enum PhotoVerificationStatus {
+  NO_SIMILAR_IMAGES_FOUND
+  SIMILAR_IMAGES_FOUND
+}
+
+model PhotoVerification {
+  id           String     @id @default(cuid())
+  personFactId String
+  personFact   PersonFact @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+
+  verificationStatus PhotoVerificationStatus
+
+  // Осмысленны только при verificationStatus=SIMILAR_IMAGES_FOUND —
+  // валидируется в service-слое, тот же принцип, что уже применялся
+  // несколько раз в этом заходе (CUSTOM/customArchetypeDescription и т.д.).
+  similarity        Float? // 0..1, если провайдер дал числовой score
+  sourceUrl         String?
+  sourceDate        DateTime?
+  matchType         String? // текстом, см. обоснование выше
+  contextDifference String? // нейтральное наблюдение о разнице контекста — не вывод о подлинности
+
+  createdByUserId String // для rate-limiting, не только для владения через personFact
+
+  createdAt DateTime @default(now())
+
+  @@index([personFactId])
+  @@index([createdByUserId, createdAt])
+  @@map("photo_verifications")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 50: ScheduledConversation (§3.20 ТЗ) — планировщик разговоров
+// и напоминания (пункт 30 v3-роадмапа), по прямому запросу.
+//
+// ЧЕСТНАЯ ГРАНИЦА ЭТОГО ПРОХОДА (см. диалог перед этим пунктом):
+// (1) модель данных для расписания, (2) SQL-миграция pg_cron+pg_net,
+// (3) клиент Telegram sendMessage — реализованы полностью. Реальная
+// НАСТРОЙКА cron-джобы (расширения pg_net/pg_cron включены в вашем
+// Supabase-инстансе, реальный URL/секрет прописаны) ТРЕБУЕТ проверки
+// на вашей стороне после деплоя — не может быть верифицирована в этой
+// среде разработки (нет сети, нет доступа к живому Supabase). Файл
+// SQL-миграции содержит явную инструкцию, что нужно сделать руками.
+//
+// НЕ РАСШИРЕНИЕ Conversation — разговор ЕЩЁ НЕ СОСТОЯЛСЯ, у него нет
+// записи/транскрипта, весь жизненный цикл ConversationProcessingStatus
+// (UPLOADED→TRANSCRIBED→ANALYZED) не имеет смысла для запланированного,
+// но ещё не прошедшего события. linkedConversationId — необязательная
+// связь, проставляется ПОЗЖЕ, когда разговор реально состоялся и для
+// него создана обычная Conversation-запись (§3.20 ТЗ: "разговоры
+// кликабельны — ведут в соответствующий проект/досье").
+//
+// БЕЗ МЕСТА (раздел 2 ТЗ, принцип "без геопривязки") — только дата и
+// время, буквально по тексту §3.20: "у любого запланированного
+// разговора — дата и время (без места)".
+// ───────────────────────────────────────────────────────────
+
+model ScheduledConversation {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  scheduledAt DateTime
+
+  // "Заранее (настраиваемый интервал — например, за час или день)"
+  // (§3.20 ТЗ) — минуты ДО scheduledAt. NULL = напоминание о
+  // спарринге отключено для этого события (не всем нужен).
+  sparringReminderMinutesBefore Int?
+  sparringReminderSentAt        DateTime?
+
+  // "После расчётного времени окончания разговора" (§3.20 ТЗ) —
+  // здесь используется scheduledAt как точка отсчёта (упрощение:
+  // нет отдельного поля "расчётная длительность" в этом проходе,
+  // честно не реализовано — не было запрошено).
+  postMortemReminderSentAt DateTime?
+
+  // Пункт 90 (§3.26 ТЗ) — "предварительная генерация аудио до
+  // времени спарринга". "Ключевых реплик" (buкально ТЗ) — честно
+  // ограничено ОДНОЙ ключевой репликой (открывающая реплика
+  // оппонента), не всем диалогом целиком (технически невозможно —
+  // реплики оппонента реагируют на ответы пользователя, которых ещё
+  // не произошло на момент предзаготовки). Заполняется в момент
+  // отправки напоминания о спарринге (dispatchDueReminders), не сразу
+  // при планировании — избегает генерации аудио для встреч, которые
+  // потом отменят/перенесут задолго до самого напоминания.
+  preGeneratedSparringOpenerText  String?
+  preGeneratedSparringOpenerAudio String?
+
+  // Пункт 65: рекомендации заведений для этой встречи
+  venueRecommendations VenueRecommendation[]
+  weatherForecasts     WeatherForecast[]
+
+  // Проставляется явно позже, не автоматически по времени — та же
+  // причина, по которой statusConfirmedByUser существует у
+  // ProjectPerson: сопоставление "какой реальный разговор соответствует
+  // этому плану" может быть неочевидным (например, разговор перенесли),
+  // не должно угадываться системой.
+  linkedConversationId String?       @unique
+  linkedConversation   Conversation? @relation(fields: [linkedConversationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@index([scheduledAt])
+  @@map("scheduled_conversations")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 52: DecisionOutcome (§3.2 ТЗ) — калибровка решений во времени
+// (Decision Track Record), пункт 35 v3-роадмапа. Фундамент, на который
+// уже ссылаются построенные ранее фичи (Argument Lifecycle, Prediction
+// vs Reality), сам при этом не был построен.
+//
+// ЧЕСТНОЕ АРХИТЕКТУРНОЕ РЕШЕНИЕ — "показывает пользователю его личные
+// когнитивные искажения" (буквально из ТЗ) реализовано КАК РЕАЛЬНАЯ,
+// ВЫЧИСЛЕННАЯ СТАТИСТИКА (прогноз vs фактический исход, по категориям),
+// НЕ как AI-догадка о психологии человека. Constitution прямо
+// предостерегает от заявлений о психическом состоянии человека —
+// "ты постоянно переоцениваешь риски" как утверждение AI о черте
+// личности пользователя было бы именно такой заявкой. Вместо этого:
+// система показывает ФАКТ ("в категории X прогноз совпал с исходом в
+// N из M случаев"), пользователь сам делает вывод о своих паттернах,
+// не система за него. Тот же принцип, что уже применялся к
+// BehaviorPrecedent.conclusion (Пункт 45) — реальный подсчёт, не
+// придуманная интерпретация.
+//
+// predictedLean ФИКСИРУЕТСЯ в момент записи исхода, не пересчитывается
+// задним числом — сравнение с уже изменившимся с тех пор набором
+// аргументов исказило бы саму суть калибровки (сравниваем с тем, что
+// пользователь думал ТОГДА, не с тем, что думает сейчас).
+// ───────────────────────────────────────────────────────────
+
+enum DecisionOutcomeRating {
+  WENT_WELL
+  WENT_POORLY
+  MIXED
+  TOO_EARLY_TO_TELL
+}
+
+model DecisionOutcome {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Сумма weight аргументов PRO минус сумма weight аргументов CON на
+  // момент фиксации исхода (только project-level, targetPersonId=null
+  // — тот же фильтр, что уже применялся в OutcomeForecastingService,
+  // Пункт 47: адресные аргументы под конкретного стейкхолдера не
+  // отражают собственное взвешивание решения пользователем).
+  // NULL — если ни один аргумент не был явно взвешен, сравнение
+  // невозможно, но исход всё равно можно зафиксировать для истории.
+  predictedLean Float?
+
+  actualOutcome DecisionOutcomeRating
+  outcomeNotes  String?
+
+  // Свободный текст, не жёсткий enum — та же гибкость, что у
+  // User.religion: пользователь сам формулирует категорию
+  // ("карьера", "переезд"), не выбирает из заранее заданного списка.
+  category String?
+
+  recordedAt DateTime @default(now())
+
+  @@map("decision_outcomes")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 55: SparringSession/SparringMessage (§3.1 ТЗ) — "Режим
+// Адвокат дьявола (AI Red Team)", пункт 34 v3-роадмапа. Ключевое
+// отличие от уже построенного — МНОГОХОДОВОЙ ДИАЛОГ ("тренируется
+// отвечать на них ВНУТРИ ЧАТА/БОТА, КАК СПАРРИНГ", буквально из ТЗ),
+// не одноразовая генерация, как у Steelman (§3.43, симметричная пара)
+// или ArchetypePerspective (§3.11, одна короткая реакция).
+//
+// AI ИГРАЕТ РОЛЬ ОППОНЕНТА, НЕ ПОМОЩНИКА — тот же класс намеренно
+// состязательного контента, что уже применялся к архетипам "ревнивая
+// жена"/"скандалист" (Пункт 38): явная роль-игра для тренировки,
+// не поиск объективной истины, тот же принцип "стресс-тест, не
+// уступчивость по умолчанию".
+//
+// targetPersonId ОПЦИОНАЛЕН — если указан, используется тот же
+// контекст, что уже собирается для ArchetypePerspective.REAL_PERSON
+// (коммуникационный профиль, связи, прецеденты); если не указан —
+// общий оппонент без привязки к конкретному человеку.
+// ───────────────────────────────────────────────────────────
+
+enum SparringSessionStatus {
+  ACTIVE
+  ENDED
+}
+
+enum SparringMessageRole {
+  OPPONENT // AI, играющий оппонента пользователя
+  USER
+}
+
+model SparringSession {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  targetPersonId String?
+  targetPerson   Person? @relation(fields: [targetPersonId], references: [id], onDelete: SetNull)
+
+  // Пункт 69 (§3.26 ТЗ) — "настраиваемая линия поведения... из уже
+  // существующих в проекте архетипов (3.11)". NULL = обратная
+  // совместимость со старыми сессиями (Пункт 55) — поведение как
+  // раньше (общий оппонент либо targetPersonId напрямую).
+  // ArchetypeType.REAL_PERSON — тот же enum, что уже использует
+  // ArchetypePerspective (Пункт 38/46), не изобретён заново.
+  archetypeType               ArchetypeType?
+  customArchetypeDescription  String? // только для archetypeType=CUSTOM, та же валидация, что ArchetypePerspective
+
+  // Снапшот выбранного ElevenLabs voiceId на момент старта сессии —
+  // не пересчитывается, если маппинг архетип→голос на уровне сервиса
+  // поменяется позже (тот же принцип снапшота, что применялся к
+  // ApprovedVenue). NULL — озвучка не запрашивалась/недоступна.
+  voiceId String?
+
+  status  SparringSessionStatus @default(ACTIVE)
+  endedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  messages SparringMessage[]
+  voiceReplyJobs SparringVoiceReplyJob[]
+  compromiseSheets CompromiseSheet[]
+
+  @@index([projectId])
+  @@map("sparring_sessions")
+}
+
+model SparringMessage {
+  id        String          @id @default(cuid())
+  sessionId String
+  session   SparringSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  role SparringMessageRole
+  text String
+
+  // Пункт 90 (§3.26 ТЗ) — "реплики AI-собеседника озвучиваются
+  // голосом" (buкально ТЗ). NULL при role=USER (реплики пользователя
+  // никогда не озвучиваются нами — это его собственный голос при
+  // голосовом вводе, Пункт 69) ИЛИ при role=OPPONENT, если синтез не
+  // удался/не запрошен — честная деградация: текст реплики всегда
+  // доступен независимо от аудио, не блокирует диалог.
+  audioBase64 String?
+
+  // Только для role=OPPONENT — реплики USER не порождены AI.
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@map("sparring_messages")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 56: Public Discussion (§4.3/§4.5 ТЗ) — приватность фактов с
+// публикацией только выводов + публичное обсуждение по ссылке, пункт
+// 32 v3-роадмапа. Единственная фича за весь заход, требующая
+// ПУБЛИЧНОГО (не аутентифицированного через Telegram) доступа к части
+// API — принципиально новая поверхность, всё построенное раньше было
+// за TelegramAuthGuard.
+//
+// "УЧАСТНИКИ ПУБЛИЧНОГО ОБСУЖДЕНИЯ ВИДЯТ ТОЛЬКО ARGUMENT, ДОСТУПА К
+// PersonFact У НИХ НЕТ" (буквально §4.3 ТЗ) — публичные эндпоинты
+// НИКОГДА не возвращают PersonFact/FactSource, только question проекта
+// и уже ПРИНЯТЫЕ (accepted) публичные аргументы. Черновики/отклонённые
+// заявки тоже не видны публично — только владельцу для модерации.
+//
+// PublicShareToken — случайный, непредсказуемый токен (32 байта,
+// crypto.randomBytes, тот же встроенный модуль, что уже используется
+// в telegram-init-data.util.ts) в URL. Это не полноценная аутентификация
+// участника — знание токена = доступ к обсуждению, тот же принцип, что
+// у большинства "share link"-фич в реальных продуктах. Честное
+// ограничение — задокументировано в сервисе, не скрыто.
+//
+// PublicParticipant — ОПЦИОНАЛЬНОЕ имя, "анонимный режим участия"
+// (§4.5 ТЗ) — displayName=null. НЕ полноценная identity-система, не
+// предотвращает повторную регистрацию тем же человеком под другим
+// именем — честное ограничение, соответствующее духу "анонимного
+// обсуждения по ссылке", не банковской авторизации.
+//
+// "ГОЛОСУЮТ" — простые счётчики upvote/downvote на заявке, БЕЗ защиты
+// от повторного голосования одним участником (нет надёжной identity
+// для этого при анонимном участии) — честно задокументированное
+// ограничение, не полноценная анти-спам инфраструктура.
+//
+// МОДЕРАЦИЯ — заявка (PublicArgumentSubmission) отдельна от Argument.
+// Принятие ("владелец решает, какие... принять в основной расчёт",
+// §4.5 ТЗ) создаёт РЕАЛЬНЫЙ Argument, отклонение — просто помечает
+// статус, никогда не попадает в основной список.
+// ───────────────────────────────────────────────────────────
+
+enum PublicSubmissionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model PublicParticipant {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  displayName String? // null = анонимный участник
+
+  createdAt DateTime @default(now())
+
+  submissions PublicArgumentSubmission[]
+  comments    PublicComment[]
+
+  @@index([projectId])
+  @@map("public_participants")
+}
+
+model PublicArgumentSubmission {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  participantId String?
+  participant   PublicParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  text   String
+  stance ArgumentStance // только PRO/CON осмысленны для публичных заявок — валидируется в service-слое
+
+  status      PublicSubmissionStatus @default(PENDING)
+  moderatedAt DateTime?
+
+  upvotes   Int @default(0)
+  downvotes Int @default(0)
+
+  // Проставляется только при status=ACCEPTED
+  promotedToArgumentId String?   @unique
+  promotedToArgument   Argument? @relation(fields: [promotedToArgumentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, status])
+  @@map("public_argument_submissions")
+}
+
+model PublicComment {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  participantId String?
+  participant   PublicParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  text String
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("public_comments")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 57: Library (§3.5 ТЗ) — "Публичная библиотека разборов
+// (Argument Marketplace)", пункт 36 v3-роадмапа, логически зависел от
+// Пункта 56 (публичная поверхность API/токен-доступ уже построены,
+// переиспользуются здесь).
+//
+// SNAPSHOT, НЕ ЖИВАЯ ССЫЛКА — LibraryArgument копирует текст аргументов
+// проекта на момент отправки в библиотеку, не ссылается на реальный
+// Argument. Если пользователь позже поменяет аргументы в своём
+// проекте, опубликованная запись библиотеки не меняется молча "из-под
+// него" — то, что видят публично, стабильно с момента модерации.
+//
+// isLibraryModerator (User) — см. подробное обоснование над этим
+// полем в модели User выше: минимальный флаг, не RBAC-система,
+// не self-service.
+//
+// ГОЛОСОВАНИЕ — простые счётчики, БЕЗ защиты от повторного
+// голосования — тот же честный компромисс, что уже применялся к
+// PublicArgumentSubmission (Пункт 56): уровень доверия соответствует
+// цели фичи (SEO/социальное доказательство), не высокоставерному
+// публичному голосованию.
+// ───────────────────────────────────────────────────────────
+
+enum LibraryModerationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model LibraryEntry {
+  id String @id @default(cuid())
+
+  title    String
+  category String // свободный текст — тот же принцип, что DecisionOutcome.category (Пункт 52)
+
+  // Опционально — из какого проекта пришёл набор аргументов. Может
+  // стать null (onDelete: SetNull), если исходный проект позже удалён
+  // — сама запись библиотеки остаётся (это уже публичная, отдельная
+  // от исходника сущность, снапшот текста).
+  sourceProjectId String? @unique
+  sourceProject   Project? @relation(fields: [sourceProjectId], references: [id], onDelete: SetNull)
+
+  submittedByUserId String
+  submittedByUser   User   @relation(fields: [submittedByUserId], references: [id], onDelete: Cascade)
+
+  status      LibraryModerationStatus @default(PENDING)
+  moderatedAt DateTime?
+
+  upvotes   Int @default(0)
+  downvotes Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  arguments   LibraryArgument[]
+  experiences LibraryExperience[]
+
+  @@index([status])
+  @@index([category])
+  @@map("library_entries")
+}
+
+model LibraryArgument {
+  id             String       @id @default(cuid())
+  libraryEntryId String
+  libraryEntry   LibraryEntry @relation(fields: [libraryEntryId], references: [id], onDelete: Cascade)
+
+  text   String
+  stance ArgumentStance // только PRO/CON осмысленны — валидируется в service-слое, тот же принцип, что у PublicArgumentSubmission
+
+  @@index([libraryEntryId])
+  @@map("library_arguments")
+}
+
+model LibraryExperience {
+  id             String       @id @default(cuid())
+  libraryEntryId String
+  libraryEntry   LibraryEntry @relation(fields: [libraryEntryId], references: [id], onDelete: Cascade)
+
+  text              String
+  authorDisplayName String? // null = анонимно — тот же принцип, что PublicParticipant.displayName (Пункт 56)
+
+  createdAt DateTime @default(now())
+
+  @@index([libraryEntryId])
+  @@map("library_experiences")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 59: MotiveHypothesis (§3.18 ТЗ) — "Имущественное положение и
+// возможные интерпретации мотивов фигурантов", пункт 28 v3-роадмапа.
+// По прямому запросу, ПОСЛЕ явного обсуждения объёма — реализована
+// ТОЛЬКО честная половина, публичный поиск сознательно отклонён.
+//
+// СОЗНАТЕЛЬНО НЕ РЕАЛИЗОВАНО: "имущественное положение по публичным
+// источникам" (реестры недвижимости, е-декларации, судебные реестры) —
+// тот же автономный поиск по конкретному частному человеку, от
+// которого явно отказались для §3.9 (диалог перед Пунктом 40,
+// подтверждено повторно перед Пунктом 45). Позиция не пересмотрена.
+//
+// РЕАЛИЗОВАНО: генерация гипотез о вероятных мотивах поверх УЖЕ
+// НАКОПЛЕННЫХ личных данных (PersonFact — включая то, что пользователь
+// мог вручную знать об имущественном положении и внести как факт,
+// BehaviorPrecedent, коммуникационный профиль, связи) — ни одного
+// нового источника данных, тот же принцип "синтез уже построенного",
+// что уже применялся в OutcomeForecastingService (Пункт 47).
+//
+// "СПИСОК АЛЬТЕРНАТИВНЫХ ГИПОТЕЗ, НЕ ЕДИНСТВЕННЫЙ inferredGoal"
+// (буквально §3.18 ТЗ, "изменено по итогам финального аудита — даже
+// при 100% публичных источниках вывод о цели реального человека
+// является profiling, а не фактом") — одна запись = одна гипотеза,
+// не одно поле на всю сущность Person.
+// ───────────────────────────────────────────────────────────
+
+enum MotiveConfidenceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model MotiveHypothesis {
+  id        String  @id @default(cuid())
+  personId  String
+  person    Person  @relation(fields: [personId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // "Возможное объяснение", НИКОГДА не "его мотив"/"его цель" как
+  // утверждение — формулировка проверяется в промпте, не только в UI.
+  explanation             String
+  supportingFactsSummary  String // ссылка на конкретные факты, на основании которых строится гипотеза
+  confidence              MotiveConfidenceLevel
+
+  // "Совпадение/конфликт целей с пользователем" — сопоставление с
+  // уже существующим DecisionObjective, не отдельный новый ввод.
+  alignmentWithUserGoal String?
+
+  // "Варианты компромисса" — та же логика, что аргументы для
+  // примирения (Пункт 49), другой промпт-фокус, не новая механика.
+  compromiseSuggestion String?
+
+  // Пункт 74 (§3.38 ТЗ) — "детектор конфликта целей (3.18)" — buкально
+  // ТЗ. Явный булев флаг, который AI проставляет отдельно от
+  // свободного текста alignmentWithUserGoal — структурное решение,
+  // не парсинг текста для определения "есть ли конфликт". Само по
+  // себе НЕ переключает ProjectPerson.status — "автоматическое
+  // молчаливое переключение статуса признано опасным" (buкально ТЗ),
+  // только предлагает, TMA показывает предложение, статус меняется
+  // ТОЛЬКО explicit-подтверждением через уже существующий
+  // PersonsService.updateStatus(trigger=CONFLICT_DETECTOR_SUGGESTED).
+  suggestsFigurantStatus Boolean @default(false)
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdByUserId String // для rate-limiting — тот же паттерн, что PhotoVerification (Пункт 48)
+
+  createdAt DateTime @default(now())
+
+  @@index([personId, projectId])
+  @@index([createdByUserId, createdAt])
+  @@map("motive_hypotheses")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 60: WorkingMaterial/MaterialVersion (§3.27 ТЗ) — "Материалы
+// для спарринга: критика и итеративная доработка", v4-роадмап (пункт
+// 46 общего списка), реализован в честно суженном объёме после
+// обсуждения с пользователем.
+//
+// ДВА ОСОЗНАННО НЕ РЕАЛИЗОВАННЫХ ФРАГМЕНТА §3.27, НЕ СКРЫТЫХ:
+// (1) критика фото/графиков — та же архитектурная развилка, что у
+// реверс-поиска (Пункт 48), но здесь строже: ТЗ прямо требует, чтобы
+// первоисточник (включая фото) никогда не покидал устройство, а
+// содержательная критика ИЗОБРАЖЕНИЯ без его передачи AI технически
+// нереализуема без модели компьютерного зрения на клиенте, которой
+// нет — не тот же случай, что реверс-поиск, где "принять риск"
+// решало проблему, здесь этот путь противоречил бы буквальному
+// требованию ТЗ, не просто более мягкой версии того же компромисса;
+// (2) голосовой режим — §3.27 явно ссылается на §3.26 ("AI-собеседник
+// для спарринга с озвучкой"), которого самого ещё нет (построен
+// только текстовый спарринг, Пункт 55, без ElevenLabs/озвучки).
+//
+// РЕАЛИЗОВАНО: .md-файлы и PPTX — "первоисточники на сервер не
+// передаются" (буквально ТЗ) соблюдено буквально: extractedText —
+// это уже ИЗВЛЕЧЁННЫЙ НА КЛИЕНТЕ текст (см. apps/tma/src/lib/
+// material-extract.ts), не файл и не его бинарное содержимое,
+// сервер никогда не видит исходный .md/.pptx.
+//
+// "ЛОГ ИТЕРАЦИЙ" — MaterialVersion, не перезаписываемое поле на
+// WorkingMaterial: каждая версия — отдельная запись с собственными
+// extractedText/critique/editPrompt, история не теряется.
+// ───────────────────────────────────────────────────────────
+
+model WorkingMaterial {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title String // пользовательское название, например "ТЗ для инвестора"
+
+  createdAt DateTime @default(now())
+
+  versions MaterialVersion[]
+  // Пункт 91: голосовой чат для уточнения промпта (§3.27 ТЗ)
+  chatSessions MaterialChatSession[]
+
+  @@index([projectId])
+  @@map("working_materials")
+}
+
+model MaterialVersion {
+  id                String          @id @default(cuid())
+  workingMaterialId String
+  workingMaterial   WorkingMaterial @relation(fields: [workingMaterialId], references: [id], onDelete: Cascade)
+
+  versionNumber Int // 1, 2, 3... — порядок в рамках одного WorkingMaterial
+
+  // Текст, извлечённый КЛИЕНТОМ из .md/PPTX — не файл, см. подробное
+  // обоснование над WorkingMaterial выше.
+  extractedText String
+
+  // "Разбор строится не абстрактно, а привязан к цели проекта" —
+  // критика ЭТОЙ КОНКРЕТНОЙ версии в контексте Project.goal.
+  critique   String
+  editPrompt String // готовый промпт для редактирующего инструмента
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@unique([workingMaterialId, versionNumber])
+  @@index([workingMaterialId])
+  @@map("material_versions")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 62: Protocol (§3.30 ТЗ) — "Протокол по итогам решения", v4-
+// роадмап (пункт 48 общего списка). По прямому запросу.
+//
+// "МОЖНО ОТПРАВИТЬ ВТОРОЙ СТОРОНЕ ДЛЯ ПОДТВЕРЖДЕНИЯ ПРЯМО В TELEGRAM"
+// — переиспользует уже существующий Safe Share pipeline (Пункт 12,
+// §3.48: safeSharePreflight/safeShareConfirm, PII-сканирование перед
+// отправкой) вместо новой системы подтверждения. "Подтверждение" —
+// это стандартная отправка в Telegram-чат, где вторая сторона отвечает
+// обычным сообщением, не отдельный webapp-механизм с обратной связью
+// в приложение — тот же уровень "лёгкой версии MOU, без юридической
+// силы", что и требует ТЗ, не выдуманная функциональность сверху.
+//
+// СИНТЕЗ ИЗ УЖЕ СУЩЕСТВУЮЩИХ ДАННЫХ, НЕ НОВЫЙ ВВОД — "кто что
+// обязался сделать, к какому сроку" уже структурно есть в Commitment
+// (Пункт 14), не переизобретается. AI синтезирует связный текст
+// поверх Commitment + DecisionObjective + (если есть) последнего
+// разговора проекта — тот же принцип "синтез уже построенного", что
+// применялся в OutcomeForecastingService (Пункт 47) и
+// MotiveAnalysisService (Пункт 59).
+// ───────────────────────────────────────────────────────────
+
+model Protocol {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  summaryText String // "лёгкая версия MOU... неформальная договорённость"
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("protocols")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 63: TtsCache (пункт 43 общего списка v4-роадмапа) —
+// "Голосовая озвучка подсказок через ElevenLabs". По прямому запросу,
+// после уточнения номера пункта (не 51 — это другая, гораздо более
+// сложная live-фича, отложена).
+//
+// ОБЩАЯ, ПЕРЕИСПОЛЬЗУЕМАЯ ИНФРАСТРУКТУРА, НЕ ПРИВЯЗАННАЯ К ОДНОЙ
+// ФИЧЕ-ПОТРЕБИТЕЛЮ — все три места ТЗ, явно упоминающие ElevenLabs
+// (религиозные цитаты §3.24/пункт 42, голоса архетипов в спарринге
+// §3.26/пункт 45, компромиссный лист пункт 59), сами ещё НЕ построены.
+// Вместо ожидания одной конкретной фичи-потребителя — построен общий
+// TextToSpeechService, к которому УЖЕ СЕЙЧАС подключена одна реальная,
+// существующая точка использования (BestNextMoveRecommendation.
+// bestAction — уже готовый короткий текст-подсказка "что делать
+// дальше"), а остальные потребители смогут подключиться позже без
+// изменений в самой TTS-инфраструктуре.
+//
+// КЭШИРОВАНИЕ НА УРОВНЕ ТЕКСТА — "чтобы не пере-генерировать
+// одинаковые фразы" (буквально ТЗ, раздел реализации). Ключ — хэш от
+// (текст + voiceId), не userId: одинаковая фраза для разных
+// пользователей переиспользует один и тот же сгенерированный звук,
+// экономит реальные деньги на внешнем API.
+//
+// СОГЛАСИЕ — ConsentType.VOICE_PROCESSING, СУЩЕСТВОВАВШИЙ В ENUM'Е С
+// ЧЕКПОИНТА, НО НИ РАЗУ НЕ ИСПОЛЬЗОВАННЫЙ НИ ОДНИМ СЕРВИСОМ (проверено
+// grep'ом перед началом работы) — тот же паттерн "поле есть, сервиса
+// нет", что уже находился неоднократно в этом заходе.
+// ───────────────────────────────────────────────────────────
+
+model TtsCache {
+  id String @id @default(cuid())
+
+  // sha256(text + '::' + voiceId) — детерминированный ключ поиска,
+  // не автоинкремент, чтобы избежать дублирующей генерации при
+  // гонке двух одновременных запросов с одинаковым текстом.
+  textHash String @unique
+
+  text    String
+  voiceId String
+
+  // Аудио хранится как base64 прямо в БД, не во внешнем blob-
+  // хранилище — во всём проекте нет интеграции с S3/аналогами (тот
+  // же принцип "не заводить новую инфраструктуру ради одной фичи",
+  // что уже применялся к isLibraryModerator, Пункт 57). Короткие
+  // фразы-подсказки дают компактный аудиофайл, для более длинных
+  // текстов (компромиссный лист, пункт 59) потребует пересмотра при
+  // подключении той фичи — честно не решается здесь заранее.
+  audioBase64 String
+
+  createdAt DateTime @default(now())
+
+  @@map("tts_cache")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 64: SituationalQuote/SituationalAnecdote (§3.24 частично +
+// §3.25 ТЗ) — "Кнопки быстрой генерации по текущей ситуации" (часть
+// §3.24, ранее не реализованная) + "Настройки пользователя: анекдот
+// и цитата как постоянные предпочтения" (§3.25, пункт 44 общего
+// списка, сам запрос пользователя). Реализованы вместе — §3.25 прямо
+// названа "дополнением к 3.24", настройка "всегда показывать" без
+// самой кнопки-генератора не имеет смысла.
+//
+// ЦИТАТА — та же дисциплина цитирования, что уже применена в
+// ReconciliationArgumentsService (Пункт 49, §3.14 ТЗ): sourceReference
+// ОТДЕЛЬНОЕ поле (ссылка на первоисточник, 🔵 верифицируемый факт), не
+// смешано с самим текстом цитаты (короткий парафраз, 🟡 применение к
+// ситуации) — структурное двойное тегирование, не одна строка.
+//
+// АНЕКДОТ — БЕЗ ТЕГИРОВАНИЯ ИСТОЧНИКА (буквально ТЗ: "не участвует в
+// весе аргументации решения и не требует тегирования источника, так
+// как это не факт и не аргумент") — модель заметно проще, ни
+// sourceReference, ни FactSourceType.
+//
+// ОБА ВИДА КОНТЕНТА — ТОЛЬКО ДЛЯ УКАЗАВШИХ ВЕРОИСПОВЕДАНИЕ
+// (User.religion != null) — согласовано с пользователем перед
+// реализацией, тот же принцип, что уже применён к остальному
+// религиозному контенту (Пункт 49): гео/дефолт никогда не
+// подставляет предположение, только явный выбор пользователя.
+//
+// ЧЕСТНО НЕ РЕАЛИЗОВАНО В ЭТОМ ПРОХОДЕ: ежедневное религиозное
+// напоминание о заповедях с настраиваемой частотой (другая часть
+// §3.24, другая механика — сама ТЗ отмечает это явно: "Настройка
+// независима от частоты религиозного напоминания — это разные
+// механики").
+// ───────────────────────────────────────────────────────────
+
+model SituationalQuote {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  quoteText       String // короткий парафраз, не голословное цитирование — та же дисциплина, что §3.14
+  sourceReference String // ссылка на первоисточник (книга/глава/стих), отдельно от текста
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("situational_quotes")
+}
+
+model SituationalAnecdote {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  text String // не факт и не аргумент — без тегирования источника, буквально ТЗ
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("situational_anecdotes")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 65: VenueRecommendation (§3.22 ТЗ) — "Партнёрка с заведениями
+// — бронирование места для встречи (монетизация)", пункт 40 общего
+// списка v4-роадмапа. Реализован в честно суженном объёме после
+// обсуждения с пользователем, нереализованное явно вынесено в
+// /TODO.md.
+//
+// СОЗНАТЕЛЬНО НЕ РЕАЛИЗОВАНО: (1) монетизация/комиссия — требует §3.23
+// (приём заявок от владельцев заведений), без базы одобренных
+// партнёров нет с кем иметь комиссионные отношения; (2) автоматическое
+// бронирование через API — универсального API бронирования столиков в
+// произвольных заведениях не существует, реализованы только контакты
+// для самостоятельного бронирования пользователем.
+//
+// ДВОЙНОЕ ТЕГИРОВАНИЕ ИСТОЧНИКА — buкально требование ТЗ: rating —
+// 🔵 публичный факт (агрегированный рейтинг из Google Places, реальное
+// число оттуда, не выдумано), reviewSummary — 🟡 AI-парафраз общего
+// тона (НЕ дословное копирование текста отзывов — та же дисциплина
+// цитирования, что уже применена в ReconciliationArgumentsService,
+// Пункт 49, и SituationalContentService, Пункт 64), suitabilityReason
+// — тоже 🟡 (оценочное суждение AI о пригодности места, не факт).
+//
+// СЫРОЙ ТЕКСТ ОТЗЫВОВ GOOGLE НИКОГДА НЕ ПЕРСИСТИТСЯ — используется
+// сервисом только временно (в момент вызова, для передачи в AI на
+// парафраз), не сохраняется в этой или любой другой модели ни в каком
+// виде — то же соблюдение copyright-дисциплины, что применяется во
+// всём проекте к любому внешнему контенту.
+// ───────────────────────────────────────────────────────────
+
+model VenueRecommendation {
+  id                      String                @id @default(cuid())
+  scheduledConversationId String
+  scheduledConversation   ScheduledConversation @relation(fields: [scheduledConversationId], references: [id], onDelete: Cascade)
+
+  placeId String // Google Places place_id — для дедупликации и повторных обращений
+  name    String
+  address String
+  phone   String? // "отображение контактов заведения" — для самостоятельного бронирования, буквально ТЗ
+
+  rating        Float? // 🔵 публичный факт из Google Places
+  reviewSummary String? // 🟡 AI-парафраз тона отзывов, не дословный текст
+
+  suitabilityReason String // 🟡 "подходит для приватного разговора" — оценка AI, не факт
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([scheduledConversationId])
+  @@map("venue_recommendations")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 66: VenueApplication/ApprovedVenue (§3.23 ТЗ) — "Приём заявок
+// от владельцев заведений", пункт 41 общего списка v4-роадмапа. По
+// прямому запросу — разблокирует монетизацию §3.22, честно отложенную
+// в Пункте 65 (см. /TODO.md).
+//
+// КТО МОЖЕТ ПОДАТЬ ЗАЯВКУ — любой аутентифицированный через Telegram
+// пользователь приложения, позиционирующий себя как владелец. Нет
+// отдельной "бизнес-аккаунт" системы — тот же принцип минимальной
+// инфраструктуры, что применялся к isLibraryModerator: не заводить
+// новую систему аутентификации ради одной фичи.
+//
+// ФОТО — ССЫЛКИ (Google Places photo_reference), НЕ БАЙТЫ. Во всём
+// проекте нет интеграции с blob-хранилищем (S3/аналоги) — тот же
+// принцип, что уже применялся к TtsCache (Пункт 63, base64 в БД для
+// коротких аудио) и FactSource.fileRef (раздел 2 ТЗ) — здесь ссылка
+// на Google Places Photo API, не персистится сам файл.
+//
+// ВНУТРЕННИЙ СКОРИНГ — ЧЕСТНО ОГРАНИЧЕН ТОЛЬКО РЕЙТИНГОМ GOOGLE.
+// Полная формула по ТЗ ("рейтинг отзывов + количество успешных броней
+// через платформу + отсутствие жалоб") требует ДВУХ систем, которых в
+// проекте не существует вообще: трекинга успешных бронирований (§3.22
+// честно реализует только контакты для самостоятельного бронирования,
+// не факт брони через платформу) и системы жалоб. НЕ заведены
+// placeholder-поля "bookingsCount"/"complaintsCount", которые были бы
+// вечно нулевыми без единого механизма их заполнения — тот же принцип,
+// что уже применялся к отказу от §3.32 (не строить инфраструктуру под
+// несуществующие данные). Честно задокументировано здесь и в
+// /TODO.md, не подделан "комбинированный скоринг" из одного компонента.
+// ───────────────────────────────────────────────────────────
+
+enum VenueApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model VenueApplication {
+  id                 String @id @default(cuid())
+  submittedByUserId  String
+  submittedByUser    User   @relation(fields: [submittedByUserId], references: [id], onDelete: Cascade)
+
+  // Автоподгруженные через Google Places ИЛИ отредактированные
+  // владельцем перед отправкой (§3.23 ТЗ: "владелец может поправить
+  // неверно подтянутые контакты/адрес/описание") — снапшот на момент
+  // подачи заявки, не живая ссылка на Google Places (тот же принцип,
+  // что LibraryArgument, Пункт 57: опубликованные данные стабильны,
+  // не меняются молча вслед за внешним источником).
+  name         String
+  address      String
+  phone        String?
+  openingHours String[] // human-readable строки от Google, не структурированное расписание
+
+  googlePlaceId   String? // для справки/дедупликации, если был auto-detected
+  photoReferences String[] // ссылки на Google Places Photo API, не сами байты — см. обоснование выше
+
+  status      VenueApplicationStatus @default(PENDING)
+  moderatedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  approvedVenue ApprovedVenue?
+
+  @@index([status])
+  @@map("venue_applications")
+}
+
+model ApprovedVenue {
+  id            String           @id @default(cuid())
+  applicationId String           @unique
+  application   VenueApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  name         String
+  address      String
+  phone        String?
+  openingHours String[]
+  photoReferences String[]
+
+  // 🔵 публичный факт из Google Places на момент одобрения заявки —
+  // не пересчитывается автоматически при изменении рейтинга в
+  // Google (тот же принцип снапшота, что у остальных полей выше).
+  rating Float?
+
+  // ───────────────────────────────────────────────────────────
+  // Пункт 67 (§3.22 ТЗ, "Монетизация") — разблокировано Пунктом 66
+  // (§3.23), теперь строится отдельно, по прямому запросу.
+  //
+  // ЧЕСТНОЕ ОГРАНИЧЕНИЕ, НЕ СКРЫТОЕ: во всём проекте нет платёжной
+  // инфраструктуры (Stripe/аналоги) и нет способа криптографически
+  // подтвердить, что бронь реально состоялась в заведении — §3.22
+  // реализует только контакты для самостоятельного бронирования
+  // (Пункт 65), не автоматическое бронирование через API. Значит
+  // "комиссия за бронь, сделанную через сервис" технически может
+  // опираться ТОЛЬКО на самоотчёт пользователя ("я забронировал") —
+  // не на верифицируемый факт. Это ЛЕДЖЕР (учётная запись "к оплате
+  // заведением"), НЕ система реального сбора платежей — то же
+  // честное разделение "модель данных vs реальная интеграция", что
+  // уже применялось к SafeShareAction (шеринг) и другим местам
+  // проекта, где показывается намерение/факт использования, не
+  // фактическое движение денег.
+  referralFeeAmount Float? // сумма реферальной платы за одну бронь, согласованная с заведением при одобрении/позже — null = комиссия не согласована
+
+  // "Приоритетное размещение... промаркировано как реклама, не
+  // смешивается с органической рекомендацией" — buкально ТЗ. Просто
+  // булев флаг, TMA обязана визуально отделять эти карточки, не
+  // молча переставлять их выше органических без пометки.
+  isPriorityPartner Boolean @default(false)
+
+  bookingConfirmations VenueBookingConfirmation[]
+  // ───────────────────────────────────────────────────────────
+
+  createdAt DateTime @default(now())
+
+  @@map("approved_venues")
+}
+
+model VenueBookingConfirmation {
+  id              String        @id @default(cuid())
+  approvedVenueId String
+  approvedVenue   ApprovedVenue @relation(fields: [approvedVenueId], references: [id], onDelete: Cascade)
+
+  confirmedByUserId String
+  confirmedByUser   User   @relation(fields: [confirmedByUserId], references: [id], onDelete: Cascade)
+
+  // Опционально — если подтверждение брони привязано к конкретной
+  // запланированной встрече (Пункт 51/65), не обязательное поле:
+  // пользователь может подтвердить бронь и без привязки.
+  scheduledConversationId String?
+
+  // Снапшот суммы на момент подтверждения — не пересчитывается
+  // задним числом, если referralFeeAmount заведения поменяется позже
+  // (тот же принцип снапшота, что у остальных полей ApprovedVenue).
+  referralFeeOwed Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([approvedVenueId])
+  @@map("venue_booking_confirmations")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 69: SparringVoiceReplyJob (§3.26 ТЗ, продолжение) — голосовой
+// ввод реплики пользователя в спарринге. По прямому запросу, с
+// явной оговоркой пользователя: "отсутствие голосового ввода ломает
+// саму идею голосового спарринга" — принято, реализовано.
+//
+// АСИНХРОННЫЙ FLOW С WEBHOOK, НЕ POLLING НА СЕРВЕРЕ — переиспользует
+// уже существующий TranscriptionService (Пункт 13, AssemblyAI),
+// serverless-архитектура (Vercel Hobby) не допускает фоновый процесс,
+// который мог бы поллить провайдера сам. КЛИЕНТ поллит этот job,
+// не сервер провайдера — та же архитектура, что уже работает для
+// Conversation.status (UPLOADED→TRANSCRIBING→TRANSCRIBED).
+//
+// ЧЕСТНАЯ ЗАДЕРЖКА, НЕ МГНОВЕННЫЙ ОТВЕТ — в отличие от печати текста,
+// голосовая реплика требует загрузки аудио + ожидания транскрибации
+// (реалистично несколько секунд для короткой реплики, не "минуты", но
+// и не мгновенно) — TMA обязана честно показывать это состояние
+// ожидания, не имитировать мгновенность.
+// ───────────────────────────────────────────────────────────
+
+enum SparringVoiceReplyStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model SparringVoiceReplyJob {
+  id                String          @id @default(cuid())
+  sparringSessionId String
+  sparringSession   SparringSession @relation(fields: [sparringSessionId], references: [id], onDelete: Cascade)
+
+  externalTranscriptionJobId String @unique // для сопоставления входящего webhook
+
+  status SparringVoiceReplyStatus @default(PENDING)
+
+  // Заполняются по завершении (COMPLETED) — ID уже созданных
+  // SparringMessage (реплика пользователя + ответ оппонента), чтобы
+  // клиент забрал готовый результат одним запросом по jobId, не
+  // повторным чтением всей истории сессии.
+  userMessageId     String?
+  opponentMessageId String?
+  errorMessage      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([sparringSessionId])
+  @@map("sparring_voice_reply_jobs")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 70: CompromiseSheet (§3.41 ТЗ) — "Компромиссный лист при
+// спарринге", пункт 59 общего списка v4-роадмапа. По прямому запросу,
+// после аудита v4 — найден как отдельная, детально расписанная в ТЗ
+// фича, не пересекающаяся с уже построенным Протоколом (§3.30,
+// Пункт 62): протокол — итог решения в целом, этот лист — привязан
+// именно к сессии спарринга, генерируется ДВАЖДЫ (до/после).
+//
+// СХЕМА ПОЧТИ БУКВАЛЬНО ИЗ ТЗ — сама ТЗ уже содержит набросок модели
+// данных, использован напрямую, не изобретён заново:
+// "CompromiseSheet(sparringSessionId, phase: before|after, items[],
+// audioGenerated, audioSource, postProcessing, previewedByUser,
+// sentToFigurant)".
+//
+// ЧЕСТНО НЕ РЕАЛИЗОВАНО В ЭТОМ ПРОХОДЕ (пункт 60 общего списка,
+// зафиксировано в /TODO.md): запись собственного голоса пользователя
+// + пост-обработка (нормализация громкости/удаление пауз/шумоподавление)
+// — во всём проекте нет аудио-инженерной инфраструктуры для этого.
+// audioSource=USER_VOICE честно принимается полем (пользователь мог
+// бы прислать уже готовую запись извне), но САМА функция записи+
+// пост-обработки не строится здесь.
+//
+// ITEMS ССЫЛАЮТСЯ НА Argument, НЕ НА Fact — buкально требование ТЗ
+// ("то, что отправляется вовне — это только производный аргумент...
+// а не приватные факты или файлы") — та же изоляция слоёв, что везде
+// в проекте (Пункт 56, публичное обсуждение; Пункт 57, библиотека).
+//
+// sentToFigurant НЕ МОЖЕТ СТАТЬ TRUE, ПОКА previewedByUser НЕ TRUE —
+// "жёсткая проверка на уровне бизнес-логики, не только UI" (буквально
+// ТЗ) — реализовано в сервисе, не полагается на дисциплину клиента.
+// ───────────────────────────────────────────────────────────
+
+enum CompromiseSheetPhase {
+  BEFORE
+  AFTER
+}
+
+enum CompromiseSheetAudioSource {
+  ELEVENLABS
+  USER_VOICE
+}
+
+model CompromiseSheet {
+  id                String                @id @default(cuid())
+  sparringSessionId String
+  sparringSession   SparringSession       @relation(fields: [sparringSessionId], references: [id], onDelete: Cascade)
+  phase             CompromiseSheetPhase
+
+  items CompromiseSheetItem[]
+
+  // "Опциональная озвучка... тот же паттерн, что в 3.24/3.26" —
+  // переиспользует уже готовый TtsCache (Пункт 63), не новую
+  // инфраструктуру. audioBase64 — снапшот сгенерированного аудио для
+  // ИМЕННО этого листа (не общий кэш по тексту, лист может измениться).
+  audioGenerated Boolean                     @default(false)
+  audioSource    CompromiseSheetAudioSource?
+  // Пункт 71 — теперь используется и для audioSource=ELEVENLABS, и для
+  // audioSource=USER_VOICE. Сама обработка (нормализация/паузы/шум)
+  // выполняется ЦЕЛИКОМ на клиенте — buкально ТЗ: "принцип сырой файл
+  // не покидает устройство здесь не применяется буквально... но
+  // пост-обработка по возможности выполняется на устройстве". Backend
+  // только персистит уже обработанный результат, не пересчитывает.
+  audioBase64    String?
+
+  // Пункт 71 (§3.41 ТЗ) — "отдельный чекбокс на каждую опцию,
+  // включаются независимо друг от друга". Осмысленны только при
+  // audioSource=USER_VOICE — для ELEVENLABS все три остаются false
+  // (TTS не нуждается в пост-обработке пользовательской записи).
+  postProcessingNormalizeVolume Boolean @default(false)
+  postProcessingRemovePauses    Boolean @default(false)
+  // "Убрать сторонние шумы" — ЧЕСТНО ограничено фильтром высоких
+  // частот (убирает низкочастотный гул/рокот), не полноценным
+  // спектральным шумоподавлением — согласовано с пользователем перед
+  // реализацией, см. /TODO.md.
+  postProcessingRemoveNoise     Boolean @default(false)
+
+  // "Жёсткая проверка на уровне бизнес-логики" (буквально ТЗ) —
+  // sentToFigurant не может стать true, пока previewedByUser не true,
+  // проверяется в CompromiseSheetService, не только в схеме.
+  previewedByUser Boolean @default(false)
+  sentToFigurant  Boolean @default(false)
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([sparringSessionId])
+  @@map("compromise_sheets")
+}
+
+model CompromiseSheetItem {
+  id                String          @id @default(cuid())
+  compromiseSheetId String
+  compromiseSheet   CompromiseSheet @relation(fields: [compromiseSheetId], references: [id], onDelete: Cascade)
+
+  // "items ссылаются на Argument, не на Fact" — buкально ТЗ.
+  argumentId String
+  argument   Argument @relation(fields: [argumentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([compromiseSheetId])
+  @@map("compromise_sheet_items")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 72: ClosingMessage (§3.35 ТЗ) — "Завершающее сообщение —
+// честный итог и уместная цитата", пункт 54 общего списка v4-роадмапа.
+// По прямому запросу, найдено полным аудитом v4-роадмапа.
+//
+// ТРИГГЕР — ТОЛЬКО "постфактум-разбор" (существующая точка), НЕ
+// "закрытие экрана сопровождения" (§3.33 — тот же непостроенный live-
+// индикатор, что блокирует пункты 51/52/55/57 общего списка). ТЗ
+// прямо допускает оба триггера через "ИЛИ" — использован тот, для
+// которого уже есть инфраструктура.
+//
+// ТРЕБУЕТ ЗАФИКСИРОВАННОГО DecisionOutcome — "честный итог" без
+// известного исхода был бы гаданием, не честностью. Не генерируется
+// молча с выдуманным исходом.
+//
+// "ЦИТАТА ТОЛЬКО ПРИ СОГЛАСИИ НА РЕЛИГИОЗНЫЙ КОНТЕНТ" — та же
+// дисциплина цитирования (короткий парафраз + отдельная ссылка на
+// первоисточник), что уже применена в ReconciliationArgumentsService
+// (Пункт 49, §3.14) — quoteText/quoteSourceReference оба NULL, если
+// religion не указана, не подставляется по умолчанию.
+//
+// "ЧЕСТНО НАЗЫВАЕТ ПРИЧИНУ, НЕ ТОКСИЧНО" — опирается на реальные
+// ArgumentLifecycleStatus=REJECTED/ACCEPTED записи проекта, не
+// выдумывает причину неудачи/успеха.
+// ───────────────────────────────────────────────────────────
+
+model ClosingMessage {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  summaryText String // "честный, но не токсичный итог"
+
+  // NULL, если пользователь не указал вероисповедание — обе части
+  // ОБЯЗАТЕЛЬНО вместе или обе NULL, не частично (проверяется в
+  // сервисе).
+  quoteText            String?
+  quoteSourceReference String?
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("closing_messages")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 76: WeatherForecast (§3.21 ТЗ) — "Виджет погоды и
+// рекомендация о переносе разговора", пункт 39 общего списка
+// v4-роадмапа. По прямому запросу.
+//
+// ОТКРЫТЫЙ, БЕСПЛАТНЫЙ ПРОВАЙДЕР БЕЗ КЛЮЧА (Open-Meteo) — тот же
+// принцип "не заводить лишнюю инфраструктуру ради вспомогательной
+// фичи", что уже применялся к другим решениям в проекте. Сама ТЗ
+// прямо называет это "некритичная nice-to-have фича".
+//
+// ПРИВАТНОСТЬ — buкально требование ТЗ, реализовано буквально:
+// "сервис в остальном принципиально не хранит геопривязку — погода
+// запрашивается либо по городу, который пользователь указывает
+// вручную (не сохраняется как постоянная геометка), либо по разовой
+// эфемерной геолокации устройства только для запроса прогноза, без
+// сохранения координат". cityLabel — ТОЛЬКО если пользователь ВВЁЛ
+// текст вручную (простая строка, не результат геолокации). Если
+// прогноз запрошен через GPS — координаты используются ТОЛЬКО
+// транзитно внутри одного HTTP-вызова, никогда не попадают ни в один
+// аргумент create() ниже, cityLabel остаётся null (даже обратное
+// геокодирование в название города НЕ сохраняется — это была бы та
+// же геопривязка другими словами).
+//
+// ConsentType.LOCATION — существовал в enum'е с чекпоинта, ни разу не
+// использовался ни одним сервисом (проверено перед началом работы) —
+// тот же паттерн "поле есть, сервиса нет", что уже находился
+// неоднократно. Используется здесь для geo-пути ("явный opt-in при
+// первом использовании виджета", buкально ТЗ) — путь через ручной
+// ввод города согласия не требует вообще (просто текстовое поле).
+// ───────────────────────────────────────────────────────────
+
+enum WeatherRecommendation {
+  PROCEED
+  RECONSIDER
+}
+
+model WeatherForecast {
+  id                      String                @id @default(cuid())
+  scheduledConversationId String
+  scheduledConversation   ScheduledConversation @relation(fields: [scheduledConversationId], references: [id], onDelete: Cascade)
+
+  // Только если пользователь ВВЁЛ текст вручную — см. обоснование выше.
+  cityLabel String?
+
+  temperatureCelsius Float?
+  condition          String // человекочитаемое описание погоды ("гроза", "ясно" и т.д.)
+
+  // 🟡 "эвристика-совет, не диагноз конкретной ситуации" — buкально ТЗ.
+  recommendation       WeatherRecommendation
+  recommendationReason String
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([scheduledConversationId])
+  @@map("weather_forecasts")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 79: SchedulerAdvice (пункт 58 общего списка v4-роадмапа) —
+// "Умные советы планировщика: раздельные/групповые встречи, паузы,
+// формат контакта, закрепляющие встречи, личные предпочтения строго
+// со слов". По прямому запросу. Не имеет отдельного §-раздела в ТЗ —
+// только строка сравнительной таблицы и пункт общего списка,
+// формулировка взята буквально оттуда.
+//
+// "ЛИЧНЫЕ ПРЕДПОЧТЕНИЯ СТРОГО СО СЛОВ" — buкально требование ТЗ.
+// Переиспользует уже существующий PersonFact (не новая модель для
+// "предпочтений") — источник ограничен sourceType=PERSONAL_RECORD
+// (🟢, "пользователь лично знает это"), НЕ PUBLIC_FACT/USER_GUESS.
+// Дисциплина обеспечена ДВОЙНО: (1) запрос к базе фильтрует по
+// sourceType на уровне SQL, догадки физически не попадают в промпт;
+// (2) системный промпт явно запрещает придумывать советы там, где
+// подходящих фактов нет.
+//
+// "РАЗДЕЛЬНЫЕ/ГРУППОВЫЕ ВСТРЕЧИ" — опирается на уже существующий
+// Relationship (§3.13) между людьми проекта, не новую модель связей.
+// ───────────────────────────────────────────────────────────
+
+model SchedulerAdvice {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  adviceText String
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("scheduler_advice")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 81: CooldownNudgeEvent (§3.31 ТЗ) — первая фича живого режима
+// за весь проект. По прямому запросу, после явного разбора объёма:
+// два реальных блокера (не один) держали этот и связанные пункты
+// (49/51/52/55, §3.4) — (1) надёжность длительного захвата аудио в
+// Telegram WebView, задокументированная как "нестабильна между
+// платформами" в Пункте 13 (ConversationsSection.tsx честно НЕ строил
+// встроенную запись из-за этого), (2) отсутствие инфраструктуры для
+// потоковой обработки. (2) снята находкой: браузер подключается к
+// AssemblyAI напрямую по временному токену, минуя backend полностью
+// для самого потока — backend только минтит токен обычным HTTP.
+// (1) — до сих пор непроверено на практике, честно остаётся риском.
+//
+// САМ COOLDOWN-НУДЖ НЕ ТРЕБУЕТ ТРАНСКРИПЦИИ ВООБЩЕ — buкально §3.3:
+// "акустическое наблюдение" (пауза/громкость/темп) — измеримый слой,
+// отдельный от "психологической интерпретации" (AI-догадка). Нудж
+// использует ТОЛЬКО первый слой — вся детекция клиентская (Web Audio
+// API), backend только логирует факт показа нуджа, НЕ сырое аудио.
+//
+// НЕТ RAW AUDIO, НЕТ ТРАНСКРИПТА — та же дисциплина "первоисточник не
+// покидает устройство", что применяется везде в проекте. Персистятся
+// только числовые метрики уже посчитанного клиентом сигнала.
+// ───────────────────────────────────────────────────────────
+
+model CooldownNudgeEvent {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Числовые метрики уже посчитанного клиентом акустического сигнала
+  // на момент показа нуджа — НЕ сырой звук, НЕ транскрипт.
+  peakVolumeDb    Float?
+  escalationScore Float? // 0..1, внутренняя метрика скользящего окна, не психологический вывод
+
+  dismissed Boolean @default(false) // "легко проигнорировать" — buкально ТЗ, честно фиксируется, не скрывается
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("cooldown_nudge_events")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 82: LiveHintEvent (§3.4 ТЗ) — "Live-подсказки во время
+// разговора". По прямому запросу, разблокировано находкой Пункта 81
+// (mintTranscriptionToken() — переиспользуется здесь впервые, не
+// только заделом). Два конкретных типа подсказок buкально из ТЗ:
+// "сейчас хороший момент упомянуть Y" (ARGUMENT_SUGGESTION) и
+// "оппонент второй раз возвращается к теме X — не игнорируй"
+// (TOPIC_REPETITION).
+//
+// ЦИКЛ ДО 30 СЕКУНД, НЕ МГНОВЕННО — честно согласовано перед
+// реализацией, не "прямо в момент". Backend получает растущий
+// транскрипт периодически (не поток), делает ОДИН AI-вызов за цикл,
+// возвращает МАКСИМУМ одну подсказку — "тихие пуш-подсказки", не
+// заваливать пользователя несколькими сразу.
+//
+// ОКНО ТРАНСКРИПТА ОГРАНИЧЕНО НА КЛИЕНТЕ (последние ~10 минут) — не
+// персистируется здесь вообще, backend получает только уже
+// ограниченный клиентом текст в каждом запросе, не хранит историю
+// между циклами. Повтор темы за пределами окна честно не будет
+// пойман — задокументированное ограничение, не скрытая деградация.
+//
+// НЕ ХРАНИТ ТРАНСКРИПТ — та же дисциплина "первоисточник не покидает
+// устройство", что и везде: персистируется только факт показа
+// подсказки + её тип + argumentId (если тип ARGUMENT_SUGGESTION), не
+// сам текст транскрипта, из которого она была выведена.
+// ───────────────────────────────────────────────────────────
+
+enum LiveHintType {
+  ARGUMENT_SUGGESTION
+  TOPIC_REPETITION
+}
+
+model LiveHintEvent {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  hintType LiveHintType
+  hintText String // "сейчас хороший момент упомянуть..." / "оппонент второй раз..." — сама подсказка, не транскрипт
+
+  // Только для ARGUMENT_SUGGESTION — какой именно уже подготовленный
+  // аргумент был предложен, чтобы избежать повторной подсказки того
+  // же самого аргумента в следующих циклах.
+  suggestedArgumentId String?
+  suggestedArgument   Argument? @relation(fields: [suggestedArgumentId], references: [id], onDelete: SetNull)
+
+  dismissed Boolean @default(false)
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("live_hint_events")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 83: LiveManipulationFlag (§3.33 ТЗ, "детектор уловок —
+// live-режим") — первый из двух сразу согласованных срезов "экрана
+// сопровождения", проход 1 (проход 2 — breaking-вопросы + трекинг
+// аргументов, отдельно). По прямому запросу.
+//
+// НЕ ПЕРЕИСПОЛЬЗУЕТ ManipulationDetectorService (Пункт 36) НАПРЯМУЮ —
+// та фича привязана к полному, уже сохранённому Conversation с
+// сегментами и диаризацией (постфактум-анализ), здесь — голый
+// растущий текстовый оконный фрагмент, тот же вход, что уже
+// использует LiveHintsService (Пункт 82). Архитектурно тот же класс
+// адаптации, что "не адаптирует старый сервис, строит новый на том
+// же паттерне" — там же обоснование, почему это честнее подгонки.
+//
+// МОЖЕТ БЫТЬ НЕСКОЛЬКО ФЛАГОВ ЗА ЦИКЛ, В ОТЛИЧИЕ ОТ LiveHintEvent —
+// "тихие пуш-подсказки, максимум одна" применимо к советам, не к
+// детекции реально произошедших манипулятивных реплик — их может
+// быть несколько в 30-секундном окне, каждая заслуживает флага.
+//
+// "Тег происхождения остаётся 🟡 догадка ИИ... live-детекция ещё
+// менее надёжна, чем постфактум-анализ" (buкально ТЗ) — confidence
+// персистируется отдельным полем, TMA обязана показывать его явно,
+// не скрывать за уверенной формулировкой.
+// ───────────────────────────────────────────────────────────
+
+model LiveManipulationFlag {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  technique   String // "переход на личности" и т.д. — тот же паттерн, что ManipulationDetectorService (не enum, см. обоснование в его файле)
+  description String
+  confidence  Float? // 0..1, честно ниже доверия, чем постфактум-версия — buкально ТЗ
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("live_manipulation_flags")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 84: BreakingQuestionSet + LiveArgumentTrackingStatus (§3.33
+// ТЗ) — проход 2 из двух согласованных срезов "экрана сопровождения".
+// По прямому запросу.
+//
+// BREAKING-ВОПРОСЫ — ПО ТРЕБОВАНИЮ, НЕ ЦИКЛИЧНО. Единственный вызов
+// на нажатие кнопки, не периодический анализ, как Live Hints/
+// Manipulation (Пункты 82/83). Оба вопроса buкально из ТЗ: "1 —
+// пробивающий... 2 — компромиссный", тег происхождения 🟡 обязателен.
+//
+// LiveArgumentTrackingStatus — ПЕРСИСТЕНТНАЯ ЗАПИСЬ НА АРГУМЕНТ, не
+// пересчитывается с нуля каждый цикл — "уже достаточно упомянут" не
+// должно забываться, стоит транскрипту выйти за окно ~10 минут на
+// клиенте. status обновляется ИНКРЕМЕНТАЛЬНО (может только повышаться
+// по значимости NOT_MENTIONED→NEEDS_REPEAT→SUFFICIENTLY_MENTIONED→
+// GENUINELY_ACCEPTED, не понижаться назад в рамках одной сессии).
+//
+// GENUINELY_ACCEPTED ТРЕБУЕТ ПРЯМОЙ СВЕРКИ С LiveManipulationFlag
+// (Пункт 83, зависимость, о которой явно сказал пользователь) —
+// "если согласие похоже на манипулятивный манёвр, зелёным не
+// подсвечивается" (buкально ТЗ). Реализовано в service-слое: перед
+// повышением статуса до GENUINELY_ACCEPTED сервис проверяет, не было
+// ли LiveManipulationFlag в том же временном окне.
+// ───────────────────────────────────────────────────────────
+
+model BreakingQuestionSet {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  breakingQuestion   String // "вскрывает слабое место в текущей линии аргументации" — buкально ТЗ
+  compromiseQuestion String // "поиск точки компромисса, не 'выиграть'" — buкально ТЗ
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("breaking_question_sets")
+}
+
+enum ArgumentTrackingState {
+  NOT_MENTIONED
+  NEEDS_REPEAT
+  SUFFICIENTLY_MENTIONED
+  GENUINELY_ACCEPTED
+}
+
+model LiveArgumentTrackingStatus {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  argumentId String   @unique // один статус на аргумент — последнее известное состояние, не история
+  argument   Argument @relation(fields: [argumentId], references: [id], onDelete: Cascade)
+
+  status        ArgumentTrackingState @default(NOT_MENTIONED)
+  lastCheckedAt DateTime              @default(now())
+
+  @@index([projectId])
+  @@map("live_argument_tracking_statuses")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 85: EscalationCategoryEvent (§3.34 ТЗ, вторая метрика
+// статистики успешности) — реальный след категории накала во времени,
+// не просто точечные события. По прямому запросу, после явного
+// разбора: "построить настоящий след, даже если это больше работы"
+// — сознательный отказ от приближения через уже существующие
+// CooldownNudgeEvent (Пункт 81), которые фиксируют только отдельные
+// всплески, не непрерывную траекторию.
+//
+// EscalationCategory — тот же enum, что уже существует в TMA как
+// чистый TypeScript-тип (categorizeEscalation(), Пункт 83) — здесь
+// зеркалируется на backend впервые, категория передаётся с клиента
+// как строка, не пересчитывается сервером (акустика остаётся
+// клиентской, backend только логирует уже посчитанное состояние).
+//
+// sessionId ГРУППИРУЕТ СОБЫТИЯ ОДНОГО НЕПРЕРЫВНОГО ЗАПУСКА
+// AssistanceScreen — клиент генерирует один идентификатор при старте
+// (handleStart), все переходы категории в рамках этого запуска несут
+// его. НЕ логируется каждый замер (раз в 500мс было бы избыточно) —
+// только ПЕРЕХОДЫ между категориями, клиент отслеживает изменение.
+//
+// "Эскалация пошла вниз после пика, а не разговор оборвался на пике"
+// (buкально ТЗ) — вычисляется в service-слое per-session: максимальный
+// достигнутый ранг категории vs ранг последнего события той же
+// сессии. Если последний ранг ниже максимального — "сглажено".
+// ───────────────────────────────────────────────────────────
+
+enum EscalationCategory {
+  CALM
+  RISING
+  HIGH
+  CRITICAL
+}
+
+model EscalationCategoryEvent {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  sessionId String // группирует события одного непрерывного запуска AssistanceScreen
+  category  EscalationCategory
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, sessionId])
+  @@map("escalation_category_events")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 86: ProbingTopic (§3.37 ТЗ, "детектор прощупывания") — пункт
+// 55 общего списка v4-роадмапа. По прямому запросу, после явного
+// разбора объёма: отдельная семантика от live-детектора уловок
+// (Пункт 83), архитектурный паттерн (цикл до 30 секунд, голый
+// текстовый оконный фрагмент) тот же, что уже трижды доказан
+// (Пункты 82/83/84), но "прощупывание" — ПАТТЕРН, накапливающийся
+// через несколько циклов ("дважды, трижды за разговор" — buкально
+// ТЗ), не разовое событие в одном окне, как манипулятивная реплика.
+//
+// ConversationSignalType.PROBING_PATTERN существовал в enum'е с
+// давних пор (проверено прямым поиском по кодовой базе перед
+// реализацией — ни один сервис никогда его не создавал), но та
+// модель (ConversationSignal) привязана к постфактум-анализу полной
+// записи с диаризацией — тот же архитектурный класс несоответствия,
+// что уже находился для ManipulationDetectorService в Пункте 83.
+// Здесь — новая, отдельная модель под живой режим, не насилие над
+// старой.
+//
+// ПЕРСИСТЕНТНОЕ ОТСЛЕЖИВАНИЕ ТЕМЫ МЕЖДУ ЦИКЛАМИ — тот же принцип, что
+// LiveArgumentTrackingStatus (Пункт 84): repeatCount растёт
+// инкрементально, не пересчитывается с нуля. AI получает список уже
+// отслеживаемых тем каждый цикл и решает, совпадает ли новое
+// упоминание с одной из них (по смыслу, не точному тексту).
+//
+// ПРЕДУПРЕЖДЕНИЕ ТОЛЬКО ПРИ repeatCount >= 2 — "дважды, трижды"
+// (buкально ТЗ) — первое упоминание темы честно не считается
+// прощупыванием само по себе, только СОЗДАЁТ запись для отслеживания.
+//
+// confidence РАСТЁТ С ЧИСЛОМ ПОВТОРОВ, НО НИКОГДА НЕ 1.0 — buкально
+// ТЗ: "уверенность растёт... но никогда не выдаётся как стопроцентное
+// чтение мыслей". Жёсткий потолок в service-слое, не только в
+// системном промпте — та же дисциплина честности, что применялась к
+// другим live-детекторам.
+//
+// СВЯЗЬ С §3.17 (ИНФОРМАЦИОННАЯ ГИГИЕНА) — СОЗНАТЕЛЬНО НЕ РЕАЛИЗОВАНА
+// В ЭТОМ ПРОХОДЕ, явно согласовано перед стартом. Семантическое
+// сопоставление живой темы прощупывания с историческими сигналами
+// SELF_RISK из прошлых разговоров пользователя — реальная отдельная
+// сложность (сама §3.17 первой половиной вообще не построена, папка
+// information-hygiene пуста), требует отдельного проектирования, не
+// втиснута сюда мимоходом.
+// ───────────────────────────────────────────────────────────
+
+model ProbingTopic {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  topicDescription String // "тема вашего бюджета на переезд" — конкретно, не абстрактно, buкально ТЗ
+  repeatCount      Int    @default(1)
+  confidence       Float // растёт с repeatCount, жёсткий потолок < 1.0
+
+  firstDetectedAt DateTime @default(now())
+  lastDetectedAt  DateTime @default(now())
+
+  @@index([projectId])
+  @@map("probing_topics")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 87: VoiceEmbedding — persistent speaker verification, идея
+// за пределами исходной ТЗ, зафиксирована и реализована по прямому
+// запросу. Подробное обоснование выбора технологии (sherpa-onnx,
+// WASM в браузере вместо нативного Node-аддона на backend) — см.
+// /TODO.md, "Идеи за пределами ТЗ".
+//
+// BACKEND ХРАНИТ ТОЛЬКО ВЕКТОР ЭМБЕДДИНГА, НИКОГДА НЕ ЗВУК — эмбеддинг
+// считается клиентом (WASM), backend получает уже готовый массив
+// чисел. Та же дисциплина "сырой звук не покидает устройство", что
+// применяется во всём проекте (Пункт 13, Пункт 71 и далее).
+//
+// ОДИН ЭМБЕДДИНГ НА ПОЛЬЗОВАТЕЛЯ (не на проект) — голос человека не
+// меняется от проекта к проекту, повторная регистрация в каждом новом
+// проекте была бы избыточной. @@unique на userId — повторная запись
+// (enroll) обновляет существующую, не создаёт вторую.
+//
+// dimension ХРАНИТСЯ ЯВНО — эмбеддинги разных моделей несовместимы по
+// размерности; если модель когда-либо сменится, старые эмбеддинги
+// должны быть распознаны как устаревшие, не сравниваться вслепую с
+// новыми другой размерности.
+// ───────────────────────────────────────────────────────────
+
+model VoiceEmbedding {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  embedding Float[] // вектор эмбеддинга, не звук
+  dimension Int // размерность вектора — для проверки совместимости при смене модели
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("voice_embeddings")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт 91: MaterialChatSession/MaterialChatMessage (§3.27 ТЗ,
+// "голосовой чат с AI") — реализовано по прямому запросу, после
+// явного разбора объёма: единственный реально открытый и посильный
+// кусок §3.27, разблокированный Пунктом 90 (голосовой ввод/вывод у
+// спарринга).
+//
+// ОТДЕЛЬНЫЙ, ПАРАЛЛЕЛЬНЫЙ ПАТТЕРН, НЕ ПЕРЕИСПОЛЬЗОВАНИЕ SparringSession
+// НАПРЯМУЮ — сознательное решение, не недосмотр. Многоходовой
+// диалог + асинхронный голосовой ввод (AssemblyAI webhook-flow) —
+// структурно похожий паттерн, что уже построен и ПРОТЕСТИРОВАН в
+// SparringService, но переиспользование того же кода означало бы
+// либо (а) рефакторинг уже сданной, рабочей фичи в разгар большого
+// захода (риск не оправдан), либо (б) семантически неверное
+// использование SparringMessageRole.OPPONENT для AI, чья роль здесь
+// принципиально другая — не состязательный оппонент, а совместный
+// помощник, задающий уточняющие вопросы. Дублирование признано явно,
+// не скрыто — тот же принцип, что уже применялся к buildPersonContext()
+// в самом SparringService.
+//
+// SparringVoiceReplyStatus ПЕРЕИСПОЛЬЗОВАН НАПРЯМУЮ (не задублирован
+// новым enum'ом) — это генерический статус асинхронной задачи
+// (PENDING/COMPLETED/FAILED), не специфичный по смыслу для спарринга.
+//
+// refinedEditPrompt НА СЕССИИ, НЕ АВТОМАТИЧЕСКИ ЗАПИСЫВАЕТСЯ В
+// MaterialVersion.editPrompt — чат исследовательский, независимый от
+// конкретной версии материала ("отдельный режим для поиска
+// аргументов", buкально ТЗ), пользователь сам решает, когда
+// использовать получившийся промпт для новой версии, не
+// автоматическая мутация чужих данных.
+// ───────────────────────────────────────────────────────────
+
+enum MaterialChatMessageRole {
+  USER
+  ASSISTANT
+}
+
+model MaterialChatSession {
+  id                String          @id @default(cuid())
+  workingMaterialId String
+  workingMaterial   WorkingMaterial @relation(fields: [workingMaterialId], references: [id], onDelete: Cascade)
+
+  status  SparringSessionStatus @default(ACTIVE) // переиспользован тот же generic ACTIVE/ENDED enum, что у спарринга
+  endedAt DateTime?
+
+  // Накапливается диалогом — AI обновляет по мере уточнения деталей,
+  // может быть null, пока ещё недостаточно информации для черновика.
+  refinedEditPrompt String?
+
+  createdAt DateTime @default(now())
+
+  messages      MaterialChatMessage[]
+  voiceReplyJobs MaterialChatVoiceReplyJob[]
+
+  @@index([workingMaterialId])
+  @@map("material_chat_sessions")
+}
+
+model MaterialChatMessage {
+  id        String              @id @default(cuid())
+  sessionId String
+  session   MaterialChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  role MaterialChatMessageRole
+  text String
+
+  // "Голосовой... по аналогии с 3.26" (buкально ТЗ) — та же честная
+  // деградация, что SparringMessage.audioBase64: null при role=USER,
+  // либо при role=ASSISTANT, если синтез не удался.
+  audioBase64 String?
+
+  generatedByInferenceId String?
+  generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@map("material_chat_messages")
+}
+
+model MaterialChatVoiceReplyJob {
+  id                    String              @id @default(cuid())
+  materialChatSessionId String
+  materialChatSession   MaterialChatSession @relation(fields: [materialChatSessionId], references: [id], onDelete: Cascade)
+
+  externalTranscriptionJobId String @unique
+
+  status SparringVoiceReplyStatus @default(PENDING)
+
+  userMessageId      String?
+  assistantMessageId String?
+  errorMessage       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([materialChatSessionId])
+  @@map("material_chat_voice_reply_jobs")
+}

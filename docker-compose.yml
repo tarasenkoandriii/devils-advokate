@@ -1,0 +1,44 @@
+# Локальная инфраструктура для отладки — ТОЛЬКО Postgres + Adminer.
+# Сам API (apps/api) и TMA (apps/tma) намеренно НЕ контейнеризированы:
+# запуск на хосте через `npm run start:dev`/`npm run dev` даёт нормальный
+# hot-reload и отладку (брейкпоинты в IDE), чего контейнер без грамотно
+# настроенных volume-мапингов и debug-портов только усложнил бы, не
+# упростил. Это чисто дев-инструмент — Vercel (см. VERCEL.md) его вообще
+# не видит и не использует: у serverless-деплоя свой билд-пайплайн на
+# уровне Root Directory каждого проекта, docker-compose.yml в корне
+# репозитория для него не существует.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: devils-advocate-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: devils_advocate
+      POSTGRES_PASSWORD: devils_advocate
+      POSTGRES_DB: devils_advocate
+    ports:
+      - '5432:5432'
+    volumes:
+      - devils_advocate_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U devils_advocate -d devils_advocate']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Лёгкий веб-интерфейс для просмотра БД во время отладки — не pgAdmin
+  # (тяжелее, требует отдельной настройки логина), Adminer — один
+  # контейнер без конфигурации, открыл http://localhost:8080 и всё.
+  adminer:
+    image: adminer:latest
+    container_name: devils-advocate-adminer
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  devils_advocate_postgres_data:
