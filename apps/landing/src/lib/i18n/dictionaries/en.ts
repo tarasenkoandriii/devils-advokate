@@ -458,7 +458,7 @@ export const en: Dictionary = {
         { label: 'ANALYZE', description: 'Check evidence, patterns, and risks.' },
         { label: 'LEARN & ACT', description: 'Turn insights into next steps.' },
       ],
-      center: 'LISTEN • UNDERSTAND • ADVISE',
+      center: 'LISTEN CLOSELY • UNDERSTAND • DECIDE',
       pipeline: [
         'CAPTURE AUDIO',
         'NOISE REDUCTION',
