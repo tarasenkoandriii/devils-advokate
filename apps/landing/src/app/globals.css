@@ -889,8 +889,8 @@ p {
    * фон между кругами) — найдено визуальным рендером (Playwright),
    * не предположением. */
   background: rgba(10, 12, 16, 0.72);
-  border-radius: 6px;
-  padding: 3px 8px;
+  border-radius: 4px;
+  padding: 1px 3px;
   backdrop-filter: blur(2px);
 }
 
