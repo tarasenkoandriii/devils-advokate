@@ -76,11 +76,24 @@ const GROUP_POSITION_KEYS: Record<number, keyof typeof POSITIONS> = {
 const COMPACT_GROUPS: Array<keyof typeof POSITIONS> = ['bottom'];
 
 export function Technology({ dict }: { dict: Dictionary }) {
+  // Пункт: заголовок должен идти двумя строками, каждое предложение
+  // на своей — не полагаемся на естественный перенос по ширине
+  // контейнера (при разных viewport ломался бы в разных, не всегда
+  // подходящих местах). Разбивка по первому ". " работает одинаково
+  // для всех трёх языков — везде один и тот же паттерн "Предложение
+  // один. Предложение два." (проверено для uk/ru/en перед реализацией).
+  const [titleFirstLine, ...titleRest] = dict.technology.title.split('. ');
+  const titleSecondLine = titleRest.join('. ');
+
   return (
     <section className="section technology" id="technology">
       <div className="container">
         <p className="eyebrow">{dict.technology.eyebrow}</p>
-        <h2 className="technology__title">{dict.technology.title}</h2>
+        <h2 className="technology__title">
+          {titleFirstLine}.
+          <br />
+          {titleSecondLine}
+        </h2>
         <p className="lede technology__subtitle">{dict.technology.subtitle}</p>
 
         <div className="technology__image-wrap">
