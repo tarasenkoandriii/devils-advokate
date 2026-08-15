@@ -1409,3 +1409,12 @@ p {
   color: var(--text-faint);
 }
 
+
+/* ── Cycle map (SVG-инфографика из внешнего пакета) ──────────── */
+
+.cycle-map svg {
+  display: block;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}

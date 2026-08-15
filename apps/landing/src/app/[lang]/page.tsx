@@ -2,7 +2,7 @@ import { locales, type Locale } from '../../lib/i18n/config';
 import { getDictionary } from '../../lib/i18n/get-dictionary';
 import { Hero } from '../../components/Hero';
 import { Technology } from '../../components/Technology';
-import { CycleSteps } from '../../components/CycleSteps';
+import { CycleMap } from '../../components/CycleMap';
 import { Differentiation } from '../../components/Differentiation';
 import { PrivacySection } from '../../components/PrivacySection';
 import { Features } from '../../components/Features';
@@ -24,7 +24,7 @@ export default function LandingPage({ params }: { params: { lang: Locale } }) {
     <main>
       <Hero dict={dict} lang={params.lang} />
       <Technology dict={dict} />
-      <CycleSteps dict={dict} />
+      <CycleMap locale={params.lang} />
       <Differentiation dict={dict} />
       <PrivacySection dict={dict} />
       <Features dict={dict} />

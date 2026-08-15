@@ -1,0 +1,2680 @@
+{
+  "meta": {
+    "project": "Devil's Advocate — карта возможностей",
+    "baseImage": "devils-advocate-map-base.png",
+    "reference": "devils-advocate-map-ru.png",
+    "canvas": {
+      "width": 1280,
+      "height": 853,
+      "unit": "px"
+    },
+    "sourceLocale": "ru",
+    "coordinates": "box — прямоугольник блока текста (левый верхний угол + габариты). anchor.baselineFirst — базовая линия первой строки; anchor.x — точка привязки: левый край при align:\"left\", центр при align:\"center\". Следующие строки: baselineFirst + i*font.lineHeight.",
+    "scaling": "Для другого размера умножьте все box/anchor/font значения на scale = targetWidth/1280.",
+    "fonts": {
+      "ui": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+      "display": "Georgia / Playfair Display (только логотип)"
+    },
+    "palette": {
+      "primary": "#e9f2ec",
+      "secondary": "#a8bcae",
+      "muted": "#8fa398",
+      "accent": "#7ee04a",
+      "badge": "#eef5f0"
+    },
+    "fontSizeNote": "Кегли подогнаны под гарнитуру Helvetica и ширину блока (box.w). Геометрия (box, anchor.baselineFirst) снята с растра. Прописные заголовки должны укладываться в одну строку — при переводе сначала уменьшайте кегль, а не добавляйте строку.",
+    "translationRules": [
+      "maxChars — лимит символов при текущем кегле и ширине блока (ru +25%).",
+      "При переполнении: сначала +1 строка (в пределах maxLines), затем уменьшение кегля на 0.5-1px.",
+      "translate:false — не переводить (бренды, форматы файлов, номера).",
+      "Тексты поверх фото (cycle.*) требуют тени rgba(0,0,0,.9) blur 6.",
+      "RTL: зеркалить левую колонку playbook и правые панели files/attachments/sources, направление стрелок конвейера инвертировать."
+    ],
+    "stringCount": 85
+  },
+  "strings": [
+    {
+      "id": "header.logo",
+      "section": "header",
+      "text": {
+        "ru": "Devil's Advocate"
+      },
+      "lines": [
+        "Devil's Advocate"
+      ],
+      "box": {
+        "x": 65,
+        "y": 22,
+        "w": 213,
+        "h": 28
+      },
+      "anchor": {
+        "align": "left",
+        "x": 65,
+        "baselineFirst": 47
+      },
+      "font": {
+        "family": "Georgia, \"Playfair Display\", serif",
+        "size": 29,
+        "lineHeight": 34,
+        "weight": 400,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 2,
+      "maxChars": 20,
+      "translate": false,
+      "note": "Название продукта"
+    },
+    {
+      "id": "header.title",
+      "section": "header",
+      "text": {
+        "ru": "Карта возможностей внутри главного цикла"
+      },
+      "lines": [
+        "Карта возможностей",
+        "внутри главного цикла"
+      ],
+      "box": {
+        "x": 65,
+        "y": 59,
+        "w": 239,
+        "h": 37
+      },
+      "anchor": {
+        "align": "left",
+        "x": 65,
+        "baselineFirst": 83
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 19.5,
+        "lineHeight": 29,
+        "weight": 400,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 3,
+      "maxChars": 52
+    },
+    {
+      "id": "header.subtitle",
+      "section": "header",
+      "text": {
+        "ru": "Ваш голосовой Magic Helper на переговорах"
+      },
+      "lines": [
+        "Ваш голосовой Magic Helper",
+        "на переговорах"
+      ],
+      "box": {
+        "x": 65,
+        "y": 118,
+        "w": 225,
+        "h": 36
+      },
+      "anchor": {
+        "align": "left",
+        "x": 65,
+        "baselineFirst": 136
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 15,
+        "lineHeight": 22,
+        "weight": 600,
+        "color": "#7ee04a"
+      },
+      "maxLines": 3,
+      "maxChars": 48,
+      "note": "Magic Helper — имя фичи, не переводить"
+    },
+    {
+      "id": "header.lede",
+      "section": "header",
+      "text": {
+        "ru": "Слушает, понимает контекст и даёт подсказки в реальном времени. Всё остаётся приватным и под вашим полным контролем."
+      },
+      "lines": [
+        "Слушает, понимает контекст и даёт",
+        "подсказки в реальном времени.",
+        "Всё остаётся приватным и под вашим",
+        "полным контролем."
+      ],
+      "box": {
+        "x": 64,
+        "y": 161,
+        "w": 184,
+        "h": 59
+      },
+      "anchor": {
+        "align": "left",
+        "x": 64,
+        "baselineFirst": 174
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 14.3,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 5,
+      "maxChars": 145
+    },
+    {
+      "id": "pipeline.title",
+      "section": "pipeline",
+      "text": {
+        "ru": "КАК МЫ РАБОТАЕМ С ГОЛОСОМ"
+      },
+      "lines": [
+        "КАК МЫ РАБОТАЕМ С ГОЛОСОМ"
+      ],
+      "box": {
+        "x": 336,
+        "y": 22,
+        "w": 217,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 336,
+        "baselineFirst": 33
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 14,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.9,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 2,
+      "maxChars": 34
+    },
+    {
+      "id": "pipeline.step1.label",
+      "section": "pipeline",
+      "text": {
+        "ru": "ЗАХВАТ ЗВУКА"
+      },
+      "lines": [
+        "ЗАХВАТ ЗВУКА"
+      ],
+      "box": {
+        "x": 356,
+        "y": 97,
+        "w": 100,
+        "h": 15
+      },
+      "anchor": {
+        "align": "left",
+        "x": 356,
+        "baselineFirst": 104
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 11.7,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.3,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 14
+    },
+    {
+      "id": "pipeline.step1.desc",
+      "section": "pipeline",
+      "text": {
+        "ru": "Микрофон устройства (локально)"
+      },
+      "lines": [
+        "Микрофон устройства",
+        "(локально)"
+      ],
+      "box": {
+        "x": 346,
+        "y": 112,
+        "w": 98,
+        "h": 47
+      },
+      "anchor": {
+        "align": "left",
+        "x": 346,
+        "baselineFirst": 122
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.5,
+        "lineHeight": 10,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 38
+    },
+    {
+      "id": "pipeline.step2.label",
+      "section": "pipeline",
+      "text": {
+        "ru": "ШУМОПОДАВЛЕНИЕ"
+      },
+      "lines": [
+        "ШУМОПОДАВЛЕНИЕ"
+      ],
+      "box": {
+        "x": 510,
+        "y": 97,
+        "w": 104,
+        "h": 15
+      },
+      "anchor": {
+        "align": "left",
+        "x": 510,
+        "baselineFirst": 104
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 11.7,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.3,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 16
+    },
+    {
+      "id": "pipeline.step2.desc",
+      "section": "pipeline",
+      "text": {
+        "ru": "AEC, VAD, фильтрация шумов"
+      },
+      "lines": [
+        "AEC, VAD, фильтрация",
+        "шумов"
+      ],
+      "box": {
+        "x": 482,
+        "y": 112,
+        "w": 95,
+        "h": 46
+      },
+      "anchor": {
+        "align": "left",
+        "x": 482,
+        "baselineFirst": 123
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.5,
+        "lineHeight": 10,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 33
+    },
+    {
+      "id": "pipeline.step3.label",
+      "section": "pipeline",
+      "text": {
+        "ru": "РАСПОЗНАВАНИЕ РЕЧИ"
+      },
+      "lines": [
+        "РАСПОЗНАВАНИЕ РЕЧИ"
+      ],
+      "box": {
+        "x": 632,
+        "y": 97,
+        "w": 106,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 632,
+        "baselineFirst": 105
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8,
+        "lineHeight": 10.4,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.3,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 21
+    },
+    {
+      "id": "pipeline.step3.desc",
+      "section": "pipeline",
+      "text": {
+        "ru": "ASR (онлайн/офлайн), разделение спикеров"
+      },
+      "lines": [
+        "ASR (онлайн/офлайн),",
+        "разделение спикеров"
+      ],
+      "box": {
+        "x": 596,
+        "y": 112,
+        "w": 103,
+        "h": 48
+      },
+      "anchor": {
+        "align": "left",
+        "x": 596,
+        "baselineFirst": 122
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.5,
+        "lineHeight": 10,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 50
+    },
+    {
+      "id": "pipeline.step4.label",
+      "section": "pipeline",
+      "text": {
+        "ru": "ПОНИМАНИЕ И АНАЛИЗ"
+      },
+      "lines": [
+        "ПОНИМАНИЕ И АНАЛИЗ"
+      ],
+      "box": {
+        "x": 746,
+        "y": 97,
+        "w": 106,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 746,
+        "baselineFirst": 104
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8,
+        "lineHeight": 10.4,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.3,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 21
+    },
+    {
+      "id": "pipeline.step4.desc",
+      "section": "pipeline",
+      "text": {
+        "ru": "NLP: намерения, факты, риски, возражения"
+      },
+      "lines": [
+        "NLP: намерения, факты,",
+        "риски, возражения"
+      ],
+      "box": {
+        "x": 715,
+        "y": 112,
+        "w": 102,
+        "h": 48
+      },
+      "anchor": {
+        "align": "left",
+        "x": 715,
+        "baselineFirst": 122
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.5,
+        "lineHeight": 10,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 50
+    },
+    {
+      "id": "pipeline.step5.label",
+      "section": "pipeline",
+      "text": {
+        "ru": "ГЕНЕРАЦИЯ ПОДСКАЗОК"
+      },
+      "lines": [
+        "ГЕНЕРАЦИЯ ПОДСКАЗОК"
+      ],
+      "box": {
+        "x": 861,
+        "y": 97,
+        "w": 108,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 861,
+        "baselineFirst": 104
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.75,
+        "lineHeight": 10.1,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.3,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 22
+    },
+    {
+      "id": "pipeline.step5.desc",
+      "section": "pipeline",
+      "text": {
+        "ru": "Короткие, уместные, с учётом контекста"
+      },
+      "lines": [
+        "Короткие, уместные,",
+        "с учётом контекста"
+      ],
+      "box": {
+        "x": 829,
+        "y": 112,
+        "w": 115,
+        "h": 48
+      },
+      "anchor": {
+        "align": "left",
+        "x": 829,
+        "baselineFirst": 123
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.5,
+        "lineHeight": 10,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 48
+    },
+    {
+      "id": "pipeline.step6.label",
+      "section": "pipeline",
+      "text": {
+        "ru": "ДОСТАВКА ПОДСКАЗОК"
+      },
+      "lines": [
+        "ДОСТАВКА",
+        "ПОДСКАЗОК"
+      ],
+      "box": {
+        "x": 952,
+        "y": 97,
+        "w": 74,
+        "h": 27
+      },
+      "anchor": {
+        "align": "left",
+        "x": 952,
+        "baselineFirst": 104
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 11.7,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.3,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 2,
+      "maxChars": 21
+    },
+    {
+      "id": "pipeline.step6.desc",
+      "section": "pipeline",
+      "text": {
+        "ru": "На устройство тихо и вовремя"
+      },
+      "lines": [
+        "На устройство тихо",
+        "и вовремя"
+      ],
+      "box": {
+        "x": 942,
+        "y": 121,
+        "w": 77,
+        "h": 45
+      },
+      "anchor": {
+        "align": "left",
+        "x": 942,
+        "baselineFirst": 133
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 7.5,
+        "lineHeight": 10,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 35
+    },
+    {
+      "id": "playbook.title",
+      "section": "playbook",
+      "text": {
+        "ru": "СЦЕНАРИЙ РАБОТЫ"
+      },
+      "lines": [
+        "СЦЕНАРИЙ РАБОТЫ"
+      ],
+      "box": {
+        "x": 28,
+        "y": 244,
+        "w": 196,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 28,
+        "baselineFirst": 260
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11,
+        "lineHeight": 13.8,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.8,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 17
+    },
+    {
+      "id": "playbook.prepare.title",
+      "section": "playbook",
+      "text": {
+        "ru": "ПОДГОТОВКА"
+      },
+      "lines": [
+        "ПОДГОТОВКА"
+      ],
+      "box": {
+        "x": 70,
+        "y": 273,
+        "w": 160,
+        "h": 18
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 285
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 12,
+        "lineHeight": 15,
+        "weight": 700,
+        "color": "#7ee04a",
+        "letterSpacing": 0.6,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 12
+    },
+    {
+      "id": "playbook.prepare.desc",
+      "section": "playbook",
+      "text": {
+        "ru": "Импорт материалов, заметок и документов"
+      },
+      "lines": [
+        "Импорт материалов, заметок",
+        "и документов"
+      ],
+      "box": {
+        "x": 70,
+        "y": 289,
+        "w": 139,
+        "h": 29
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 300
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 15.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 49
+    },
+    {
+      "id": "playbook.live.title",
+      "section": "playbook",
+      "text": {
+        "ru": "ЖИВОЙ РАЗГОВОР"
+      },
+      "lines": [
+        "ЖИВОЙ РАЗГОВОР"
+      ],
+      "box": {
+        "x": 70,
+        "y": 329,
+        "w": 160,
+        "h": 18
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 341
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 12,
+        "lineHeight": 15,
+        "weight": 700,
+        "color": "#7ee04a",
+        "letterSpacing": 0.6,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 16
+    },
+    {
+      "id": "playbook.live.desc",
+      "section": "playbook",
+      "text": {
+        "ru": "Magic Helper слушает, понимает и анализирует"
+      },
+      "lines": [
+        "Magic Helper слушает,",
+        "понимает и анализирует"
+      ],
+      "box": {
+        "x": 70,
+        "y": 346,
+        "w": 120,
+        "h": 29
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 359
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 15.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 55
+    },
+    {
+      "id": "playbook.cues.title",
+      "section": "playbook",
+      "text": {
+        "ru": "ПОДСКАЗКИ В МОМЕНТЕ"
+      },
+      "lines": [
+        "ПОДСКАЗКИ В МОМЕНТЕ"
+      ],
+      "box": {
+        "x": 70,
+        "y": 389,
+        "w": 160,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 401
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.25,
+        "lineHeight": 14.1,
+        "weight": 700,
+        "color": "#7ee04a",
+        "letterSpacing": 0.6,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 22
+    },
+    {
+      "id": "playbook.cues.desc",
+      "section": "playbook",
+      "text": {
+        "ru": "Даёт короткие подсказки: аргументы, вопросы, риски"
+      },
+      "lines": [
+        "Даёт короткие подсказки:",
+        "аргументы, вопросы, риски"
+      ],
+      "box": {
+        "x": 70,
+        "y": 406,
+        "w": 131,
+        "h": 29
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 417
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 15.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 63
+    },
+    {
+      "id": "playbook.capture.title",
+      "section": "playbook",
+      "text": {
+        "ru": "ФИКСАЦИЯ И ОБОГАЩЕНИЕ"
+      },
+      "lines": [
+        "ФИКСАЦИЯ И ОБОГАЩЕНИЕ"
+      ],
+      "box": {
+        "x": 70,
+        "y": 450,
+        "w": 160,
+        "h": 16
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 462
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10,
+        "lineHeight": 12.5,
+        "weight": 700,
+        "color": "#7ee04a",
+        "letterSpacing": 0.6,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 24
+    },
+    {
+      "id": "playbook.capture.desc",
+      "section": "playbook",
+      "text": {
+        "ru": "Автоматически создаёт транскрипцию, выделяет поворотные точки и факты"
+      },
+      "lines": [
+        "Автоматически создаёт",
+        "транскрипцию, выделяет",
+        "поворотные точки и факты"
+      ],
+      "box": {
+        "x": 70,
+        "y": 467,
+        "w": 130,
+        "h": 42
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 477
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 15.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 4,
+      "maxChars": 86
+    },
+    {
+      "id": "playbook.review.title",
+      "section": "playbook",
+      "text": {
+        "ru": "РАЗБОР И ОБУЧЕНИЕ"
+      },
+      "lines": [
+        "РАЗБОР И ОБУЧЕНИЕ"
+      ],
+      "box": {
+        "x": 70,
+        "y": 529,
+        "w": 160,
+        "h": 18
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 539
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 12,
+        "lineHeight": 15,
+        "weight": 700,
+        "color": "#7ee04a",
+        "letterSpacing": 0.6,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 20
+    },
+    {
+      "id": "playbook.review.desc",
+      "section": "playbook",
+      "text": {
+        "ru": "Глубокий разбор, сильные/слабые стороны, рекомендации"
+      },
+      "lines": [
+        "Глубокий разбор, сильные/слабые",
+        "стороны, рекомендации"
+      ],
+      "box": {
+        "x": 70,
+        "y": 545,
+        "w": 156,
+        "h": 29
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 557
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 15.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 66
+    },
+    {
+      "id": "playbook.private.title",
+      "section": "playbook",
+      "text": {
+        "ru": "ПРИВАТНО ПО УМОЛЧАНИЮ"
+      },
+      "lines": [
+        "ПРИВАТНО ПО УМОЛЧАНИЮ"
+      ],
+      "box": {
+        "x": 70,
+        "y": 597,
+        "w": 160,
+        "h": 16
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 607
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10,
+        "lineHeight": 12.5,
+        "weight": 700,
+        "color": "#7ee04a",
+        "letterSpacing": 0.6,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 24
+    },
+    {
+      "id": "playbook.private.desc",
+      "section": "playbook",
+      "text": {
+        "ru": "Данные хранятся локально или в защищённом виде"
+      },
+      "lines": [
+        "Данные хранятся локально",
+        "или в защищённом виде"
+      ],
+      "box": {
+        "x": 70,
+        "y": 613,
+        "w": 133,
+        "h": 28
+      },
+      "anchor": {
+        "align": "left",
+        "x": 70,
+        "baselineFirst": 624
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 15.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 58
+    },
+    {
+      "id": "files.title",
+      "section": "files",
+      "text": {
+        "ru": "ПОДДЕРЖИВАЕМЫЕ ФАЙЛЫ"
+      },
+      "lines": [
+        "ПОДДЕРЖИВАЕМЫЕ ФАЙЛЫ"
+      ],
+      "box": {
+        "x": 1049,
+        "y": 28,
+        "w": 206,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1049,
+        "baselineFirst": 41
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11,
+        "lineHeight": 13.8,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.8,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 23
+    },
+    {
+      "id": "files.docs.title",
+      "section": "files",
+      "text": {
+        "ru": "Документы"
+      },
+      "lines": [
+        "Документы"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 60,
+        "w": 160,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 73
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13.5,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 12
+    },
+    {
+      "id": "files.docs.formats",
+      "section": "files",
+      "text": {
+        "ru": "PDF, DOCX, TXT, PPTX"
+      },
+      "lines": [
+        "PDF, DOCX, TXT, PPTX"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 75,
+        "w": 160,
+        "h": 12
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 86
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 1,
+      "maxChars": 26,
+      "translate": false
+    },
+    {
+      "id": "files.sheets.title",
+      "section": "files",
+      "text": {
+        "ru": "Таблицы и отчёты"
+      },
+      "lines": [
+        "Таблицы и отчёты"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 105,
+        "w": 160,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 117
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13.5,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 21
+    },
+    {
+      "id": "files.sheets.formats",
+      "section": "files",
+      "text": {
+        "ru": "XLSX, CSV"
+      },
+      "lines": [
+        "XLSX, CSV"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 119,
+        "w": 160,
+        "h": 12
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 130
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 1,
+      "maxChars": 12,
+      "translate": false
+    },
+    {
+      "id": "files.images.title",
+      "section": "files",
+      "text": {
+        "ru": "Изображения и сканы"
+      },
+      "lines": [
+        "Изображения и сканы"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 150,
+        "w": 160,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 163
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13.5,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 25
+    },
+    {
+      "id": "files.images.formats",
+      "section": "files",
+      "text": {
+        "ru": "JPG, PNG, WEBP, TIFF"
+      },
+      "lines": [
+        "JPG, PNG, WEBP, TIFF"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 165,
+        "w": 160,
+        "h": 12
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 176
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 1,
+      "maxChars": 26,
+      "translate": false
+    },
+    {
+      "id": "files.media.title",
+      "section": "files",
+      "text": {
+        "ru": "Аудио и видео"
+      },
+      "lines": [
+        "Аудио и видео"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 195,
+        "w": 160,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 208
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13.5,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 17
+    },
+    {
+      "id": "files.media.formats",
+      "section": "files",
+      "text": {
+        "ru": "MP3, M4A, WAV, MP4, MOV"
+      },
+      "lines": [
+        "MP3, M4A, WAV, MP4, MOV"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 210,
+        "w": 160,
+        "h": 12
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 221
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 1,
+      "maxChars": 30,
+      "translate": false
+    },
+    {
+      "id": "files.links.title",
+      "section": "files",
+      "text": {
+        "ru": "Ссылки и статьи"
+      },
+      "lines": [
+        "Ссылки и статьи"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 240,
+        "w": 160,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 254
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13.5,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 20
+    },
+    {
+      "id": "files.links.formats",
+      "section": "files",
+      "text": {
+        "ru": "Веб-страницы, исследования"
+      },
+      "lines": [
+        "Веб-страницы, исследования"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 256,
+        "w": 160,
+        "h": 12
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 267
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 1,
+      "maxChars": 34
+    },
+    {
+      "id": "attachments.title",
+      "section": "attachments",
+      "text": {
+        "ru": "ЧТО МЫ ДЕЛАЕМ С ВЛОЖЕНИЯМИ"
+      },
+      "lines": [
+        "ЧТО МЫ ДЕЛАЕМ С ВЛОЖЕНИЯМИ"
+      ],
+      "box": {
+        "x": 1049,
+        "y": 298,
+        "w": 212,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1049,
+        "baselineFirst": 309
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13.1,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.8,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 30
+    },
+    {
+      "id": "attachments.ocr",
+      "section": "attachments",
+      "text": {
+        "ru": "Извлекаем текст и данные (OCR)"
+      },
+      "lines": [
+        "Извлекаем текст и данные (OCR)"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 329,
+        "w": 169,
+        "h": 20
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 346
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 38
+    },
+    {
+      "id": "attachments.index",
+      "section": "attachments",
+      "text": {
+        "ru": "Индексируем и понимаем смысл"
+      },
+      "lines": [
+        "Индексируем и понимаем смысл"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 372,
+        "w": 169,
+        "h": 19
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 388
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 35
+    },
+    {
+      "id": "attachments.link",
+      "section": "attachments",
+      "text": {
+        "ru": "Связываем с темой разговора"
+      },
+      "lines": [
+        "Связываем с темой разговора"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 413,
+        "w": 161,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 427
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 34
+    },
+    {
+      "id": "attachments.use",
+      "section": "attachments",
+      "text": {
+        "ru": "Используем в подсказках и разборе"
+      },
+      "lines": [
+        "Используем в подсказках",
+        "и разборе"
+      ],
+      "box": {
+        "x": 1078,
+        "y": 450,
+        "w": 160,
+        "h": 30
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1078,
+        "baselineFirst": 465
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 41
+    },
+    {
+      "id": "sources.title",
+      "section": "sources",
+      "text": {
+        "ru": "ИСТОЧНИКИ И ДОСТОВЕРНОСТЬ"
+      },
+      "lines": [
+        "ИСТОЧНИКИ И ДОСТОВЕРНОСТЬ"
+      ],
+      "box": {
+        "x": 1049,
+        "y": 508,
+        "w": 212,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1049,
+        "baselineFirst": 521
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11,
+        "lineHeight": 13.8,
+        "weight": 700,
+        "color": "#e9f2ec",
+        "letterSpacing": 0.8,
+        "textTransform": "uppercase"
+      },
+      "maxLines": 1,
+      "maxChars": 29
+    },
+    {
+      "id": "sources.public",
+      "section": "sources",
+      "text": {
+        "ru": "Публичный факт"
+      },
+      "lines": [
+        "Публичный факт"
+      ],
+      "box": {
+        "x": 1064,
+        "y": 534,
+        "w": 83,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1064,
+        "baselineFirst": 545
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 18
+    },
+    {
+      "id": "sources.personal",
+      "section": "sources",
+      "text": {
+        "ru": "Личная запись"
+      },
+      "lines": [
+        "Личная запись"
+      ],
+      "box": {
+        "x": 1064,
+        "y": 555,
+        "w": 73,
+        "h": 13
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1064,
+        "baselineFirst": 565
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 16
+    },
+    {
+      "id": "sources.ai",
+      "section": "sources",
+      "text": {
+        "ru": "AI-предположение"
+      },
+      "lines": [
+        "AI-предположение"
+      ],
+      "box": {
+        "x": 1064,
+        "y": 576,
+        "w": 94,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1064,
+        "baselineFirst": 587
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 20
+    },
+    {
+      "id": "sources.user",
+      "section": "sources",
+      "text": {
+        "ru": "Предположение пользователя"
+      },
+      "lines": [
+        "Предположение пользователя"
+      ],
+      "box": {
+        "x": 1064,
+        "y": 596,
+        "w": 151,
+        "h": 14
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1064,
+        "baselineFirst": 607
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9.5,
+        "lineHeight": 12,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 33
+    },
+    {
+      "id": "cycle.node1.badge",
+      "section": "cycle",
+      "text": {
+        "ru": "1"
+      },
+      "lines": [
+        "1"
+      ],
+      "box": {
+        "x": 521,
+        "y": 188,
+        "w": 16,
+        "h": 16
+      },
+      "anchor": {
+        "align": "center",
+        "x": 529,
+        "baselineFirst": 200
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 11.5,
+        "weight": 700,
+        "color": "#eef5f0"
+      },
+      "maxLines": 1,
+      "maxChars": 2,
+      "translate": false
+    },
+    {
+      "id": "cycle.node1.label",
+      "section": "cycle",
+      "text": {
+        "ru": "Подготовься"
+      },
+      "lines": [
+        "Подготовься"
+      ],
+      "box": {
+        "x": 459,
+        "y": 205,
+        "w": 140,
+        "h": 19
+      },
+      "anchor": {
+        "align": "center",
+        "x": 529,
+        "baselineFirst": 219
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 13.5,
+        "lineHeight": 17,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 14,
+      "note": "Подпись поверх фото — нужна тёмная тень (0 0 6px rgba(0,0,0,.9))"
+    },
+    {
+      "id": "cycle.node2.badge",
+      "section": "cycle",
+      "text": {
+        "ru": "2"
+      },
+      "lines": [
+        "2"
+      ],
+      "box": {
+        "x": 739,
+        "y": 188,
+        "w": 16,
+        "h": 16
+      },
+      "anchor": {
+        "align": "center",
+        "x": 747,
+        "baselineFirst": 200
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 11.5,
+        "weight": 700,
+        "color": "#eef5f0"
+      },
+      "maxLines": 1,
+      "maxChars": 2,
+      "translate": false
+    },
+    {
+      "id": "cycle.node2.label",
+      "section": "cycle",
+      "text": {
+        "ru": "Потренируйся"
+      },
+      "lines": [
+        "Потренируйся"
+      ],
+      "box": {
+        "x": 677,
+        "y": 205,
+        "w": 140,
+        "h": 19
+      },
+      "anchor": {
+        "align": "center",
+        "x": 747,
+        "baselineFirst": 219
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 13.5,
+        "lineHeight": 17,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 16,
+      "note": "Подпись поверх фото — нужна тёмная тень (0 0 6px rgba(0,0,0,.9))"
+    },
+    {
+      "id": "cycle.node3.badge",
+      "section": "cycle",
+      "text": {
+        "ru": "3"
+      },
+      "lines": [
+        "3"
+      ],
+      "box": {
+        "x": 803,
+        "y": 395,
+        "w": 16,
+        "h": 16
+      },
+      "anchor": {
+        "align": "center",
+        "x": 811,
+        "baselineFirst": 407
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 11.5,
+        "weight": 700,
+        "color": "#eef5f0"
+      },
+      "maxLines": 1,
+      "maxChars": 2,
+      "translate": false
+    },
+    {
+      "id": "cycle.node3.label",
+      "section": "cycle",
+      "text": {
+        "ru": "Проведи разговор"
+      },
+      "lines": [
+        "Проведи разговор"
+      ],
+      "box": {
+        "x": 753,
+        "y": 413,
+        "w": 140,
+        "h": 19
+      },
+      "anchor": {
+        "align": "center",
+        "x": 823,
+        "baselineFirst": 427
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 13.5,
+        "lineHeight": 17,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 21,
+      "note": "Подпись поверх фото — нужна тёмная тень (0 0 6px rgba(0,0,0,.9))"
+    },
+    {
+      "id": "cycle.node5.badge",
+      "section": "cycle",
+      "text": {
+        "ru": "5"
+      },
+      "lines": [
+        "5"
+      ],
+      "box": {
+        "x": 460,
+        "y": 476,
+        "w": 16,
+        "h": 16
+      },
+      "anchor": {
+        "align": "center",
+        "x": 468,
+        "baselineFirst": 488
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 11.5,
+        "weight": 700,
+        "color": "#eef5f0"
+      },
+      "maxLines": 1,
+      "maxChars": 2,
+      "translate": false
+    },
+    {
+      "id": "cycle.node5.label",
+      "section": "cycle",
+      "text": {
+        "ru": "Учись на исходе"
+      },
+      "lines": [
+        "Учись на исходе"
+      ],
+      "box": {
+        "x": 404,
+        "y": 498,
+        "w": 140,
+        "h": 19
+      },
+      "anchor": {
+        "align": "center",
+        "x": 474,
+        "baselineFirst": 512
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 13.5,
+        "lineHeight": 17,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 20,
+      "note": "Подпись поверх фото — нужна тёмная тень (0 0 6px rgba(0,0,0,.9))"
+    },
+    {
+      "id": "cycle.node4.badge",
+      "section": "cycle",
+      "text": {
+        "ru": "4"
+      },
+      "lines": [
+        "4"
+      ],
+      "box": {
+        "x": 692,
+        "y": 521,
+        "w": 16,
+        "h": 16
+      },
+      "anchor": {
+        "align": "center",
+        "x": 700,
+        "baselineFirst": 533
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 11.5,
+        "weight": 700,
+        "color": "#eef5f0"
+      },
+      "maxLines": 1,
+      "maxChars": 2,
+      "translate": false
+    },
+    {
+      "id": "cycle.node4.label",
+      "section": "cycle",
+      "text": {
+        "ru": "Разбери результат"
+      },
+      "lines": [
+        "Разбери результат"
+      ],
+      "box": {
+        "x": 636,
+        "y": 541,
+        "w": 140,
+        "h": 19
+      },
+      "anchor": {
+        "align": "center",
+        "x": 706,
+        "baselineFirst": 555
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 13.5,
+        "lineHeight": 17,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 22,
+      "note": "Подпись поверх фото — нужна тёмная тень (0 0 6px rgba(0,0,0,.9))"
+    },
+    {
+      "id": "cycle.hub.title",
+      "section": "cycle",
+      "text": {
+        "ru": "Magic Helper"
+      },
+      "lines": [
+        "Magic Helper"
+      ],
+      "box": {
+        "x": 588,
+        "y": 462,
+        "w": 104,
+        "h": 16
+      },
+      "anchor": {
+        "align": "center",
+        "x": 640,
+        "baselineFirst": 474
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 13,
+        "lineHeight": 16,
+        "weight": 600,
+        "color": "#7ee04a"
+      },
+      "maxLines": 2,
+      "maxChars": 15,
+      "translate": false
+    },
+    {
+      "id": "cycle.hub.desc",
+      "section": "cycle",
+      "text": {
+        "ru": "слушает и помогает в реальном времени"
+      },
+      "lines": [
+        "слушает и помогает",
+        "в реальном времени"
+      ],
+      "box": {
+        "x": 585,
+        "y": 478,
+        "w": 110,
+        "h": 28
+      },
+      "anchor": {
+        "align": "center",
+        "x": 640,
+        "baselineFirst": 488
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 9,
+        "lineHeight": 12.5,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 46
+    },
+    {
+      "id": "cards.brief.title",
+      "section": "cards",
+      "text": {
+        "ru": "Карточка разговора"
+      },
+      "lines": [
+        "Карточка",
+        "разговора"
+      ],
+      "box": {
+        "x": 340,
+        "y": 294,
+        "w": 112,
+        "h": 28
+      },
+      "anchor": {
+        "align": "center",
+        "x": 396,
+        "baselineFirst": 306
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 12,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 3,
+      "maxChars": 23
+    },
+    {
+      "id": "cards.brief.desc",
+      "section": "cards",
+      "text": {
+        "ru": "Структура, цели, факты, аргументы, сценарии"
+      },
+      "lines": [
+        "Структура, цели, факты,",
+        "аргументы, сценарии"
+      ],
+      "box": {
+        "x": 355,
+        "y": 329,
+        "w": 104,
+        "h": 29
+      },
+      "anchor": {
+        "align": "center",
+        "x": 407,
+        "baselineFirst": 339
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 12.5,
+        "weight": 500,
+        "color": "#a8bcae"
+      },
+      "maxLines": 3,
+      "maxChars": 52
+    },
+    {
+      "id": "cards.devil.title",
+      "section": "cards",
+      "text": {
+        "ru": "Адвокат дьявола и Steelman"
+      },
+      "lines": [
+        "Адвокат дьявола",
+        "и Steelman"
+      ],
+      "box": {
+        "x": 834,
+        "y": 292,
+        "w": 112,
+        "h": 29
+      },
+      "anchor": {
+        "align": "center",
+        "x": 890,
+        "baselineFirst": 304
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 12.5,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 3,
+      "maxChars": 33
+    },
+    {
+      "id": "cards.devil.desc",
+      "section": "cards",
+      "text": {
+        "ru": "Атака на свою позицию и сильнейшая версия позиции оппонента"
+      },
+      "lines": [
+        "Атака на свою позицию",
+        "и сильнейшая версия",
+        "позиции оппонента"
+      ],
+      "box": {
+        "x": 840,
+        "y": 327,
+        "w": 106,
+        "h": 42
+      },
+      "anchor": {
+        "align": "center",
+        "x": 893,
+        "baselineFirst": 337
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 12.5,
+        "weight": 500,
+        "color": "#a8bcae"
+      },
+      "maxLines": 4,
+      "maxChars": 71
+    },
+    {
+      "id": "cards.track.title",
+      "section": "cards",
+      "text": {
+        "ru": "Track Record и калибровка"
+      },
+      "lines": [
+        "Track Record",
+        "и калибровка"
+      ],
+      "box": {
+        "x": 292,
+        "y": 546,
+        "w": 112,
+        "h": 30
+      },
+      "anchor": {
+        "align": "center",
+        "x": 348,
+        "baselineFirst": 558
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 3,
+      "maxChars": 31
+    },
+    {
+      "id": "cards.track.desc",
+      "section": "cards",
+      "text": {
+        "ru": "История разговоров, метрики, кривая прогресса, калибровка решений"
+      },
+      "lines": [
+        "История разговоров,",
+        "метрики, кривая",
+        "прогресса, калибровка",
+        "решений"
+      ],
+      "box": {
+        "x": 298,
+        "y": 576,
+        "w": 100,
+        "h": 50
+      },
+      "anchor": {
+        "align": "center",
+        "x": 348,
+        "baselineFirst": 586
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 500,
+        "color": "#a8bcae"
+      },
+      "maxLines": 5,
+      "maxChars": 78
+    },
+    {
+      "id": "cards.insights.title",
+      "section": "cards",
+      "text": {
+        "ru": "Авторазбор и инсайты"
+      },
+      "lines": [
+        "Авторазбор",
+        "и инсайты"
+      ],
+      "box": {
+        "x": 802,
+        "y": 608,
+        "w": 112,
+        "h": 30
+      },
+      "anchor": {
+        "align": "center",
+        "x": 858,
+        "baselineFirst": 620
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10.5,
+        "lineHeight": 13,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 3,
+      "maxChars": 25
+    },
+    {
+      "id": "cards.insights.desc",
+      "section": "cards",
+      "text": {
+        "ru": "Транскрипция, факты, риски, поворотные точки, рекомендации"
+      },
+      "lines": [
+        "Транскрипция, факты, риски,",
+        "поворотные точки,",
+        "рекомендации"
+      ],
+      "box": {
+        "x": 791,
+        "y": 638,
+        "w": 134,
+        "h": 39
+      },
+      "anchor": {
+        "align": "center",
+        "x": 858,
+        "baselineFirst": 648
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 500,
+        "color": "#a8bcae"
+      },
+      "maxLines": 4,
+      "maxChars": 70
+    },
+    {
+      "id": "privacy.title",
+      "section": "privacyBanner",
+      "text": {
+        "ru": "Приватность / Safe Share"
+      },
+      "lines": [
+        "Приватность / Safe Share"
+      ],
+      "box": {
+        "x": 398,
+        "y": 696,
+        "w": 200,
+        "h": 20
+      },
+      "anchor": {
+        "align": "left",
+        "x": 398,
+        "baselineFirst": 713
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 16,
+        "lineHeight": 20,
+        "weight": 600,
+        "color": "#7ee04a"
+      },
+      "maxLines": 2,
+      "maxChars": 32
+    },
+    {
+      "id": "privacy.desc",
+      "section": "privacyBanner",
+      "text": {
+        "ru": "Сквозное шифрование · Локально-first · Вы решаете, чем и с кем делиться"
+      },
+      "lines": [
+        "Сквозное шифрование · Локально-first · Вы решаете, чем и с кем делиться"
+      ],
+      "box": {
+        "x": 397,
+        "y": 719,
+        "w": 441,
+        "h": 18
+      },
+      "anchor": {
+        "align": "left",
+        "x": 397,
+        "baselineFirst": 734
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 10,
+        "lineHeight": 13,
+        "weight": 400,
+        "color": "#a8bcae"
+      },
+      "maxLines": 2,
+      "maxChars": 88,
+      "note": "Разделители « · » сохранять"
+    },
+    {
+      "id": "footer.offline.title",
+      "section": "footer",
+      "text": {
+        "ru": "Работает офлайн"
+      },
+      "lines": [
+        "Работает офлайн"
+      ],
+      "box": {
+        "x": 89,
+        "y": 764,
+        "w": 103,
+        "h": 18
+      },
+      "anchor": {
+        "align": "left",
+        "x": 89,
+        "baselineFirst": 779
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 15,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 20
+    },
+    {
+      "id": "footer.offline.desc",
+      "section": "footer",
+      "text": {
+        "ru": "Основная обработка локально на устройстве"
+      },
+      "lines": [
+        "Основная обработка",
+        "локально на устройстве"
+      ],
+      "box": {
+        "x": 88,
+        "y": 784,
+        "w": 124,
+        "h": 30
+      },
+      "anchor": {
+        "align": "left",
+        "x": 88,
+        "baselineFirst": 795
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 51
+    },
+    {
+      "id": "footer.e2ee.title",
+      "section": "footer",
+      "text": {
+        "ru": "Сквозное шифрование"
+      },
+      "lines": [
+        "Сквозное шифрование"
+      ],
+      "box": {
+        "x": 291,
+        "y": 763,
+        "w": 138,
+        "h": 19
+      },
+      "anchor": {
+        "align": "left",
+        "x": 291,
+        "baselineFirst": 779
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 15,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 25
+    },
+    {
+      "id": "footer.e2ee.desc",
+      "section": "footer",
+      "text": {
+        "ru": "E2EE для аудио, текстов и вложений"
+      },
+      "lines": [
+        "E2EE для аудио, текстов",
+        "и вложений"
+      ],
+      "box": {
+        "x": 291,
+        "y": 783,
+        "w": 125,
+        "h": 29
+      },
+      "anchor": {
+        "align": "left",
+        "x": 291,
+        "baselineFirst": 796
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 43
+    },
+    {
+      "id": "footer.storage.title",
+      "section": "footer",
+      "text": {
+        "ru": "Выбор хранения"
+      },
+      "lines": [
+        "Выбор хранения"
+      ],
+      "box": {
+        "x": 510,
+        "y": 763,
+        "w": 151,
+        "h": 19
+      },
+      "anchor": {
+        "align": "left",
+        "x": 510,
+        "baselineFirst": 779
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 15,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 18
+    },
+    {
+      "id": "footer.storage.desc",
+      "section": "footer",
+      "text": {
+        "ru": "Локально или в облаке под вашим контролем"
+      },
+      "lines": [
+        "Локально или в облаке",
+        "под вашим контролем"
+      ],
+      "box": {
+        "x": 498,
+        "y": 783,
+        "w": 161,
+        "h": 30
+      },
+      "anchor": {
+        "align": "left",
+        "x": 498,
+        "baselineFirst": 794
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 51
+    },
+    {
+      "id": "footer.safeshare.title",
+      "section": "footer",
+      "text": {
+        "ru": "Safe Share"
+      },
+      "lines": [
+        "Safe Share"
+      ],
+      "box": {
+        "x": 710,
+        "y": 763,
+        "w": 64,
+        "h": 17
+      },
+      "anchor": {
+        "align": "left",
+        "x": 710,
+        "baselineFirst": 777
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 15,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 13,
+      "translate": false
+    },
+    {
+      "id": "footer.safeshare.desc",
+      "section": "footer",
+      "text": {
+        "ru": "Делитесь только тем, что выберете и с кем решите"
+      },
+      "lines": [
+        "Делитесь только тем,",
+        "что выберете и с кем решите"
+      ],
+      "box": {
+        "x": 710,
+        "y": 784,
+        "w": 152,
+        "h": 30
+      },
+      "anchor": {
+        "align": "left",
+        "x": 710,
+        "baselineFirst": 795
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 60
+    },
+    {
+      "id": "footer.integrations.title",
+      "section": "footer",
+      "text": {
+        "ru": "Интеграции"
+      },
+      "lines": [
+        "Интеграции"
+      ],
+      "box": {
+        "x": 914,
+        "y": 763,
+        "w": 159,
+        "h": 19
+      },
+      "anchor": {
+        "align": "left",
+        "x": 914,
+        "baselineFirst": 779
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 15,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 13
+    },
+    {
+      "id": "footer.integrations.desc",
+      "section": "footer",
+      "text": {
+        "ru": "Календарь, заметки, CRM, мессенджеры"
+      },
+      "lines": [
+        "Календарь, заметки, CRM,",
+        "мессенджеры"
+      ],
+      "box": {
+        "x": 914,
+        "y": 779,
+        "w": 159,
+        "h": 34
+      },
+      "anchor": {
+        "align": "left",
+        "x": 914,
+        "baselineFirst": 800
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 45
+    },
+    {
+      "id": "footer.growth.title",
+      "section": "footer",
+      "text": {
+        "ru": "Калибровка и рост"
+      },
+      "lines": [
+        "Калибровка и рост"
+      ],
+      "box": {
+        "x": 1109,
+        "y": 763,
+        "w": 115,
+        "h": 19
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1109,
+        "baselineFirst": 779
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 11.5,
+        "lineHeight": 15,
+        "weight": 600,
+        "color": "#e9f2ec"
+      },
+      "maxLines": 1,
+      "maxChars": 22
+    },
+    {
+      "id": "footer.growth.desc",
+      "section": "footer",
+      "text": {
+        "ru": "Модель учится на ваших разговорах"
+      },
+      "lines": [
+        "Модель учится на ваших",
+        "разговорах"
+      ],
+      "box": {
+        "x": 1109,
+        "y": 784,
+        "w": 126,
+        "h": 30
+      },
+      "anchor": {
+        "align": "left",
+        "x": 1109,
+        "baselineFirst": 796
+      },
+      "font": {
+        "family": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+        "size": 8.5,
+        "lineHeight": 11.5,
+        "weight": 400,
+        "color": "#8fa398"
+      },
+      "maxLines": 3,
+      "maxChars": 41
+    }
+  ]
+}
