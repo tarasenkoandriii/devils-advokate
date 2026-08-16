@@ -214,6 +214,8 @@ model Project {
   missingInformationChecks MissingInformationCheck[]
   // Пункт 25: Prediction vs Reality
   predictions Prediction[]
+  // Пункт 47: OutcomeScenario (§3.12 ТЗ)
+  outcomeScenarios OutcomeScenario[]
   // Пункт 38: Archetype Perspective Simulation
   archetypePerspectives ArchetypePerspective[]
   // Пункт 50: запланированные разговоры
@@ -739,6 +741,25 @@ model AIInference {
   generatedArchetypePerspectives ArchetypePerspective[]
   // Пункт 39: Person Communication Profile — признак, извлечённый этим выводом
   generatedCommunicationTraits PersonCommunicationTrait[]
+
+  // Обратные связи для поздних сущностей, которые хранят generatedByInferenceId
+  generatedBehaviorPrecedents BehaviorPrecedent[]
+  generatedOutcomeScenarios OutcomeScenario[]
+  generatedSparringMessages SparringMessage[]
+  generatedMotiveHypotheses MotiveHypothesis[]
+  generatedMaterialVersions MaterialVersion[]
+  generatedProtocols Protocol[]
+  generatedSituationalQuotes SituationalQuote[]
+  generatedSituationalAnecdotes SituationalAnecdote[]
+  generatedVenueRecommendations VenueRecommendation[]
+  generatedCompromiseSheets CompromiseSheet[]
+  generatedClosingMessages ClosingMessage[]
+  generatedWeatherForecasts WeatherForecast[]
+  generatedSchedulerAdvice SchedulerAdvice[]
+  generatedLiveHintEvents LiveHintEvent[]
+  generatedLiveManipulationFlags LiveManipulationFlag[]
+  generatedBreakingQuestionSets BreakingQuestionSet[]
+  generatedMaterialChatMessages MaterialChatMessage[]
 
   @@index([inferenceType])
   @@index([aiJobId])
