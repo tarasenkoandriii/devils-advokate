@@ -306,3 +306,6 @@ export function sandboxLinkQueueItem(itemId: string, conversationId: string) {
 export function getSandboxQueue() {
   return apiGet<{ queue: SandboxQueue | null }>('/admin/sandbox/queue');
 }
+export function sandboxRetryQueueItem(itemId: string) {
+  return apiPost<{ status: string; autoAnalysisError: string | null }>('/admin/sandbox/queue/retry', { itemId });
+}

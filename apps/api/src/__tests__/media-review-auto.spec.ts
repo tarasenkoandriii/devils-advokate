@@ -21,6 +21,7 @@ function makeFakePrisma() {
   const store = {
     items: new Map<string, any>(),
     queues: new Map<string, any>(),
+    jobs: new Map<string, any>(),
     conversations: new Map<string, any>(),
     participants: new Map<string, any>(),
     transcripts: new Map<string, any>(),
@@ -36,8 +37,20 @@ function makeFakePrisma() {
       findUnique: async ({ where }: any) => store.queues.get(where.id) ?? null,
     },
     mediaReviewQueueItem: {
-      findFirst: async ({ where }: any) =>
-        [...store.items.values()].find((i) => i.aiJobId === where.aiJobId) ?? null,
+      findFirst: async ({ where }: any) => {
+        if (where.aiJobId) {
+          return [...store.items.values()].find((i) => i.aiJobId === where.aiJobId) ?? null;
+        }
+        // retryAnalysis: поиск по id с проверкой владельца через queue
+        if (where.id) {
+          const item = store.items.get(where.id);
+          if (!item) return null;
+          const queue = store.queues.get(item.queueId);
+          if (where.queue?.userId && queue?.userId !== where.queue.userId) return null;
+          return { ...item, queue: queue ? { id: queue.id, projectId: queue.projectId } : undefined };
+        }
+        return null;
+      },
       findUniqueOrThrow: async ({ where }: any) => store.items.get(where.id),
       update: async ({ where, data }: any) => {
         const item = { ...store.items.get(where.id), ...data };
@@ -127,6 +140,9 @@ function makeFakePrisma() {
     },
     aIInference: {
       findUniqueOrThrow: async ({ where }: any) => store.inferences.get(where.id),
+    },
+    aIJob: {
+      findUnique: async ({ where }: any) => (store as any).jobs?.get(where.id) ?? null,
     },
     promptVersion: { findFirst: async () => null },
     $transaction: async (fn: (tx: unknown) => Promise<void>) => fn(prisma),
@@ -234,6 +250,67 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
     expect(req.userPrompt[0].ref).toEqual({ source: 'youtube', videoId: 'abc' });
     expect(prisma._store.items.get('item-1').status).toBe('PROCESSING');
     expect(prisma._store.items.get('item-1').aiJobId).toBe('job-1');
+  });
+});
+
+describe('retryAnalysis — повторный запуск после 429/сбоя (кнопка «Повторить»)', () => {
+  function seedFailedItem(prisma: any) {
+    prisma._store.queues.set('q1', { id: 'q1', userId: 'user-1', projectId: 'p1' });
+    prisma._store.conversations.set('conv-1', { id: 'conv-1', projectId: 'p1', status: 'FAILED' });
+    prisma._store.items.set('item-1', {
+      id: 'item-1', queueId: 'q1', youtubeVideoId: 'abc', title: 't',
+      durationSeconds: 300, publishedAt: null, createdAt: new Date(),
+      status: 'AWAITING_UPLOAD', conversationId: 'conv-1', aiJobId: 'job-old',
+      autoAnalysisError: 'провайдер отверг опрос задачи (HTTP 429 …)',
+    });
+    prisma._store.jobs.set('job-old', { id: 'job-old', status: 'FAILED' });
+  }
+
+  it('КЛЮЧЕВОЙ ТЕСТ: разговор ПЕРЕИСПОЛЬЗУЕТСЯ (ANALYZING, без дубликата), новая джоба, ошибка очищена', async () => {
+    const prisma = makeFakePrisma();
+    const aiRouter = {
+      enqueue: jest.fn(async () => ({ jobId: 'job-new' })),
+      registerOutputValidator: jest.fn(),
+      registerCompletionHandler: jest.fn(),
+    };
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    seedFailedItem(prisma);
+
+    const res = await svc.retryAnalysis('user-1', 'item-1');
+
+    expect(aiRouter.enqueue).toHaveBeenCalledTimes(1);
+    // Дубликат Conversation не создан — §6.1: один разговор на элемент.
+    expect(prisma._store.conversations.size).toBe(1);
+    expect(prisma._store.conversations.get('conv-1').status).toBe('ANALYZING');
+    const item = prisma._store.items.get('item-1');
+    expect(item.status).toBe('PROCESSING');
+    expect(item.aiJobId).toBe('job-new');
+    expect(item.autoAnalysisError).toBeNull();
+    expect(res.status).toBe('PROCESSING');
+  });
+
+  it('активная джоба (QUEUED/RUNNING) → отказ: двойная постановка = двойной счёт провайдеру', async () => {
+    const prisma = makeFakePrisma();
+    const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    seedFailedItem(prisma);
+    prisma._store.jobs.set('job-old', { id: 'job-old', status: 'RUNNING' });
+
+    await expect(svc.retryAnalysis('user-1', 'item-1')).rejects.toThrow(/выполняется/);
+    expect(aiRouter.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('чужой элемент неотличим от несуществующего; DONE не перезапускается', async () => {
+    const prisma = makeFakePrisma();
+    const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    seedFailedItem(prisma);
+
+    await expect(svc.retryAnalysis('someone-else', 'item-1')).rejects.toThrow(/не найден/);
+
+    prisma._store.items.get('item-1').status = 'DONE';
+    await expect(svc.retryAnalysis('user-1', 'item-1')).rejects.toThrow(/уже разобран/);
+    expect(aiRouter.enqueue).not.toHaveBeenCalled();
   });
 });
 

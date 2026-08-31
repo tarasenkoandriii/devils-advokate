@@ -55,6 +55,10 @@ class LinkQueueItemDto {
   conversationId!: string;
 }
 
+class RetryQueueItemDto {
+  itemId!: string;
+}
+
 @Controller('admin/sandbox')
 @UseGuards(AdminSessionGuard)
 @UseInterceptors(ApiResponseInterceptor)
@@ -132,5 +136,10 @@ export class AdminSandboxController {
   @Get('queue')
   async queue(@CurrentUser() userId: string) {
     return this.sandbox.getSandboxQueue(userId);
+  }
+
+  @Post('queue/retry')
+  async retryQueueItem(@CurrentUser() userId: string, @Body() dto: RetryQueueItemDto) {
+    return this.sandbox.retryQueueItem(userId, dto.itemId);
   }
 }

@@ -43,6 +43,7 @@ import { ConversationsService } from '../conversations/conversations.service';
 import { AudioBlobService } from '../conversations/audio-blob.service';
 import { YouTubeSearchService } from '../media-review/youtube-search.service';
 import { MediaReviewService } from '../media-review/media-review.service';
+import { MediaReviewAutoService } from '../media-review/media-review-auto.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 import { TurningPointsService } from '../turning-points/turning-points.service';
@@ -117,6 +118,7 @@ export class AdminSandboxService {
     private readonly audioBlob: AudioBlobService,
     private readonly youtube: YouTubeSearchService,
     private readonly mediaReview: MediaReviewService,
+    private readonly mediaReviewAuto: MediaReviewAutoService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
@@ -585,6 +587,18 @@ export class AdminSandboxService {
       }),
     );
     return { queue: { id: full.id, title: full.title, items } };
+  }
+
+  /** Повторный запуск автоматического разбора элемента песочной
+   * очереди — после 429/сбоя/сторожевой. Вся логика (владелец, guard
+   * активной джобы, переиспользование разговора) — в продовом
+   * MediaReviewAutoService.retryAnalysis: песочница ничего не обходит. */
+  async retryQueueItem(operatorUserId: string, itemId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!itemId?.trim()) {
+      throw new BadRequestException('itemId обязателен');
+    }
+    return this.mediaReviewAuto.retryAnalysis(operatorUserId, itemId.trim());
   }
 
   async getConversation(operatorUserId: string, conversationId: string) {

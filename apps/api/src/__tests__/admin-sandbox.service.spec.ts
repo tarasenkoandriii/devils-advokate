@@ -72,10 +72,13 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
       items: [{ id: 'item-1', youtubeVideoId: 'v1', title: 'T', status: 'READY', conversationId: 'conv-1' }],
     })),
   };
+  const mediaReviewAuto = {
+    retryAnalysis: jest.fn(async () => ({ status: 'PROCESSING', autoAnalysisError: null })),
+  };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
   const discrepancy = { detect: jest.fn(async () => ({ kind: 'disc' })) };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, manipulation, discrepancy, turningPoints };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, manipulation, discrepancy, turningPoints };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -87,6 +90,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.audioBlob as any,
     deps.youtube as any,
     deps.mediaReview as any,
+    deps.mediaReviewAuto as any,
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
@@ -338,6 +342,17 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     expect(res.queue?.items[0].segments).toBe(2);
     expect(res.queue?.items[0].signals).toBe(1);
     expect(res.queue?.items[0].autoAnalysisError).toBeNull();
+  });
+
+  it('«Повторить» делегируется продовому retryAnalysis с userId оператора; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const res = await svc.retryQueueItem(OPERATOR, 'item-1');
+    expect(deps.mediaReviewAuto.retryAnalysis).toHaveBeenCalledWith(OPERATOR, 'item-1');
+    expect(res.status).toBe('PROCESSING');
+
+    await expect(svc.retryQueueItem(REGULAR, 'item-1')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('очереди ещё нет — честный null, а не создание пустой при каждом просмотре', async () => {

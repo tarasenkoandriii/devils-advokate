@@ -29,6 +29,7 @@ import {
   sandboxAddToQueue,
   sandboxLinkQueueItem,
   getSandboxQueue,
+  sandboxRetryQueueItem,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -161,6 +162,22 @@ export default function SandboxPage() {
     getSandboxQueue().then((r) => setQueue(r.queue)).catch(() => undefined);
   }, []);
   useEffect(loadQueue, [loadQueue]);
+
+  const [retryingItem, setRetryingItem] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  async function handleRetryItem(itemId: string) {
+    setRetryingItem(itemId);
+    setRetryError(null);
+    try {
+      await sandboxRetryQueueItem(itemId);
+      loadQueue();
+    } catch (e) {
+      setRetryError(errText(e));
+    } finally {
+      setRetryingItem(null);
+    }
+  }
 
   async function handleAddToQueue(video: SandboxYouTubeResult) {
     setAddingToQueue(video.videoId);
@@ -383,9 +400,10 @@ export default function SandboxPage() {
             честный ноль: модели запрещено выдумывать их ради количества, короткий развлекательный ролик
             часто чист. Содержимое разбора смотрите в TMA («Разбор публичных видео») или по conversationId.
           </p>
+          {retryError && <p style={{ color: 'var(--signal-critical)' }}>{retryError}</p>}
           <table>
             <thead>
-              <tr><th>Ролик</th><th>Статус</th><th>Разбор</th><th>Разговор</th></tr>
+              <tr><th>Ролик</th><th>Статус</th><th>Разбор</th><th>Разговор</th><th></th></tr>
             </thead>
             <tbody>
               {queue.items.map((item) => (
@@ -414,6 +432,22 @@ export default function SandboxPage() {
                       : '—'}
                   </td>
                   <td className="muted">{item.conversationId ? <code>{item.conversationId}</code> : 'файл не привязан'}</td>
+                  <td>
+                    {/* Повторная постановка — только для элементов, чей
+                        разбор упал (429/400/сторожевая). DONE не
+                        перезапускаем (перезаписал бы готовый разбор),
+                        PROCESSING защищён на сервере от двойного счёта. */}
+                    {item.status !== 'DONE' && item.status !== 'PROCESSING' && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryItem(item.id)}
+                        disabled={retryingItem !== null}
+                        title="Поставить автоматический разбор заново (после квоты/сбоя)"
+                      >
+                        {retryingItem === item.id ? 'Ставим…' : 'Повторить'}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

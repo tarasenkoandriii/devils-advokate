@@ -10,10 +10,11 @@
 // (onModuleInit → registerCompletionHandler). Роутер про media-review
 // не знает ничего — зависимость односторонняя.
 
-import { ForbiddenException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AsyncJobOutcome } from '../ai-router/ai-router.service';
 import {
+  AIJobStatus,
   ConversationProcessingStatus,
   ConversationSignalType,
   ConversationSourceType,
@@ -167,6 +168,9 @@ export class MediaReviewAutoService implements OnModuleInit {
       durationSeconds: number | null;
       publishedAt: Date | null;
       createdAt: Date;
+      /** Ретрай передаёт существующий разговор — он переиспользуется,
+       * а не дублируется (§6.1: один Conversation на элемент). */
+      conversationId?: string | null;
     },
   ): Promise<void> {
     // §6.5: длительность известна ДО вызова из метаданных YouTube —
@@ -195,19 +199,30 @@ export class MediaReviewAutoService implements OnModuleInit {
       // Conversation создаётся НАМИ, не пользователем — для этого
       // очередь и получила projectId (§6.1.1). occurredAt — из
       // publishedAt ролика (когда разговор реально состоялся), с
-      // фолбэком на момент добавления (§6.1 [R2]).
-      const conversation = await this.prisma.conversation.create({
-        data: {
-          projectId: queue.projectId,
-          sourceType: ConversationSourceType.PUBLIC_VIDEO_URI,
-          status: ConversationProcessingStatus.ANALYZING,
-          occurredAt: item.publishedAt ?? item.createdAt,
-          durationSeconds: item.durationSeconds,
-          // rawFileRef — «клиентская ссылка на первоисточник, не сам
-          // файл»: YouTube-ссылка ложится в него по прямому назначению.
-          rawFileRef: `https://www.youtube.com/watch?v=${item.youtubeVideoId}`,
-        },
-      });
+      // фолбэком на момент добавления (§6.1 [R2]). При ретрае разговор
+      // уже существует (FAILED после прошлой попытки) — возвращаем его
+      // в ANALYZING вместо создания дубликата.
+      let conversationId = item.conversationId ?? null;
+      if (conversationId) {
+        await this.prisma.conversation.update({
+          where: { id: conversationId },
+          data: { status: ConversationProcessingStatus.ANALYZING },
+        });
+      } else {
+        const conversation = await this.prisma.conversation.create({
+          data: {
+            projectId: queue.projectId,
+            sourceType: ConversationSourceType.PUBLIC_VIDEO_URI,
+            status: ConversationProcessingStatus.ANALYZING,
+            occurredAt: item.publishedAt ?? item.createdAt,
+            durationSeconds: item.durationSeconds,
+            // rawFileRef — «клиентская ссылка на первоисточник, не сам
+            // файл»: YouTube-ссылка ложится в него по прямому назначению.
+            rawFileRef: `https://www.youtube.com/watch?v=${item.youtubeVideoId}`,
+          },
+        });
+        conversationId = conversation.id;
+      }
 
       const activePrompt = await this.prisma.promptVersion.findFirst({
         where: { promptId: MEDIA_PUBLIC_REVIEW_TASK_TYPE, status: 'ACTIVE' },
@@ -232,7 +247,7 @@ export class MediaReviewAutoService implements OnModuleInit {
         where: { id: item.id },
         data: {
           status: MediaReviewItemStatus.PROCESSING,
-          conversationId: conversation.id,
+          conversationId,
           aiJobId: jobId,
           autoAnalysisError: null,
         },
@@ -248,6 +263,49 @@ export class MediaReviewAutoService implements OnModuleInit {
       });
       this.logger.warn(`Auto-analysis enqueue failed for item ${item.id}: ${err}`);
     }
+  }
+
+  /** Повторный запуск автоматического разбора по запросу пользователя —
+   * для элементов, чей прошлый разбор упал (квота 429, форма запроса,
+   * сторожевая). Появился после первого живого прогона: до пополнения
+   * баланса Gemini элементы честно откатывались в AWAITING_UPLOAD, и
+   * кроме SQL их было нечем перезапустить. Разговор переиспользуется,
+   * дубликат не создаётся; активную джобу не перебиваем — двойная
+   * постановка = двойной счёт провайдеру (§4.5). */
+  async retryAnalysis(
+    userId: string,
+    itemId: string,
+  ): Promise<{ status: MediaReviewItemStatus; autoAnalysisError: string | null }> {
+    const item = await this.prisma.mediaReviewQueueItem.findFirst({
+      where: { id: itemId, queue: { userId } },
+      include: { queue: { select: { id: true, projectId: true } } },
+    });
+    if (!item) {
+      // Чужой элемент неотличим от несуществующего — тот же принцип,
+      // что в getJobForUser.
+      throw new BadRequestException('Элемент очереди не найден');
+    }
+    if (item.status === MediaReviewItemStatus.DONE) {
+      throw new BadRequestException('Элемент уже разобран — повторный запуск перезаписал бы готовый разбор');
+    }
+    if (item.aiJobId) {
+      const job = await this.prisma.aIJob.findUnique({ where: { id: item.aiJobId } });
+      if (job && (job.status === AIJobStatus.QUEUED || job.status === AIJobStatus.RUNNING)) {
+        throw new BadRequestException(
+          'Предыдущий разбор ещё выполняется — дождитесь его завершения (зависшую джобу сторожевая закроет не позднее чем через 2 часа)',
+        );
+      }
+    }
+
+    // Те же проверки длительности и тот же путь постановки, что при
+    // первом запуске; отказ ложится в autoAnalysisError, не бросает.
+    await this.tryEnqueueAnalysis(userId, item.queue, item);
+
+    const refreshed = await this.prisma.mediaReviewQueueItem.findUniqueOrThrow({
+      where: { id: itemId },
+      select: { status: true, autoAnalysisError: true },
+    });
+    return refreshed;
   }
 
   /** Обработчик завершения асинхронной джобы (вызывается воркером
