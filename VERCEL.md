@@ -91,6 +91,34 @@
 > секция `"builds"` уберёт проверку, но заодно отключит zero-config и
 > сломает подхват функций из `api/`.
 
+> ### ⚠️ Рантайм-ошибка: `FUNCTION_INVOCATION_FAILED` на любом запросе
+>
+> Сборка прошла, но каждый запрос отдаёт «This Serverless Function has
+> crashed». В Runtime Logs (Vercel → проект → Logs) видно настоящую
+> причину. Два реальных случая, оба уже закрыты в коде:
+>
+> **1. `Nest can't resolve dependencies of the SecretsService … argument
+> Object at index [1]`** — приложение не собиралось в DI-контейнере
+> вообще, ни в проде, ни локально. Второй параметр конструктора был
+> объявлен как `ttlMs = 5 * 60 * 1000` без аннотации типа; tsc эмитит
+> для такого параметра `design:paramtypes` = `Object`, Nest читает это
+> как зависимость и ищет провайдер с токеном `Object`. Исправлено
+> (`@Optional() @Inject(SECRETS_CACHE_TTL_MS) ttlMs?: number`), разбор —
+> в комментарии в `src/secrets/secrets.service.ts`, регрессия закрыта
+> тестом `src/__tests__/app-bootstrap.spec.ts`.
+>
+> **2. Ошибка Prisma при старте.** `PrismaService` вызывал `$connect()`
+> в `onModuleInit`, то есть подключался к базе на каждом холодном
+> старте, до маршрутизации. Любая проблема с базой (неверный
+> `DATABASE_URL`, ограничение по IP, исчерпанный пул) роняла функцию
+> целиком, включая эндпоинты, которым база не нужна. Теперь подключение
+> ленивое — ошибка приходит на том эндпоинте, который реально пошёл в
+> базу, и отдаётся нормальным JSON через `ApiExceptionFilter`.
+>
+> Если крашится что-то ещё — сначала Runtime Logs, а не гадание: там
+> будет исходный стек. Локально то же самое воспроизводится за минуту:
+> `cd apps/api && npx nest build && node -e "require('./dist/src/create-app').createNestApp()"`.
+
 Root Directory — настройка уровня Vercel dashboard, не выражается в `vercel.json` — если создаёте проект через `vercel` CLI, а не dashboard, укажите её там же при первой инициализации (`vercel link`, вопрос "In which directory is your code located?").
 
 ---
