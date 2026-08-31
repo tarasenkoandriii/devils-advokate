@@ -17,7 +17,7 @@
 2. В Vercel: **Add New → Project**, выбрать репозиторий — **четырежды**, для четырёх проектов.
 3. **Проект 1 — API**:
    - Root Directory: `apps/api`
-   - Framework Preset: **Other** (Vercel не распознает NestJS автоматически)
+   - Framework Preset: **Other** — и это критично, см. врезку ниже
    - Build Command: оставить дефолтным (Vercel возьмёт `buildCommand` из `apps/api/vercel.json` — `npm run vercel-build`, который делает только `prisma generate`, не пытается собрать весь Nest через `nest build`, так как реальная точка входа на Vercel — `api/index.ts`, не `dist/main.js`)
    - Output Directory: оставить пустым
 4. **Проект 2 — TMA**:
@@ -33,6 +33,33 @@
    - Framework Preset: **Next.js**
    - Build/Output Command — дефолтные
    - Домен этого проекта ОБЯЗАН быть в `CORS_ORIGIN` проекта API: админка ходит в API с `credentials: 'include'`, и без этого cookie `admin_session` браузером не отправится
+
+> ### ⚠️ Ошибка сборки: «No entrypoint found which imports nestjs»
+>
+> ```
+> Error: No entrypoint found which imports nestjs. Found possible entrypoint: src/main.ts
+> ```
+>
+> Появляется, когда Vercel применяет к проекту **нативный Nest-пресет**.
+> Утверждение «Vercel не распознаёт NestJS автоматически» (стояло в этой
+> инструкции раньше) устарело: пресет теперь есть, и проект под него
+> подпадает — в зависимостях `@nestjs/core`, в корне `nest-cli.json`.
+>
+> Дальше срабатывает наша собственная особенность: Nest-билдер ищет
+> файл, который импортирует `@nestjs/*`, а `src/main.ts` импортирует
+> только `./create-app` — `NestFactory` вынесен в `create-app.ts`, чтобы
+> локальный запуск и serverless создавали приложение одинаково. Файл
+> найден, нужного импорта в нём нет — сборка падает.
+>
+> **Чинить импортами не нужно.** На Vercel точка входа вообще не
+> `src/main.ts`, а `api/index.ts` (serverless-обёртка) плюс `rewrites`
+> из `vercel.json`; Nest-пресет этой схеме не нужен и только мешает.
+>
+> В репозитории это зафиксировано — `apps/api/vercel.json` содержит
+> `"framework": null` (то же самое, что Framework Preset = **Other**),
+> и настройки из `vercel.json` перекрывают дашборд. Если проект уже
+> создан со старой конфигурацией: **Settings → Build & Deployment →
+> Framework Preset → Other**, затем Redeploy.
 
 Root Directory — настройка уровня Vercel dashboard, не выражается в `vercel.json` — если создаёте проект через `vercel` CLI, а не dashboard, укажите её там же при первой инициализации (`vercel link`, вопрос "In which directory is your code located?").
 
