@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma/prisma.module';
+import { HealthzModule } from './healthz/healthz.module';
 import { SecretsModule } from './secrets/secrets.module';
 import { ConsentModule } from './consent/consent.module';
 import { ContentScanModule } from './content-scan/content-scan.module';
@@ -94,6 +95,7 @@ import { DtpModule } from './dtp/dtp.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    HealthzModule, // GET /healthz — публичная проверка живости (повторный аудит 2026-08-31)
     SecretsModule,
     ConsentModule,
     ContentScanModule,

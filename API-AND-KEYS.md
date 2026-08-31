@@ -220,6 +220,9 @@ FACT_CHECK_TOOLS_API_KEY=""  # опционально
 ### 2.5 Как проверить, что цепочка собралась
 
 ```bash
+# 0. API вообще жив? (публично, авторизация не нужна)
+curl -s http://localhost:3000/healthz | jq
+
 # 1. поиск (проверяет YOUTUBE_API_KEY и квоту)
 curl -s "http://localhost:3000/media-review/youtube-search?query=дебаты" \
   -H 'X-Dev-User-Id: 123' | jq '.data[0]'

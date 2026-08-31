@@ -178,6 +178,13 @@ make reset                # снести том с БД и поднять зан
 | `package.json` (зависимости) | **`make reset`** | анонимные тома `node_modules` переносятся на новый контейнер при пересоздании, то есть `make up` их не обновит. `down -v` — единственный способ их выбросить |
 | Dockerfile, compose | `make up` | пересборка образа |
 
+Проверить, что API жив (публичный эндпоинт, авторизация не нужна):
+
+```bash
+curl -s http://localhost:3000/healthz | jq
+# {"success":true,"data":{"status":"ok","startedAt":"…","uptimeSeconds":12}}
+```
+
 Запрос к API напрямую — тем же заголовком, что использует TMA:
 
 ```bash
