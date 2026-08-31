@@ -36,7 +36,7 @@ import {
   listPeople,
   listTurningPoints,
   requestTranscription,
-  uploadConversationAudio,
+  uploadConversationAudioToBlob,
 } from '../lib/features';
 import {
   BestNextMoveRecommendation,
@@ -148,6 +148,8 @@ function AddConversationForm({
   // показывается ДО загрузки: пользователь видит, что именно произойдёт
   // с файлом, а не сообщение об ошибке после нажатия кнопки.
   const [needsConsent, setNeedsConsent] = useState(false);
+  // Пункт [blob-upload] 2026-08-31 — проценты прямой загрузки в blob.
+  const [uploadPercent, setUploadPercent] = useState(0);
 
   const busy = step !== 'idle';
 
@@ -171,10 +173,19 @@ function AddConversationForm({
       });
 
       setStep('uploading');
-      const { audioUrl } = await uploadConversationAudio(conversation.id, file);
+      setUploadPercent(0);
+      // Пункт [blob-upload] 2026-08-31: файл идёт напрямую в приватное
+      // хранилище, минуя наш API — иначе на Vercel он упирается в лимит
+      // 4,5 МБ на тело запроса к функции (см.
+      // uploadConversationAudioToBlob в lib/features.ts). Прогресс
+      // показывается потому, что теперь грузятся файлы, для которых
+      // «Загружаем файл…» без цифры неотличимо от зависания.
+      await uploadConversationAudioToBlob(conversation.id, file, setUploadPercent);
 
       setStep('transcribing');
-      await requestTranscription(conversation.id, { audioUrl });
+      // audioUrl не передаётся намеренно: бэкенд возьмёт только что
+      // загруженный файл и сам сделает для него подписанную ссылку.
+      await requestTranscription(conversation.id);
 
       haptic('success');
       onDone();
@@ -231,9 +242,18 @@ function AddConversationForm({
         />
       </label>
 
+      {/* Пункт [blob-upload] 2026-08-31 — текст исправлен, потому что
+          прежний перестал быть правдой. Раньше байты шли транзитом
+          через наш сервер провайдеру и нигде не задерживались. Теперь
+          файл действительно лежит в приватном хранилище — от загрузки
+          до конца расшифровки. Оставить прежнюю формулировку было бы
+          хуже любого технического долга: пользователь принимает
+          решение о записи разговора на основании ровно этой строки. */}
       <p className="conversations-section__privacy-note">
-        Файл передаётся напрямую провайдеру расшифровки и не сохраняется на нашем сервере
-        (раздел «Приватность» — центр приватности проекта).
+        Файл загружается в приватное хранилище (публичной ссылки на него не существует),
+        оттуда его читает провайдер расшифровки по ссылке с коротким сроком действия.
+        Сразу после расшифровки файл удаляется — остаётся только текст. Подробности и
+        отзыв согласий — в разделе «Приватность».
       </p>
 
       {error && <p className="generation-error">{error}</p>}
@@ -242,7 +262,7 @@ function AddConversationForm({
         <button type="button" onClick={handleSubmit} disabled={busy || !file}>
           {step === 'idle' && 'Загрузить и расшифровать'}
           {step === 'creating' && 'Создаём запись…'}
-          {step === 'uploading' && 'Загружаем файл…'}
+          {step === 'uploading' && `Загружаем файл… ${Math.round(uploadPercent)}%`}
           {step === 'transcribing' && 'Запускаем расшифровку…'}
         </button>
         <button type="button" onClick={onCancel} disabled={busy}>

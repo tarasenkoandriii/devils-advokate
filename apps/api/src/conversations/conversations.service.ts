@@ -23,9 +23,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { TranscriptionService, AssemblyAiWebhookPayload } from './transcription.service';
+import { AudioBlobService } from './audio-blob.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
 import { ConversationProcessingStatus } from '@prisma/client';
+import { publicApiBaseUrl } from '../common/public-base-url';
 
 @Injectable()
 export class ConversationsService {
@@ -34,6 +36,7 @@ export class ConversationsService {
     private readonly secrets: SecretsService,
     private readonly consent: ConsentService,
     private readonly transcription: TranscriptionService,
+    private readonly audioBlob: AudioBlobService,
   ) {}
 
   async create(userId: string, projectId: string, dto: CreateConversationDto) {
@@ -94,12 +97,18 @@ export class ConversationsService {
     // того, что часть точек осталась без неё.
     await this.consent.assertAudioMayLeaveDevice(userId, conversation.projectId);
 
+    // Пункт [blob-upload] 2026-08-31 — два возможных источника файла,
+    // выбор явный, а не «что нашлось». Обоснование — в
+    // dto/request-transcription.dto.ts, реализация — в
+    // resolveAudioUrl() ниже.
+    const audioUrl = await this.resolveAudioUrl(conversation, dto);
+
     const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
 
     const webhookUrl = this.buildWebhookUrl(conversationId);
     const { externalJobId } = await this.transcription.submitJob(apiKey, {
-      audioUrl: dto.audioUrl,
+      audioUrl,
       webhookUrl,
       languageCode: dto.languageCode,
     });
@@ -157,6 +166,14 @@ export class ConversationsService {
         where: { id: conversation.id },
         data: { status: ConversationProcessingStatus.FAILED },
       });
+      // Пункт [blob-upload] 2026-08-31: удаление ОБЯЗАТЕЛЬНО и на ветке
+      // ошибки тоже. Соблазн «оставим файл, вдруг пользователь захочет
+      // повторить» — ровно тот механизм, которым транзитный буфер
+      // незаметно превращается в хранилище записей разговоров: на
+      // ошибках файлы копятся дольше всего и вспоминают о них позже
+      // всего. Повторная попытка = повторная загрузка, это дешевле
+      // честности насчёт того, что мы храним.
+      await this.audioBlob.releaseConversationAudio(conversation.id, conversation.audioBlobPathname);
       return { acknowledged: true, matched: true };
     }
 
@@ -222,6 +239,18 @@ export class ConversationsService {
       data: { status: ConversationProcessingStatus.TRANSCRIBED },
     });
 
+    // Пункт [blob-upload] 2026-08-31 — файл больше не нужен: транскрипт
+    // получен и лежит в БД, а исходное аудио дальше по конвейеру
+    // (анализ манипуляций/расхождений/поворотных точек) не участвует
+    // вовсе — все три работают с текстом сегментов. Удаляем сразу, не
+    // дожидаясь TTL: §2 ТЗ про «сырые файлы не хранятся» соблюдается
+    // тем, что окно существования файла равно длительности
+    // транскрибации, а не сроку жизни разговора.
+    //
+    // Стоит ПОСЛЕ записи транскрипта намеренно: если удаление
+    // подвесится или упадёт, потерять можно файл, но не результат.
+    await this.audioBlob.releaseConversationAudio(conversation.id, conversation.audioBlobPathname);
+
     return { acknowledged: true, matched: true };
   }
 
@@ -249,6 +278,51 @@ export class ConversationsService {
 
     const uploadUrl = await this.transcription.streamUpload(apiKey, fileStream);
     return { audioUrl: uploadUrl };
+  }
+
+  /** Пункт [blob-upload] 2026-08-31 — подтверждение прямой загрузки в
+   * Blob (шаг 3 протокола, см. шапку audio-blob.service.ts). Тонкая
+   * делегация: вся логика проверок в AudioBlobService, здесь метод
+   * существует только для того, чтобы у контроллера был один сервис
+   * разговоров, а не два. */
+  async confirmAudioUpload(userId: string, conversationId: string, input: { pathname: string }) {
+    return this.audioBlob.confirmUpload(userId, conversationId, input);
+  }
+
+  /** Выбор источника аудио для AssemblyAI. Оба варианта валидны, но
+   * ровно один за раз — см. dto/request-transcription.dto.ts.
+   *
+   * Порядок проверок важен: сначала отсекается неоднозначность, потом
+   * пустота. Если сделать наоборот, запрос с двумя источниками прошёл
+   * бы «успешно», молча выбрав один. */
+  private async resolveAudioUrl(
+    conversation: { id: string; audioBlobPathname: string | null },
+    dto: RequestTranscriptionDto,
+  ): Promise<string> {
+    const explicitUrl = dto.audioUrl?.trim();
+
+    if (explicitUrl && conversation.audioBlobPathname) {
+      throw new ForbiddenException(
+        'Для разговора одновременно указан audioUrl и загружен файл в хранилище — неясно, что расшифровывать. ' +
+          'Либо не передавайте audioUrl (будет использован загруженный файл), либо загрузите файл заново.',
+      );
+    }
+
+    if (explicitUrl) return explicitUrl;
+
+    if (conversation.audioBlobPathname) {
+      // Подписанная ссылка живёт часы, не вечно, и не существует нигде,
+      // кроме тела запроса к AssemblyAI — в БД она не сохраняется
+      // намеренно: хранить действующую ссылку на приватный файл рядом
+      // с самим фактом его существования означало бы свести приватность
+      // стора к нулю.
+      return this.audioBlob.presignForTranscription(conversation.audioBlobPathname);
+    }
+
+    throw new ForbiddenException(
+      'Для разговора нет аудио: сначала загрузите файл (POST /conversations/:id/audio-upload-token → загрузка в хранилище → ' +
+        'POST /conversations/:id/audio-blob) либо передайте готовый audioUrl.',
+    );
   }
 
   private async findOwnedConversation(userId: string, conversationId: string) {
@@ -319,12 +393,11 @@ export class ConversationsService {
   }
 
   private buildWebhookUrl(conversationId: string): string {
-    const base = process.env.API_PUBLIC_BASE_URL;
-    if (!base) {
-      throw new Error(
-        'API_PUBLIC_BASE_URL is not set — required to build a webhook URL AssemblyAI can call back',
-      );
-    }
+    // 2026-08-31: разбор и нормализация переехали в
+    // common/public-base-url.ts — три копии этой склейки расходились
+    // между собой, и слэш на конце значения (самый частый способ его
+    // испортить) давал двойной слэш в пути вебхука. Обоснование там.
+    const base = publicApiBaseUrl();
     return `${base}/conversations/webhook/transcription?conversationId=${conversationId}`;
   }
 }

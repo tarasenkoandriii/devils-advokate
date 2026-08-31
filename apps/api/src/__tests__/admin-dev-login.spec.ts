@@ -69,7 +69,7 @@ function createFakePrisma() {
 }
 
 function makeService(prisma: any) {
-  const config = { getOrThrow: () => 'unused-bot-token' } as any;
+  const config = { get: () => undefined, getOrThrow: () => 'unused-bot-token' } as any;
   return new AdminAuthService(prisma as any, config);
 }
 

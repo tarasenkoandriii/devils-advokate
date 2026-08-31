@@ -46,6 +46,11 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Хост берётся в эффекте, а не прямо в разметке: страница
+  // пререндерится на сервере, где window нет, и подстановка «по месту»
+  // дала бы разный HTML на сервере и клиенте — hydration mismatch.
+  const [host, setHost] = useState<string | null>(null);
+  useEffect(() => setHost(window.location.host), []);
 
   // Docker dev-запуск (DOCKER.md): та же обработка ответа, что и у
   // виджета, — общий setSubmitting/setError/replace, чтобы два входа не
@@ -143,6 +148,21 @@ export default function LoginPage() {
               заведений. Тот же аккаунт, что и <code>X-Dev-User-Id: {DEV_USER_ID}</code> в TMA.
             </p>
           </div>
+        )}
+
+        {BOT_USERNAME && (
+          // Виджет Telegram рисуется в собственном iframe, и его ошибки
+          // (в первую очередь «Bot domain invalid») мы перехватить не
+          // можем — там просто появляется строчка без объяснения, что
+          // делать. Подсказка ниже отвечает на этот вопрос заранее:
+          // домен должен быть привязан к боту, и именно к тому боту,
+          // чей токен настроен на стороне API.
+          <p className="muted" style={{ fontSize: 12, marginTop: 14, lineHeight: 1.5 }}>
+            Если виджет пишет <b>Bot domain invalid</b> — домен этой страницы не привязан к боту.
+            В @BotFather: <code>/setdomain</code> → выбрать бота <b>{BOT_USERNAME}</b> → отправить{' '}
+            <code>{host ?? 'домен этой страницы'}</code>.
+            Бот должен быть тем же, чей <code>TELEGRAM_BOT_TOKEN</code> задан на стороне API.
+          </p>
         )}
 
         {submitting && <p className="muted" style={{ marginTop: 16, fontSize: 13 }}>Входим…</p>}

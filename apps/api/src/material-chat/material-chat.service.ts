@@ -28,6 +28,7 @@ import { ConsentService } from '../consent/consent.service';
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { MaterialChatMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
+import { publicApiBaseUrl } from '../common/public-base-url';
 
 const TASK_TYPE = 'material-chat';
 const MAX_MESSAGES_PER_SESSION = 40; // тот же потолок, что у спарринга (Пункт 55) — та же цена растущей истории в каждом вызове
@@ -375,15 +376,15 @@ export class MaterialChatService {
   }
 
   private buildVoiceWebhookUrl(): string {
-    const base = process.env.API_PUBLIC_BASE_URL;
-    // ПОВТОРНЫЙ АУДИТ 2026-08-30: проверки не было — в отличие от
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30: проверки здесь не было — в отличие от
     // ConversationsService и SparringService, где она есть. Без неё
     // AssemblyAI получал webhook_url вида "undefined/material-chat-..."
     // и задача уходила в работу, результат которой не мог вернуться
     // никогда. Отказ до отправки честнее молчаливо потерянного job'а.
-    if (!base) {
-      throw new Error('API_PUBLIC_BASE_URL is not set — required to build a webhook URL AssemblyAI can call back');
-    }
-    return `${base}/material-chat-sessions/voice-reply-webhook`;
+    //
+    // 2026-08-31: именно расхождение трёх копий этой проверки и было
+    // причиной той дыры, поэтому теперь проверка одна на всех —
+    // common/public-base-url.ts. Там же нормализация слэша на конце.
+    return `${publicApiBaseUrl()}/material-chat-sessions/voice-reply-webhook`;
   }
 }

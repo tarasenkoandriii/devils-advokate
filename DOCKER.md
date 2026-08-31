@@ -236,10 +236,39 @@ use`**) — почти всегда одновременно запущен ба
 `make up`. Порт совпадает намеренно: одни и те же `DATABASE_URL` из
 `apps/api/.env.example` работают в обоих режимах.
 
-**`api-init` упал** — `make logs` покажет, на каком шаге. Чаще всего
-это ошибка в `schema.prisma`: `db push` не умеет всего, что умеют
-миграции (например, переименование колонки с данными). `make reset`
-пересоздаёт том с нуля и обычно закрывает вопрос.
+**`api-init` упал** — контейнер сам печатает, на каком шаге и почему:
+`docker compose -f docker-compose.dev.yml logs api-init`. Два самых
+частых случая:
+
+*«Postgres не ответил за 60 секунд»*, при том что `docker compose ps`
+показывает postgres как `Healthy`. Дело почти всегда не в Postgres, а в
+**разных docker-сетях**: рядом остался работать другой стек — чаще всего
+базовый `docker-compose.yml`, поднятый раньше. Его контейнеры живут в
+своей сети (`<имя-папки>_default`), держат порт 5432, и имя `postgres`
+внутри `api-init` в них не указывает. Скрипт `entrypoint-api.sh` пишет
+это прямо: «имя НЕ резолвится».
+
+Полная уборка — гасить **оба** файла, а не только dev:
+
+```bash
+docker compose -f docker-compose.yml down              # базовый стенд: postgres + adminer
+docker compose -f docker-compose.dev.yml down --remove-orphans
+
+docker ps -a | grep devils        # должно быть пусто
+docker network ls | grep devils   # тоже
+
+make up
+```
+
+Начиная с 2026-08-31 `container_name` в dev-файле не задаются — именно
+чтобы compose не переиспользовал чужой контейнер вместе с его старой
+сетью. Имена теперь вида `devils-advocate-dev-postgres-1`; обращение по
+имени сервиса (`make psql`, `make shell-api`) не изменилось.
+
+*Ошибка на шаге `prisma db push`* — обычно правка `schema.prisma`,
+которую `db push` не может применить к существующим данным (например
+переименование колонки). `make reset` пересоздаёт том с нуля и
+закрывает вопрос.
 
 **Админка отвечает 404 на dev-вход** — на стороне `api` не выставлены
 `ALLOW_DEV_AUTH=true` и `NODE_ENV=development` одновременно. Проверить:

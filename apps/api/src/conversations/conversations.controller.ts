@@ -32,6 +32,15 @@ class AssignParticipantDto {
   isSelf?: boolean;
 }
 
+/** Пункт [blob-upload] 2026-08-31. Только pathname — намеренно: размер
+ * и тип содержимого мы берём из head() у самого стора, а не со слов
+ * клиента (см. AudioBlobService.confirmUpload). Класс, а не интерфейс,
+ * по той же причине, что и AssignParticipantDto выше — Nest нужен
+ * рантайм-тип для @Body(). */
+class ConfirmAudioBlobDto {
+  pathname!: string;
+}
+
 @Controller()
 @UseInterceptors(ApiResponseInterceptor)
 export class ConversationsController {
@@ -59,8 +68,33 @@ export class ConversationsController {
     return this.conversations.get(userId, id);
   }
 
+  // Пункт [blob-upload] 2026-08-31 — шаг 3 протокола прямой загрузки:
+  // клиент сообщает, что файл записан в приватный Vercel Blob. Шаг 1
+  // (выдача токена) живёт в отдельном AudioUploadController — у него
+  // чужой формат ответа, объяснение там.
+  @Post('conversations/:id/audio-blob')
+  @UseGuards(TelegramAuthGuard)
+  async confirmAudioBlob(
+    @CurrentUser() userId: string,
+    @Param('id') id: string,
+    @Body() dto: ConfirmAudioBlobDto,
+  ) {
+    return this.conversations.confirmAudioUpload(userId, id, dto);
+  }
+
   // Потоковая загрузка аудио без буферизации — см. обоснование в
-  // TranscriptionService.streamUpload(). @Req() используется напрямую
+  // TranscriptionService.streamUpload().
+  //
+  // Пункт [blob-upload] 2026-08-31 — ПУТЬ СОХРАНЁН, НО НЕ ОСНОВНОЙ.
+  // На Vercel он неработоспособен: тело запроса к serverless-функции
+  // ограничено 4,5 МБ, и отказ приходит на уровне платформы, до этого
+  // кода. Оставлен потому, что локально и в докере лимита нет, а для
+  // отладки цепочки одним curl'ом он в разы проще трёхшагового
+  // протокола. Удалять его ради «одного правильного способа» было бы
+  // ухудшением: прод получил бы рабочий путь, а разработка — лишний
+  // обязательный внешний сервис (blob-стор) там, где он не нужен.
+  //
+  // @Req() используется напрямую
   // для доступа к сырому телу запроса как ReadableStream — стандартный
   // Nest @Body() декоратор здесь не подходит, он парсит/буферизует
   // тело под конкретный Content-Type, что для потоковой передачи

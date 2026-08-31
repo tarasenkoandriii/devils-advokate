@@ -113,8 +113,36 @@ export class AdminAuthService {
     return { token, expiresAt };
   }
 
+  /**
+   * ПОВТОРНЫЙ АУДИТ 2026-08-31 — почему здесь ДВА возможных токена.
+   *
+   * Подпись Login Widget проверяется секретом SHA256(bot_token), то есть
+   * токеном ровно того бота, который выдал кнопку входа. А initData
+   * Mini App (TelegramAuthGuard) проверяется токеном бота, которому
+   * принадлежит само приложение. Пока это один бот — хватает одной
+   * переменной, и так было изначально.
+   *
+   * Но у Login Widget есть ограничение, которого нет у Mini App: домен
+   * привязывается к боту через `/setdomain` и он ОДИН на бота. Как
+   * только админка живёт на своём домене, а Mini App — на другом,
+   * практичнее завести отдельного бота под вход в админку. Тогда
+   * токенов становится два, и один `TELEGRAM_BOT_TOKEN` физически не
+   * может проверить оба входа: один из них будет стабильно отвечать
+   * «Invalid Telegram Login Widget payload» либо «Invalid Telegram
+   * initData», причём без всякого намёка на настоящую причину.
+   *
+   * Поэтому `ADMIN_LOGIN_BOT_TOKEN` — опциональный. Не задан (обычный
+   * случай, один бот на всё) — используется `TELEGRAM_BOT_TOKEN`, как
+   * и раньше. Задан — используется он, и только для этого входа.
+   */
+  private adminLoginBotToken(): string {
+    const dedicated = this.config.get<string>('ADMIN_LOGIN_BOT_TOKEN')?.trim();
+    if (dedicated) return dedicated;
+    return this.config.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
+  }
+
   async loginWithTelegram(payload: TelegramLoginWidgetPayload): Promise<AdminSessionResult> {
-    const botToken = this.config.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
+    const botToken = this.adminLoginBotToken();
 
     let parsed;
     try {

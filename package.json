@@ -8,6 +8,7 @@
     "api:dev": "npm run start:dev --workspace=apps/api",
     "typecheck": "npm run typecheck --workspace=apps/api && npm run typecheck --workspace=apps/tma && tsc --noEmit -p apps/admin/tsconfig.json && tsc --noEmit -p apps/landing/tsconfig.json",
     "test": "npm test --workspace=apps/api && npm test --workspace=apps/tma",
+    "db:check": "node scripts/check-db-url.js",
     "docker:env": "node -e \"const fs=require('fs'); if(!fs.existsSync('.env.docker')){fs.copyFileSync('.env.docker.example','.env.docker'); console.log('Создан .env.docker из .env.docker.example');}\"",
     "docker:up": "npm run docker:env && docker compose --env-file .env.docker -f docker-compose.dev.yml up -d --build",
     "docker:down": "npm run docker:env && docker compose --env-file .env.docker -f docker-compose.dev.yml down",

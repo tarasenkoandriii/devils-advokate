@@ -250,7 +250,10 @@ docker compose up -d
 docker compose up -d    # если ещё не поднят
 cd apps/api
 cp .env.example .env   # заполнить TELEGRAM_BOT_TOKEN, OPENAI_API_KEY — DATABASE_URL уже готов под docker-compose
-npm install
+npm install            # ОБЯЗАТЕЛЬНО до любых prisma-команд: без node_modules
+                       # `npx prisma` скачает ПОСЛЕДНЮЮ Prisma (7.x), где
+                       # url/directUrl в schema.prisma не поддерживаются, и
+                       # выдаст P1012 — хотя схема в порядке. Проект на 5.22.
 npm run prisma:generate
 npm run prisma:push    # ПОВТОРНЫЙ АУДИТ 2026-08-30: было prisma:migrate (= prisma migrate dev).
                        # Папки prisma/migrations в репозитории нет вообще, и migrate dev создал бы

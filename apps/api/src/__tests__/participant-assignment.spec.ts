@@ -74,7 +74,7 @@ async function run() {
     const prisma = createFakePrisma();
     seed(prisma);
     prisma._seedPerson({ id: 'person-1', createdByUserId: USER_ID });
-    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any);
+    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any, {} as any);
 
     const updated = await svc.assignParticipant(USER_ID, PARTICIPANT_ID, { personId: 'person-1' });
     assertEqual(updated.personId, 'person-1', 'personId сопоставлен');
@@ -84,7 +84,7 @@ async function run() {
   test('assignParticipant() помечает isSelf=true', async () => {
     const prisma = createFakePrisma();
     seed(prisma);
-    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any);
+    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any, {} as any);
 
     const updated = await svc.assignParticipant(USER_ID, PARTICIPANT_ID, { isSelf: true });
     assertEqual(updated.isSelf, true, 'isSelf проставлен');
@@ -95,7 +95,7 @@ async function run() {
     const prisma = createFakePrisma();
     seed(prisma);
     prisma._seedPerson({ id: 'person-1', createdByUserId: USER_ID });
-    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any);
+    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any, {} as any);
 
     await assertThrowsAsync(
       () => svc.assignParticipant(USER_ID, PARTICIPANT_ID, { personId: 'person-1', isSelf: true }),
@@ -109,7 +109,7 @@ async function run() {
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
     prisma._seedConversation({ id: CONV_ID, projectId: PROJECT_ID });
     prisma._seedParticipant({ id: PARTICIPANT_ID, conversationId: CONV_ID, diarizationLabel: 'A', personId: null, isSelf: false });
-    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any);
+    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any, {} as any);
 
     await assertThrowsAsync(
       () => svc.assignParticipant(USER_ID, PARTICIPANT_ID, { isSelf: true }),
@@ -122,7 +122,7 @@ async function run() {
     const prisma = createFakePrisma();
     seed(prisma);
     prisma._seedPerson({ id: 'person-1', createdByUserId: 'other-user' });
-    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any);
+    const svc = new ConversationsService(prisma as any, {} as any, {} as any, {} as any, {} as any);
 
     await assertThrowsAsync(
       () => svc.assignParticipant(USER_ID, PARTICIPANT_ID, { personId: 'person-1' }),

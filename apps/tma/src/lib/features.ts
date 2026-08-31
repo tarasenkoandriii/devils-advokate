@@ -361,9 +361,14 @@ export function getConversation(conversationId: string): Promise<ConversationDet
   return apiGet<ConversationDetail>(`/conversations/${conversationId}`);
 }
 
+// Пункт [blob-upload] 2026-08-31: audioUrl стал опциональным. Если он
+// не передан, бэкенд берёт файл, загруженный напрямую в приватный blob
+// (uploadConversationAudioToBlob ниже), и сам делает для него
+// подписанную ссылку. Передавать оба источника сразу — ошибка 403, а не
+// «возьмём какой-нибудь»: см. dto/request-transcription.dto.ts.
 export function requestTranscription(
   conversationId: string,
-  input: { audioUrl: string; languageCode?: string },
+  input: { audioUrl?: string; languageCode?: string } = {},
 ): Promise<Conversation> {
   return apiPost<Conversation>(`/conversations/${conversationId}/transcribe`, input);
 }
@@ -401,6 +406,61 @@ export async function uploadConversationAudio(
   // остальных функций, поэтому переиспользует handle() из api.ts, не
   // дублирует её отдельной копией.
   return handle<{ audioUrl: string }>(response);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Пункт [blob-upload] 2026-08-31 — ОСНОВНОЙ путь загрузки файла.
+//
+// uploadConversationAudio() выше шлёт байты в наш API. На Vercel это
+// не работает: тело запроса к serverless-функции ограничено 4,5 МБ, а
+// аудиодорожка часового разговора — десятки мегабайт. Отказ приходит
+// от платформы, до нашего кода, поэтому локально он не воспроизводится
+// вообще — и именно поэтому проблему не нашёл ни один аудит.
+//
+// Здесь файл идёт НАПРЯМУЮ в приватный Vercel Blob: наш API участвует
+// только в выдаче одноразового токена (там же проверяются владение
+// разговором и согласия) и в подтверждении факта загрузки. Байты через
+// наш сервер не проходят вовсе, поэтому лимит функции ни при чём.
+//
+// multipart: true — не «на всякий случай»: SDK режет большой файл на
+// части, грузит их параллельно и повторяет только упавшие. На
+// мобильном канале, где обрыв в середине двухсотмегабайтного файла
+// вполне обычен, это разница между «загрузилось» и «начните сначала».
+// ═══════════════════════════════════════════════════════════════════
+export async function uploadConversationAudioToBlob(
+  conversationId: string,
+  file: File,
+  onProgress?: (percentage: number) => void,
+): Promise<{ pathname: string; sizeBytes: number }> {
+  const { upload } = await import('@vercel/blob/client');
+  const { getAuthHeaders } = await import('./telegram');
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+
+  // Префикс обязан совпадать с AUDIO_PREFIX в
+  // apps/api/src/conversations/audio-blob.service.ts — бэкенд
+  // отказывается подтверждать файл, лежащий вне него. Имя файла
+  // сохраняется для читаемости стора, уникальность обеспечивает
+  // addRandomSuffix на стороне токена, не мы.
+  const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'audio';
+  const pathname = `conversation-audio/${conversationId}/${safeName}`;
+
+  const blob = await upload(pathname, file, {
+    access: 'private',
+    handleUploadUrl: `${API_BASE_URL}/conversations/${conversationId}/audio-upload-token`,
+    // Наша авторизация — заголовок, а не cookie: SDK прокидывает его в
+    // запрос за токеном, и TelegramAuthGuard отрабатывает как обычно.
+    headers: getAuthHeaders(),
+    contentType: file.type || 'application/octet-stream',
+    multipart: true,
+    onUploadProgress: onProgress ? ({ percentage }) => onProgress(percentage) : undefined,
+  });
+
+  // Третий шаг: пока его нет, для бэкенда файла не существует —
+  // pathname записывается в разговор только здесь, после проверки
+  // через head() у самого стора.
+  return apiPost<{ pathname: string; sizeBytes: number }>(`/conversations/${conversationId}/audio-blob`, {
+    pathname: blob.pathname,
+  });
 }
 
 // Пункт 14 (backend) — Commitment Tracker (§3.49 ТЗ).

@@ -64,7 +64,9 @@ function createFakePrisma() {
 }
 
 function makeService(prisma: any) {
-  const config = { getOrThrow: (_key: string) => BOT_TOKEN } as any;
+  // get() — для опциональной ADMIN_LOGIN_BOT_TOKEN (повторный аудит
+  // 2026-08-31): не задана ⇒ используется общий TELEGRAM_BOT_TOKEN.
+  const config = { get: (_key: string) => undefined, getOrThrow: (_key: string) => BOT_TOKEN } as any;
   return new AdminAuthService(prisma as any, config);
 }
 
@@ -139,6 +141,46 @@ describe('AdminAuthService', () => {
 
     await expect(service.loginWithTelegram(VALID_PAYLOAD)).rejects.toThrow(UnauthorizedException);
     expect(prisma._getSessions().length).toBe(0);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (повторный аудит 2026-08-31): ADMIN_LOGIN_BOT_TOKEN имеет приоритет — вход через отдельного бота', async () => {
+    // Сценарий из реальной настройки: домен админки привязан к своему
+    // боту (/setdomain — один домен на бота), а Mini App живёт на
+    // другом. Подпись виджета проверяется токеном ИМЕННО того бота, чью
+    // кнопку нажали, поэтому одного TELEGRAM_BOT_TOKEN тут не хватает.
+    const prisma = createFakePrisma();
+    const config = {
+      get: (key: string) => (key === 'ADMIN_LOGIN_BOT_TOKEN' ? BOT_TOKEN : undefined),
+      // Токен основного бота другой — если сервис возьмёт его, подпись
+      // не сойдётся и вход упадёт.
+      getOrThrow: () => 'token-of-a-different-bot',
+    } as any;
+    const service = new AdminAuthService(prisma as any, config);
+
+    const result = await service.loginWithTelegram(VALID_PAYLOAD);
+    expect(result.token).toBeDefined();
+  });
+
+  it('без ADMIN_LOGIN_BOT_TOKEN используется общий TELEGRAM_BOT_TOKEN — поведение по умолчанию не меняется', async () => {
+    const prisma = createFakePrisma();
+    const config = {
+      get: () => undefined,
+      getOrThrow: () => BOT_TOKEN,
+    } as any;
+    const service = new AdminAuthService(prisma as any, config);
+
+    await expect(service.loginWithTelegram(VALID_PAYLOAD)).resolves.toBeDefined();
+  });
+
+  it('пустая строка в ADMIN_LOGIN_BOT_TOKEN не считается заданной — падаем обратно на общий токен', async () => {
+    const prisma = createFakePrisma();
+    const config = {
+      get: (key: string) => (key === 'ADMIN_LOGIN_BOT_TOKEN' ? '   ' : undefined),
+      getOrThrow: () => BOT_TOKEN,
+    } as any;
+    const service = new AdminAuthService(prisma as any, config);
+
+    await expect(service.loginWithTelegram(VALID_PAYLOAD)).resolves.toBeDefined();
   });
 
   it('me() возвращает реальные флаги доступа пользователя, когда они выставлены', async () => {

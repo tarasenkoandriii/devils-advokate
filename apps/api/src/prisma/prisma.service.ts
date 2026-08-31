@@ -2,11 +2,37 @@
 // managed lifecycle (подключение при старте модуля, отключение при
 // остановке приложения) — не создаётся заново в каждом сервисе.
 
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { diagnoseDatabaseUrl, diagnosePoolerMismatch } from './database-url-check';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleDestroy {
+  private static readonly logger = new Logger(PrismaService.name);
+
+  constructor() {
+    super();
+
+    // ПОВТОРНЫЙ АУДИТ 2026-08-31 — проверка строки подключения при
+    // создании сервиса. Сама по себе она ничего не чинит и ничего не
+    // блокирует: смысл в том, чтобы в логах вместо «invalid port number
+    // in database URL» (симптом) стояла причина — кавычки вокруг
+    // значения или незакодированный «@» в пароле. Разбор — в
+    // database-url-check.ts.
+    //
+    // Не бросаем исключение: приложение должно подниматься и отдавать
+    // /healthz даже с кривой строкой подключения, иначе диагностику
+    // придётся вести по единственному «функция крашится».
+    const problems = diagnoseDatabaseUrl(process.env.DATABASE_URL);
+    for (const problem of problems) {
+      PrismaService.logger.error(`DATABASE_URL: ${problem.message} [${problem.code}]`);
+    }
+    const poolerWarning = diagnosePoolerMismatch(process.env.DATABASE_URL);
+    if (poolerWarning) {
+      PrismaService.logger.warn(`DATABASE_URL: ${poolerWarning}`);
+    }
+  }
+
   // ══════════════════════════════════════════════════════════════════
   // ПОЧЕМУ ЗДЕСЬ НЕТ onModuleInit С $connect()
   //

@@ -12,23 +12,111 @@
 
 set -euo pipefail
 
+# ─────────────────────────────────────────────────────────────────────
+# ПОВТОРНЫЙ АУДИТ 2026-08-31 — диагностика падения.
+#
+# Раньше при ошибке скрипт просто выходил с кодом 1, а compose показывал
+# ровно одну строку: «service "api-init" didn't complete successfully:
+# exit 1». На каком из трёх шагов упало и почему — приходилось выяснять
+# отдельной командой, причём зная, что она вообще существует.
+#
+# Теперь: текущий шаг фиксируется в переменной, а trap на ERR печатает
+# его вместе со списком типичных причин ИМЕННО для этого шага. Плюс
+# показывается, к какой базе шёл контейнер — с вырезанной userinfo,
+# потому что пароль в логи класть нельзя даже локально (лог уходит в
+# `docker compose logs`, а его копируют в чаты и тикеты).
+# ─────────────────────────────────────────────────────────────────────
+STEP="запуск"
+
+mask_db_url() {
+  # postgresql://user:pass@host:5432/db → postgresql://***@host:5432/db
+  printf '%s' "${DATABASE_URL:-<не задан>}" | sed -E 's#://[^@/]*@#://***@#'
+}
+
+on_error() {
+  local code=$?
+  echo "" >&2
+  echo "══════════════════════════════════════════════════════════════" >&2
+  echo "[api-init] ОШИБКА на шаге: ${STEP} (код выхода ${code})" >&2
+  echo "[api-init] База: $(mask_db_url)" >&2
+  echo "" >&2
+  case "$STEP" in
+    "ожидание Postgres")
+      echo "  Контейнер postgres не принял соединение. По убыванию частоты:" >&2
+      echo "   • контейнеры от прежнего запуска в другой docker-сети (см. диагностику DNS выше)" >&2
+      echo "     → docker compose -f docker-compose.dev.yml down --remove-orphans && make up" >&2
+      echo "   • postgres не поднялся: docker compose -f docker-compose.dev.yml logs postgres" >&2
+      echo "   • порт 5432 занят другим Postgres (базовый docker-compose.yml или локальная установка)" >&2
+      ;;
+    "prisma db push")
+      echo "  Схема не накатилась. Частые причины:" >&2
+      echo "   • правка schema.prisma, которую db push не умеет применить без потери данных" >&2
+      echo "     → make reset (пересоздаёт том БД с нуля)" >&2
+      echo "   • том БД остался от прежней версии схемы → тоже make reset" >&2
+      echo "   • DATABASE_URL выше указывает не на контейнер postgres (см. .env.docker и apps/api/.env)" >&2
+      ;;
+    "основной сид")
+      echo "  seed.ts не отработал. Частые причины:" >&2
+      echo "   • схема в БД старше schema.prisma → make reset" >&2
+      echo "   • правка seed.ts с ошибкой — текст ошибки ts-node выше по логу" >&2
+      ;;
+    "dev-сид")
+      echo "  seed-dev.ts не отработал. Частые причины:" >&2
+      echo "   • DATABASE_URL указывает НЕ на локальную базу — сид намеренно отказывается" >&2
+      echo "     работать против удалённой БД (он раздаёт права оператора)" >&2
+      echo "   • NODE_ENV=production в окружении контейнера" >&2
+      ;;
+  esac
+  echo "" >&2
+  echo "  Полный лог: docker compose -f docker-compose.dev.yml logs api-init" >&2
+  echo "══════════════════════════════════════════════════════════════" >&2
+  exit "$code"
+}
+trap on_error ERR
+
+echo "[api-init] База назначения: $(mask_db_url)"
+
+STEP="ожидание Postgres"
 echo "[api-init] Ожидание Postgres…"
 # pg_isready, а не «поспать 5 секунд»: контейнер postgres поднимает
 # сокет заметно раньше, чем принимает соединения, и фиксированный sleep
 # — это либо флейки на медленной машине, либо потерянное время на
 # быстрой. 60 попыток по секунде — верхняя граница, после которой
 # честно падаем, а не висим бесконечно в CI/на чужой машине.
+PG_HOST="${POSTGRES_HOST:-postgres}"
+PG_PORT="${POSTGRES_PORT:-5432}"
+postgres_ready=0
 for i in $(seq 1 60); do
-  if pg_isready -h "${POSTGRES_HOST:-postgres}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-devils_advocate}" -q; then
+  if pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "${POSTGRES_USER:-devils_advocate}" -q; then
     echo "[api-init] Postgres готов (попытка $i)."
+    postgres_ready=1
     break
-  fi
-  if [ "$i" -eq 60 ]; then
-    echo "[api-init] Postgres не ответил за 60 секунд — прерываюсь." >&2
-    exit 1
   fi
   sleep 1
 done
+if [ "$postgres_ready" -ne 1 ]; then
+  # ПОВТОРНЫЙ АУДИТ 2026-08-31: раньше здесь было только «не ответил за
+  # 60 секунд», и это скрывало главное различие — «имя postgres не
+  # резолвится» (контейнеры оказались в разных docker-сетях) и «сервер
+  # есть, но соединения не принимает» выглядели одинаково, хотя чинятся
+  # по-разному. Теперь последняя попытка выполняется БЕЗ -q, её текст
+  # попадает в лог, и отдельно проверяется, резолвится ли имя вообще.
+  echo "[api-init] Postgres не ответил за 60 секунд. Последняя попытка, полный вывод:" >&2
+  pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "${POSTGRES_USER:-devils_advocate}" >&2 || true
+
+  echo "[api-init] Проверка DNS-имени «$PG_HOST» внутри контейнера:" >&2
+  if getent hosts "$PG_HOST" >&2; then
+    echo "[api-init] → имя резолвится, значит контейнеры в одной сети, а сам Postgres соединения не принимает." >&2
+  else
+    echo "[api-init] → имя НЕ резолвится. Контейнеры оказались в РАЗНЫХ docker-сетях." >&2
+    echo "[api-init]   Так бывает, когда часть контейнеров осталась от прежнего запуска" >&2
+    echo "[api-init]   (compose переиспользует их по container_name, но сеть у них старая)." >&2
+    echo "[api-init]   Лечится полным пересозданием стека:" >&2
+    echo "[api-init]     docker compose -f docker-compose.dev.yml down --remove-orphans" >&2
+    echo "[api-init]     make up            # либо: docker compose ... up -d --build" >&2
+  fi
+  false # уводим в trap, чтобы вывелась расшифровка шага
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # db push, а НЕ migrate deploy — и это не упрощение, а единственный
@@ -44,13 +132,21 @@ done
 # не проверяет миграционный путь (порядок, обратимость, данные при
 # ALTER). Для дев-стенда это приемлемо; для продакшна нет — там
 # по-прежнему нужен нормальный `prisma migrate` (см. VERCEL.md).
+#
+# --accept-data-loss: db push пересобирает схему под текущий
+# schema.prisma и может удалить колонки/таблицы, которых там больше нет.
+# На дев-стенде это ожидаемо (данные одноразовые), но сказать об этом
+# вслух правильнее, чем прятать за флагом.
 # ─────────────────────────────────────────────────────────────────────
-echo "[api-init] prisma db push (схема → БД)…"
+STEP="prisma db push"
+echo "[api-init] prisma db push (схема → БД; при расхождении данные в изменённых таблицах могут быть потеряны)…"
 npx prisma db push --schema prisma/schema.prisma --skip-generate --accept-data-loss
 
+STEP="основной сид"
 echo "[api-init] Основной сид (провайдеры/модели/промпт/классы хранения)…"
 npm run prisma:seed
 
+STEP="dev-сид"
 echo "[api-init] Dev-сид (пользователь dev-${DEV_USER_ID:-123} с правами оператора)…"
 npx ts-node prisma/seed-dev.ts
 

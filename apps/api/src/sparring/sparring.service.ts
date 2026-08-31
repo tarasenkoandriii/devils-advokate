@@ -41,6 +41,7 @@ import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ARCHETYPE_DESCRIPTIONS } from '../archetype-perspective/archetype-perspective.service';
 import { ArchetypeType, SparringMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
+import { publicApiBaseUrl } from '../common/public-base-url';
 
 const TASK_TYPE = 'sparring-session';
 const MAX_MESSAGES_PER_SESSION = 40; // 20 обменов репликами — разумный потолок для тренировочной сессии, не бесконечный чат
@@ -536,11 +537,9 @@ export class SparringService {
   }
 
   private buildVoiceWebhookUrl(): string {
-    const base = process.env.API_PUBLIC_BASE_URL;
-    if (!base) {
-      throw new Error('API_PUBLIC_BASE_URL is not set — required to build a webhook URL AssemblyAI can call back');
-    }
-    return `${base}/sparring-sessions/webhook/voice-reply`;
+    // 2026-08-31: см. common/public-base-url.ts — одна проверка вместо
+    // трёх разошедшихся копий.
+    return `${publicApiBaseUrl()}/sparring-sessions/webhook/voice-reply`;
   }
 
   private async findOwnedSession(userId: string, sessionId: string) {

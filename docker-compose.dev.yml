@@ -22,6 +22,21 @@
 # упадёт с "port is already allocated". Это осознанно: один и тот же
 # порт означает, что переменные DATABASE_URL из apps/api/.env.example
 # работают и там, и там без правок.
+#
+# ПОЧЕМУ ЗДЕСЬ НЕТ container_name (повторный аудит 2026-08-31).
+# Фиксированные имена контейнеров были — и приводили к неочевидной
+# поломке: compose переиспользует существующий контейнер с таким именем
+# как есть, вместе с его СТАРОЙ сетью. После переименования проекта
+# (или если рядом поднят базовый стенд) получалось, что postgres жив и
+# healthy, а api-init в новой сети не может разрешить имя «postgres» —
+# и падал с «Postgres не ответил за 60 секунд», уводя диагностику в
+# сторону базы, которая на самом деле в порядке.
+#
+# Без container_name compose именует контейнеры сам
+# (devils-advocate-dev-postgres-1 и т.д.) и пересоздаёт их при смене
+# конфигурации. Обращение по ИМЕНИ СЕРВИСА при этом не меняется:
+# `docker compose -f docker-compose.dev.yml exec postgres psql …`
+# и `make psql` работают ровно как раньше.
 
 name: devils-advocate-dev
 
@@ -63,6 +78,7 @@ x-api-env: &api-env
   # Пустая строка — валидное значение: сервис, которому ключ не задан,
   # честно откажет на своём эндпоинте, а не уронит запуск всего API.
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  ADMIN_LOGIN_BOT_TOKEN: ${ADMIN_LOGIN_BOT_TOKEN:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   XAI_API_KEY: ${XAI_API_KEY:-}
@@ -82,7 +98,6 @@ x-api-env: &api-env
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: devils-advocate-dev-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: devils_advocate
@@ -100,7 +115,6 @@ services:
 
   adminer:
     image: adminer:latest
-    container_name: devils-advocate-dev-adminer
     restart: unless-stopped
     ports:
       - '8080:8080'
@@ -116,7 +130,6 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     image: devils-advocate-api:dev
-    container_name: devils-advocate-dev-api-init
     environment:
       <<: *api-env
       POSTGRES_HOST: postgres
@@ -147,7 +160,6 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     image: devils-advocate-api:dev
-    container_name: devils-advocate-dev-api
     environment: *api-env
     ports:
       - '3000:3000'
@@ -203,7 +215,6 @@ services:
       args:
         APP_DIR: tma
     image: devils-advocate-tma:dev
-    container_name: devils-advocate-dev-tma
     environment:
       NODE_ENV: development
       PORT: '3001'
@@ -234,7 +245,6 @@ services:
       args:
         APP_DIR: admin
     image: devils-advocate-admin:dev
-    container_name: devils-advocate-dev-admin
     environment:
       NODE_ENV: development
       # 3002 дублирует `next dev -p 3002` из apps/admin/package.json.
@@ -268,7 +278,6 @@ services:
       args:
         APP_DIR: landing
     image: devils-advocate-landing:dev
-    container_name: devils-advocate-dev-landing
     environment:
       NODE_ENV: development
       PORT: '3003'

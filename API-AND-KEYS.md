@@ -62,12 +62,14 @@
 | Сервис | Переменная | Вызовы | От чего зависит | Без ключа |
 | --- | --- | --- | --- | --- |
 | **SerpApi** (Google Lens) | `SERPAPI_KEY` | `GET /search?engine=google_lens` | реверс-поиск фото | 500 на проверке фото |
-| **Vercel Blob** | `VERCEL_BLOB_READ_WRITE_TOKEN` | `PUT /{pathname}`, `POST /delete` | доказательства ДТП; временная публикация фото на время реверс-поиска | 500 на этих фичах; удаление аккаунта деградирует мягко |
+| **Vercel Blob** | `VERCEL_BLOB_READ_WRITE_TOKEN` | `PUT /{pathname}`, `POST /delete`, `POST /signed-token` | доказательства ДТП; временная публикация фото на время реверс-поиска; **прямая загрузка аудио разговоров** (пункт [blob-upload]) | 500 на этих фичах; на Vercel загрузка разговоров не работает вовсе; удаление аккаунта деградирует мягко |
 | **Telegram Bot API** | `TELEGRAM_BOT_TOKEN` | `POST /bot{token}/sendMessage` | push-напоминания планировщика | см. ниже — **особый случай** |
 | **Windy Point Forecast** | `WINDY_API_KEY` | `POST /api/point-forecast/v2` | прогноз погоды к дате встречи (первичный источник) | ✅ тихий откат на Open-Meteo — единственная по-настоящему опциональная интеграция |
 | **Open-Meteo** | — | `geocoding`, `forecast` | тот же прогноз (fallback) | ключ не нужен вовсе |
 | **Nominatim (OSM)** | — | `GET /reverse` | подсказка страны/города при онбординге | ключ не нужен; при ошибке — честный пустой результат |
 | **Произвольный URL пользователя** | — | `GET` через `safe-url-fetch` | «проверь эту реплику по моей ссылке» | — |
+
+`ADMIN_LOGIN_BOT_TOKEN` — опциональный спутник: токен отдельного бота для входа в админку. Нужен, только если Login Widget выдаёт не тот же бот, что владеет Mini App (домен виджета привязывается через `/setdomain` и он один на бота). Пусто ⇒ используется `TELEGRAM_BOT_TOKEN`.
 
 **`TELEGRAM_BOT_TOKEN` — единственная переменная, отсутствие которой ломает API целиком, а не одну фичу.** `TelegramAuthGuard` резолвит её через `getOrThrow` при валидации каждого запроса: без неё 500 отдают **все** эндпоинты под этим guard'ом, то есть весь продукт. Исключение — дев-режим: при `ALLOW_DEV_AUTH=true` запрос с заголовком `X-Dev-User-Id` до этой строки не доходит, поэтому локальный стенд работает без бота.
 
@@ -99,14 +101,36 @@
 2. POST /media-review/queues, .../items             → очередь разбора      [ключи не нужны]
 3. пользователь сам получает файл ролика
 4. POST /projects/:id/conversations                 → создать разговор
-5. POST /conversations/:id/upload                   → байты уходят AssemblyAI  [ASSEMBLYAI_API_KEY]
-6. POST /conversations/:id/transcribe               → запуск расшифровки   [+ WEBHOOK_SECRET, API_PUBLIC_BASE_URL]
+5. загрузка файла — два пути, см. ниже
+6. POST /conversations/:id/transcribe               → запуск расшифровки   [ASSEMBLYAI_API_KEY, WEBHOOK_SECRET, API_PUBLIC_BASE_URL]
 7. AssemblyAI → POST /conversations/webhook/transcription  → готовый транскрипт
 8. POST .../manipulation-patterns/detect            → анализ               [LLM-ключ]
    POST .../discrepancies/detect                    → анализ               [LLM-ключ]
    POST .../turning-points/detect                   → анализ               [LLM-ключ]
 9. POST .../discrepancies/check-against-fact-check-api → фактчек  [FACT_CHECK_TOOLS_API_KEY, опционально]
 ```
+
+**Шаг 5 — два пути, и выбор между ними определяется не вкусом, а тем,
+где вы запускаете API** (пункт [blob-upload] 2026-08-31):
+
+```
+5a. ПРОД (Vercel) — прямая загрузка в приватный Blob, мимо функции:
+    POST /conversations/:id/audio-upload-token   → одноразовый токен  [VERCEL_BLOB_READ_WRITE_TOKEN]
+    PUT  blob.vercel-storage.com/…               → байты, наш API не участвует
+    POST /conversations/:id/audio-blob           → подтверждение
+    затем шаг 6 БЕЗ audioUrl — ссылку подпишет сам API
+
+5b. ЛОКАЛЬНО/ДОКЕР — потоковая загрузка через API (проще для curl):
+    POST /conversations/:id/upload               → байты уходят AssemblyAI  [ASSEMBLYAI_API_KEY]
+    затем шаг 6 С audioUrl из ответа
+```
+
+Путь 5b на Vercel неработоспособен: тело запроса к serverless-функции
+ограничено 4,5 МБ, и отказ приходит на уровне платформы, до кода. Путь
+5a требует переменной `VERCEL_BLOB_READ_WRITE_TOKEN`. Передавать
+`audioUrl` в шаг 6, когда файл уже загружен путём 5a, — ошибка 403:
+два источника аудио сразу означают, что расшифровать можно не тот файл,
+и API отказывается выбирать за вас.
 
 **Две ловушки, которые стоит знать заранее:**
 
@@ -115,7 +139,8 @@
 
 ### 2.2 Минимальный список
 
-Семь переменных — без любой из них цепочка не проходит целиком:
+Семь переменных плюс одна, нужная только на Vercel — без любой из них
+цепочка не проходит целиком:
 
 | # | Переменная | Что сломается без неё |
 | --- | --- | --- |
@@ -126,8 +151,9 @@
 | 5 | `ASSEMBLYAI_WEBHOOK_SECRET` | шаг 6 отказывает заранее (fail closed), шаг 7 отвечает 503 |
 | 6 | `API_PUBLIC_BASE_URL` | шаг 6: адрес вебхука не собрать. Должен быть **достижим извне** |
 | 7 | `OPENAI_API_KEY` **или** `ANTHROPIC_API_KEY` **или** `XAI_API_KEY` | шаг 8: анализ |
+| 8 | `VERCEL_BLOB_READ_WRITE_TOKEN` | шаг 5a — **обязательна на Vercel**, не нужна локально/в докере (там работает путь 5b) |
 
-Восьмая, `FACT_CHECK_TOOLS_API_KEY`, — только для шага 9.
+Девятая, `FACT_CHECK_TOOLS_API_KEY`, — только для шага 9.
 
 **Кроме переменных нужно состояние БД и согласия:**
 
@@ -212,6 +238,12 @@ API_PUBLIC_BASE_URL="https://ваш-туннель.ngrok-free.app"
 
 OPENAI_API_KEY="sk-…"        # достаточно одного из трёх
 
+# Нужен ТОЛЬКО на Vercel — там байты файла не могут пройти через
+# serverless-функцию (лимит 4,5 МБ на тело запроса), поэтому клиент
+# грузит файл напрямую в приватный Blob. Локально и в докере путь
+# POST /conversations/:id/upload работает без этой переменной.
+VERCEL_BLOB_READ_WRITE_TOKEN=""  
+
 FACT_CHECK_TOOLS_API_KEY=""  # опционально
 ```
 
@@ -246,4 +278,8 @@ curl -s -X POST "http://localhost:3000/conversations/<id>/upload" \
 | `502 YouTube Data API вернул ошибку (403)` | исчерпана суточная квота проекта либо ключ не ограничен/не активирован |
 | `500 Secret not found for credentialRef="…"` | переменная не задана в окружении процесса API |
 | разговор навсегда в `TRANSCRIBING` | вебхук не дошёл: `API_PUBLIC_BASE_URL` недоступен снаружи |
+| `403 Для разговора нет аудио` | шаг 6 вызван без `audioUrl` и без загруженного в Blob файла — не выполнен шаг 5 |
+| `403 …одновременно указан audioUrl и загружен файл` | переданы оба источника; уберите `audioUrl`, если грузили через Blob |
+| `403 pathname должен начинаться с «conversation-audio/»` | путь в подтверждении не тот, что вернула загрузка |
+| `500 Secret not found … VERCEL_BLOB_READ_WRITE_TOKEN` | не создан Blob-стор либо он не подключён к проекту API |
 | элемент очереди навсегда в `PROCESSING` | не вызван `turning-points/detect` — только он ставит `ANALYZED` |
