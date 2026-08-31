@@ -229,6 +229,12 @@ export interface SandboxQueueItem {
   title: string;
   status: string;
   conversationId: string | null;
+  /** Причина последнего отказа автоматического разбора (если был). */
+  autoAnalysisError: string | null;
+  /** Итог разбора: сколько сегментов транскрипта записано. */
+  segments: number;
+  /** Итог разбора: сколько сигналов найдено (честный 0 допустим). */
+  signals: number;
 }
 export interface SandboxQueue {
   id: string;

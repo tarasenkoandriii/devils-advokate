@@ -554,19 +554,37 @@ export class AdminSandboxService {
     const queue = queues.find((q) => q.title === SANDBOX_QUEUE_TITLE);
     if (!queue) return { queue: null };
     const full = await this.mediaReview.getQueue(operatorUserId, queue.id);
-    return {
-      queue: {
-        id: full.id,
-        title: full.title,
-        items: (full.items as Array<Record<string, unknown>>).map((i) => ({
+    const items = await Promise.all(
+      (full.items as Array<Record<string, unknown>>).map(async (i) => {
+        // Итог разбора прямо в таблице: сигналов может честно не быть
+        // (промпт запрещает выдумывать их ради количества), и без
+        // счётчика сегментов DONE выглядит как «ничего не произошло» —
+        // ровно так его и прочитали в первом живом прогоне.
+        let segments = 0;
+        let signals = 0;
+        if (i.conversationId) {
+          const transcript = await this.prisma.transcript.findUnique({
+            where: { conversationId: i.conversationId as string },
+            select: {
+              segments: { select: { _count: { select: { signals: true } } } },
+            },
+          });
+          segments = transcript?.segments.length ?? 0;
+          signals = transcript?.segments.reduce((acc, s) => acc + s._count.signals, 0) ?? 0;
+        }
+        return {
           id: i.id,
           youtubeVideoId: i.youtubeVideoId,
           title: i.title,
           status: i.status,
           conversationId: i.conversationId ?? null,
-        })),
-      },
-    };
+          autoAnalysisError: (i.autoAnalysisError as string | null | undefined) ?? null,
+          segments,
+          signals,
+        };
+      }),
+    );
+    return { queue: { id: full.id, title: full.title, items } };
   }
 
   async getConversation(operatorUserId: string, conversationId: string) {

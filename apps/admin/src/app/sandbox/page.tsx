@@ -372,6 +372,56 @@ export default function SandboxPage() {
         )}
       </div>
 
+      {/* ── Песочная очередь медиа-разбора — сразу после поиска: сюда
+            попадает кнопка «Разобрать», логично видеть результат рядом ── */}
+      {queue && queue.items.length > 0 && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <h2 style={{ marginTop: 0 }}>Шаг 2 — очередь медиа-разбора (песочница)</h2>
+          <p className="muted">
+            Статусы синхронизируются при каждом обновлении. Для роликов из «Разобрать»: PROCESSING —
+            задача у Gemini (обычно минуты), DONE — транскрипт и сигналы записаны. Сигналов может быть
+            честный ноль: модели запрещено выдумывать их ради количества, короткий развлекательный ролик
+            часто чист. Содержимое разбора смотрите в TMA («Разбор публичных видео») или по conversationId.
+          </p>
+          <table>
+            <thead>
+              <tr><th>Ролик</th><th>Статус</th><th>Разбор</th><th>Разговор</th></tr>
+            </thead>
+            <tbody>
+              {queue.items.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <a href={`https://www.youtube.com/watch?v=${item.youtubeVideoId}`} target="_blank" rel="noreferrer">
+                      {item.title || item.youtubeVideoId}
+                    </a>
+                  </td>
+                  <td>
+                    {item.status === 'DONE' && <span className="badge badge-ok">DONE</span>}
+                    {item.status === 'PROCESSING' && <span className="badge badge-pending">PROCESSING</span>}
+                    {item.status === 'READY' && <span className="badge badge-pending">READY</span>}
+                    {!['DONE', 'PROCESSING', 'READY'].includes(item.status) && (
+                      <span className="badge">{item.status}</span>
+                    )}
+                    {item.autoAnalysisError && (
+                      <div style={{ color: 'var(--signal-critical)', fontSize: 12, marginTop: 4, maxWidth: 360 }}>
+                        {item.autoAnalysisError}
+                      </div>
+                    )}
+                  </td>
+                  <td className="muted">
+                    {item.segments > 0
+                      ? `${item.segments} сегм. / ${item.signals} сигн.`
+                      : '—'}
+                  </td>
+                  <td className="muted">{item.conversationId ? <code>{item.conversationId}</code> : 'файл не привязан'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button type="button" onClick={loadQueue} style={{ marginTop: 10 }}>Обновить</button>
+        </div>
+      )}
+
       {/* ── 2. Транскрибация ── */}
       <div className="card" style={{ marginBottom: 20 }}>
         <h2 style={{ marginTop: 0 }}>Шаги 4–7 — прогон транскрибации</h2>
@@ -477,42 +527,6 @@ export default function SandboxPage() {
         )}
       </div>
 
-      {/* ── Песочная очередь медиа-разбора ── */}
-      {queue && queue.items.length > 0 && (
-        <div className="card" style={{ marginTop: 20 }}>
-          <h2 style={{ marginTop: 0 }}>Шаг 2 — очередь медиа-разбора (песочница)</h2>
-          <p className="muted">
-            Статусы синхронизируются с разговором при каждом обновлении: READY после привязки файла,
-            PROCESSING во время расшифровки и анализа, DONE — только после «Поворотных точек».
-          </p>
-          <table>
-            <thead>
-              <tr><th>Ролик</th><th>Статус</th><th>Разговор</th></tr>
-            </thead>
-            <tbody>
-              {queue.items.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <a href={`https://www.youtube.com/watch?v=${item.youtubeVideoId}`} target="_blank" rel="noreferrer">
-                      {item.title || item.youtubeVideoId}
-                    </a>
-                  </td>
-                  <td>
-                    {item.status === 'DONE' && <span className="badge badge-ok">DONE</span>}
-                    {item.status === 'PROCESSING' && <span className="badge badge-pending">PROCESSING</span>}
-                    {item.status === 'READY' && <span className="badge badge-pending">READY</span>}
-                    {!['DONE', 'PROCESSING', 'READY'].includes(item.status) && (
-                      <span className="badge">{item.status}</span>
-                    )}
-                  </td>
-                  <td className="muted">{item.conversationId ? <code>{item.conversationId}</code> : 'файл не привязан'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button type="button" onClick={loadQueue} style={{ marginTop: 10 }}>Обновить</button>
-        </div>
-      )}
     </div>
   );
 }

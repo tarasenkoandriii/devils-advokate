@@ -31,6 +31,12 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
       findFirst: jest.fn(async (): Promise<{ id: string } | null> => null),
       create: jest.fn(async ({ data }: any) => ({ id: 'proj-sandbox', ...data })),
     },
+    transcript: {
+      // Итог разбора для очереди: 2 сегмента, 1 сигнал суммарно.
+      findUnique: jest.fn(async () => ({
+        segments: [{ _count: { signals: 1 } }, { _count: { signals: 0 } }],
+      })),
+    },
   };
   const secrets = {
     resolve: jest.fn(async (ref: string) => {
@@ -327,6 +333,11 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     // Именно продовый getQueue(): он синхронизирует READY→PROCESSING→DONE.
     expect(deps.mediaReview.getQueue).toHaveBeenCalledWith(OPERATOR, 'queue-1');
     expect(res.queue?.items[0].status).toBe('READY');
+    // Итог разбора виден прямо в очереди: сигналов может быть честный
+    // ноль, и без счётчика сегментов DONE читается как «пусто».
+    expect(res.queue?.items[0].segments).toBe(2);
+    expect(res.queue?.items[0].signals).toBe(1);
+    expect(res.queue?.items[0].autoAnalysisError).toBeNull();
   });
 
   it('очереди ещё нет — честный null, а не создание пустой при каждом просмотре', async () => {
