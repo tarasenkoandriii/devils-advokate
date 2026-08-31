@@ -26,12 +26,17 @@ import {
   getSandboxUploadToken,
   confirmSandboxUpload,
   sandboxTranscribe,
+  sandboxAddToQueue,
+  sandboxLinkQueueItem,
+  getSandboxQueue,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
   SandboxYouTubeSearch,
+  SandboxYouTubeResult,
   SandboxTranscriptionRun,
   SandboxConversation,
+  SandboxQueue,
 } from '../../lib/types';
 
 function formatDuration(seconds: number | null): string {
@@ -108,6 +113,9 @@ export default function SandboxPage() {
           if (c.status !== 'TRANSCRIBING' && pollTimer.current) {
             clearInterval(pollTimer.current);
             pollTimer.current = null;
+            // Терминальный статус меняет и элемент очереди
+            // (READY→PROCESSING→DONE синхронизируется на её GET).
+            loadQueue();
           }
         })
         .catch(() => undefined);
@@ -139,6 +147,35 @@ export default function SandboxPage() {
   // cookie), а байты уходят put()'ом напрямую в blob — SDK-шный
   // upload() не подходит, он не умеет слать cookie на кросс-доменный
   // handleUploadUrl.
+  // Третья итерация 2026-08-31 — «Разобрать» у результата поиска:
+  // ролик становится элементом песочной очереди, а СЛЕДУЮЩАЯ загрузка
+  // файла привязывается к нему (linkConversation → READY→…→DONE).
+  // Скачивания ролика с YouTube здесь нет намеренно — граница ТЗ §2.2,
+  // песочница подчиняется ей так же, как прод.
+  const [queueTarget, setQueueTarget] = useState<{ itemId: string; title: string } | null>(null);
+  const [queueTargetError, setQueueTargetError] = useState<string | null>(null);
+  const [addingToQueue, setAddingToQueue] = useState<string | null>(null);
+  const [queue, setQueue] = useState<SandboxQueue | null>(null);
+
+  const loadQueue = useCallback(() => {
+    getSandboxQueue().then((r) => setQueue(r.queue)).catch(() => undefined);
+  }, []);
+  useEffect(loadQueue, [loadQueue]);
+
+  async function handleAddToQueue(video: SandboxYouTubeResult) {
+    setAddingToQueue(video.videoId);
+    setQueueTargetError(null);
+    try {
+      const { itemId } = await sandboxAddToQueue(video);
+      setQueueTarget({ itemId, title: video.title });
+      loadQueue();
+    } catch (e) {
+      setQueueTargetError(errText(e));
+    } finally {
+      setAddingToQueue(null);
+    }
+  }
+
   const [file, setFile] = useState<File | null>(null);
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'preparing' | 'uploading' | 'confirming' | 'starting'>('idle');
   const [uploadPercent, setUploadPercent] = useState(0);
@@ -175,6 +212,13 @@ export default function SandboxPage() {
       setUploadPhase('confirming');
       await confirmSandboxUpload(conversationId, blob.pathname);
 
+      // Если перед загрузкой нажали «Разобрать» у ролика — привязываем
+      // разговор к элементу очереди (продовый linkConversation, элемент
+      // переходит в READY и дальше живёт синхронизацией статусов).
+      if (queueTarget) {
+        await sandboxLinkQueueItem(queueTarget.itemId, conversationId);
+      }
+
       setUploadPhase('starting');
       const started = await sandboxTranscribe(conversationId);
 
@@ -185,8 +229,12 @@ export default function SandboxPage() {
         conversationId,
         status: started.status,
         externalJobId: started.externalJobId,
-        note: 'Реальный файл: после TRANSCRIBED сегментов будет больше нуля — можно запускать анализ ниже.',
+        note: queueTarget
+          ? `Файл привязан к ролику «${queueTarget.title}» — статус элемента очереди внизу страницы.`
+          : 'Реальный файл: после TRANSCRIBED сегментов будет больше нуля — можно запускать анализ ниже.',
       });
+      setQueueTarget(null);
+      loadQueue();
     } catch (e) {
       setUploadError(errText(e));
     } finally {
@@ -206,8 +254,10 @@ export default function SandboxPage() {
     try {
       const result = await sandboxAnalyze(run.conversationId, kind);
       setAnalysisResult(JSON.stringify(result, null, 2));
-      // turning-points ставит ANALYZED — обновляем статус разговора.
+      // turning-points ставит ANALYZED — обновляем статус разговора и
+      // очередь (элемент перейдёт в DONE именно после этого).
       getSandboxConversation(run.conversationId).then(setConversation).catch(() => undefined);
+      loadQueue();
     } catch (e) {
       setAnalysisError(errText(e));
     } finally {
@@ -286,10 +336,13 @@ export default function SandboxPage() {
             <p className="muted" style={{ marginTop: 10 }}>
               {search.results.length} результатов за {search.tookMs} мс. Поиск списал 100 quota-единиц
               из ~10 000/сутки на проект Google Cloud и 1 из 20 ваших суточных поисков.
+              «Разобрать» кладёт ролик в очередь медиа-разбора и привяжет к нему следующую загрузку
+              файла ниже — сам ролик проект с YouTube не скачивает (ТЗ §2.2, легально только метаданные).
             </p>
+            {queueTargetError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{queueTargetError}</p>}
             <table style={{ marginTop: 6 }}>
               <thead>
-                <tr><th>Видео</th><th>Канал</th><th>Длительность</th></tr>
+                <tr><th>Видео</th><th>Канал</th><th>Длительность</th><th></th></tr>
               </thead>
               <tbody>
                 {search.results.map((r) => (
@@ -301,6 +354,16 @@ export default function SandboxPage() {
                     </td>
                     <td>{r.channelName}</td>
                     <td>{formatDuration(r.durationSeconds)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => handleAddToQueue(r)}
+                        disabled={addingToQueue !== null}
+                        title="Добавить в очередь медиа-разбора и привязать к следующей загрузке файла"
+                      >
+                        {addingToQueue === r.videoId ? 'Добавляем…' : 'Разобрать'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -331,6 +394,14 @@ export default function SandboxPage() {
             сегментов будет больше нуля, и анализ ниже станет содержательным. Расшифровка
             AssemblyAI платная — тарификация поминутная.
           </p>
+          {queueTarget && (
+            <p style={{ marginTop: 0 }}>
+              Файл будет привязан к ролику: <strong>{queueTarget.title}</strong>{' '}
+              <button type="button" onClick={() => setQueueTarget(null)} style={{ marginLeft: 8 }}>
+                Отвязать
+              </button>
+            </p>
+          )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               type="file"
@@ -405,6 +476,43 @@ export default function SandboxPage() {
           <pre style={{ marginTop: 12, maxHeight: 320, overflow: 'auto', fontSize: 12 }}>{analysisResult}</pre>
         )}
       </div>
+
+      {/* ── Песочная очередь медиа-разбора ── */}
+      {queue && queue.items.length > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h2 style={{ marginTop: 0 }}>Шаг 2 — очередь медиа-разбора (песочница)</h2>
+          <p className="muted">
+            Статусы синхронизируются с разговором при каждом обновлении: READY после привязки файла,
+            PROCESSING во время расшифровки и анализа, DONE — только после «Поворотных точек».
+          </p>
+          <table>
+            <thead>
+              <tr><th>Ролик</th><th>Статус</th><th>Разговор</th></tr>
+            </thead>
+            <tbody>
+              {queue.items.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <a href={`https://www.youtube.com/watch?v=${item.youtubeVideoId}`} target="_blank" rel="noreferrer">
+                      {item.title || item.youtubeVideoId}
+                    </a>
+                  </td>
+                  <td>
+                    {item.status === 'DONE' && <span className="badge badge-ok">DONE</span>}
+                    {item.status === 'PROCESSING' && <span className="badge badge-pending">PROCESSING</span>}
+                    {item.status === 'READY' && <span className="badge badge-pending">READY</span>}
+                    {!['DONE', 'PROCESSING', 'READY'].includes(item.status) && (
+                      <span className="badge">{item.status}</span>
+                    )}
+                  </td>
+                  <td className="muted">{item.conversationId ? <code>{item.conversationId}</code> : 'файл не привязан'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button type="button" onClick={loadQueue} style={{ marginTop: 10 }}>Обновить</button>
+        </div>
+      )}
     </div>
   );
 }

@@ -56,10 +56,20 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     confirmUpload: jest.fn(async () => ({ pathname: 'conversation-audio/conv-1/f.m4a', sizeBytes: 10, contentType: 'audio/mp4' })),
   };
   const youtube = { search: jest.fn(async () => [{ videoId: 'v1' }]) };
+  const mediaReview = {
+    listQueues: jest.fn(async (): Promise<Array<{ id: string; title: string }>> => []),
+    createQueue: jest.fn(async () => ({ id: 'queue-1', title: '[SANDBOX] Очередь из админки' })),
+    addItem: jest.fn(async () => ({ id: 'item-1' })),
+    linkConversation: jest.fn(async () => ({ id: 'item-1', status: 'READY' })),
+    getQueue: jest.fn(async () => ({
+      id: 'queue-1', title: '[SANDBOX] Очередь из админки',
+      items: [{ id: 'item-1', youtubeVideoId: 'v1', title: 'T', status: 'READY', conversationId: 'conv-1' }],
+    })),
+  };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
   const discrepancy = { detect: jest.fn(async () => ({ kind: 'disc' })) };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, manipulation, discrepancy, turningPoints };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, manipulation, discrepancy, turningPoints };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -70,6 +80,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.conversations as any,
     deps.audioBlob as any,
     deps.youtube as any,
+    deps.mediaReview as any,
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
@@ -91,6 +102,9 @@ describe('AdminSandboxService — граница по роли', () => {
     await expect(svc.issueUploadClientToken(REGULAR, 'conv-1', 'conversation-audio/conv-1/f.m4a')).rejects.toBeInstanceOf(ForbiddenException);
     await expect(svc.confirmUpload(REGULAR, 'conv-1', 'conversation-audio/conv-1/f.m4a')).rejects.toBeInstanceOf(ForbiddenException);
     await expect(svc.transcribeUploaded(REGULAR, 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.addToQueue(REGULAR, { youtubeVideoId: 'v1', title: '', channelName: '', thumbnailUrl: '' })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.linkQueueItem(REGULAR, 'item-1', 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.getSandboxQueue(REGULAR)).rejects.toBeInstanceOf(ForbiddenException);
     // Ни платных вызовов, ни выдачи согласий не произошло.
     expect(deps.youtube.search).not.toHaveBeenCalled();
     expect(deps.consent.grant).not.toHaveBeenCalled();
@@ -273,6 +287,54 @@ describe('AdminSandboxService — загрузка реального файла
     const dto = (deps.conversations.create as jest.Mock).mock.calls[0][2];
     expect(dto.sourceType).toBe('UPLOADED_VIDEO');
     expect(dto.durationSeconds).toBe(120);
+  });
+});
+
+describe('AdminSandboxService — песочная очередь медиа-разбора (третья итерация)', () => {
+  it('addToQueue создаёт очередь один раз и переиспользует её по маркеру', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    const video = { youtubeVideoId: 'v1', title: 'T', channelName: 'C', thumbnailUrl: 'u' };
+
+    const first = await svc.addToQueue(OPERATOR, video);
+    expect(first).toEqual({ queueId: 'queue-1', itemId: 'item-1' });
+    expect(deps.mediaReview.createQueue).toHaveBeenCalledTimes(1);
+
+    // Вторая кнопка «Разобрать» — очередь уже существует.
+    deps.mediaReview.listQueues = jest.fn(async () => [{ id: 'queue-1', title: '[SANDBOX] Очередь из админки' }]);
+    await svc.addToQueue(OPERATOR, video);
+    expect(deps.mediaReview.createQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('пустой youtubeVideoId — отказ до создания чего-либо', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    await expect(
+      svc.addToQueue(OPERATOR, { youtubeVideoId: '  ', title: '', channelName: '', thumbnailUrl: '' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(deps.mediaReview.addItem).not.toHaveBeenCalled();
+  });
+
+  it('привязка и чтение очереди делегируются продовому MediaReviewService с userId оператора', async () => {
+    const deps = makeDeps();
+    deps.mediaReview.listQueues = jest.fn(async () => [{ id: 'queue-1', title: '[SANDBOX] Очередь из админки' }]);
+    const svc = makeService(deps);
+
+    await svc.linkQueueItem(OPERATOR, 'item-1', 'conv-1');
+    expect(deps.mediaReview.linkConversation).toHaveBeenCalledWith(OPERATOR, 'item-1', 'conv-1');
+
+    const res = await svc.getSandboxQueue(OPERATOR);
+    // Именно продовый getQueue(): он синхронизирует READY→PROCESSING→DONE.
+    expect(deps.mediaReview.getQueue).toHaveBeenCalledWith(OPERATOR, 'queue-1');
+    expect(res.queue?.items[0].status).toBe('READY');
+  });
+
+  it('очереди ещё нет — честный null, а не создание пустой при каждом просмотре', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    const res = await svc.getSandboxQueue(OPERATOR);
+    expect(res.queue).toBeNull();
+    expect(deps.mediaReview.createQueue).not.toHaveBeenCalled();
   });
 });
 

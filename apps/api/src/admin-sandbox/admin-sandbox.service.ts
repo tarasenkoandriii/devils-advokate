@@ -42,6 +42,7 @@ import { ConsentService } from '../consent/consent.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { AudioBlobService } from '../conversations/audio-blob.service';
 import { YouTubeSearchService } from '../media-review/youtube-search.service';
+import { MediaReviewService } from '../media-review/media-review.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 import { TurningPointsService } from '../turning-points/turning-points.service';
@@ -52,6 +53,10 @@ import { diagnoseDatabaseUrl, diagnosePoolerMismatch } from '../prisma/database-
 /** Вопрос-маркер песочного проекта. Поиск идёт по нему, поэтому прогоны
  * переиспользуют один проект, а не плодят новый на каждую кнопку. */
 const SANDBOX_PROJECT_QUESTION = '[SANDBOX] Проверка конвейера из админки';
+
+/** Название песочной очереди медиа-разбора — та же логика
+ * переиспользования по маркеру, что у проекта выше. */
+const SANDBOX_QUEUE_TITLE = '[SANDBOX] Очередь из админки';
 
 const SANDBOX_CONSENT_TYPES: ConsentType[] = [
   ConsentType.RECORDING,
@@ -111,6 +116,7 @@ export class AdminSandboxService {
     private readonly conversations: ConversationsService,
     private readonly audioBlob: AudioBlobService,
     private readonly youtube: YouTubeSearchService,
+    private readonly mediaReview: MediaReviewService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
@@ -460,6 +466,89 @@ export class AdminSandboxService {
       conversationId,
       status: updated.status,
       externalJobId: updated.externalTranscriptionJobId,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Пункт [admin-sandbox], третья итерация 2026-08-31 — очередь
+  // медиа-разбора: кнопка «Разобрать» у результата поиска.
+  //
+  // ЧЕГО ЗДЕСЬ НАМЕРЕННО НЕТ: скачивания ролика с YouTube. Это
+  // граница ТЗ медіа-разбора §2.2 (легальный путь — только метаданные
+  // официального API), и песочница ей подчиняется так же, как прод:
+  // кнопка связывает ролик с элементом очереди, а ФАЙЛ приносит сам
+  // оператор — тем же протоколом прямой загрузки, что и выше. Зато
+  // этим закрывается последний непроверенный кусок цепочки: шаг 2
+  // (очередь) и синхронизация статусов READY→PROCESSING→DONE.
+  // ─────────────────────────────────────────────────────────────────
+
+  private async ensureSandboxQueue(operatorUserId: string) {
+    const queues = await this.mediaReview.listQueues(operatorUserId);
+    const existing = queues.find((q) => q.title === SANDBOX_QUEUE_TITLE);
+    if (existing) return existing;
+    return this.mediaReview.createQueue(operatorUserId, SANDBOX_QUEUE_TITLE);
+  }
+
+  /** Ролик из поиска → элемент песочной очереди. Метаданные приходят
+   * от клиента, но это НЕ доверие клиенту в опасном месте: это ровно
+   * тот же контракт, что у продового POST /media-review/queues/:id/items
+   * — очередь и есть список присланных клиентом метаданных. */
+  async addToQueue(
+    operatorUserId: string,
+    input: {
+      youtubeVideoId: string;
+      title: string;
+      channelName: string;
+      thumbnailUrl: string;
+      durationSeconds?: number;
+      publishedAt?: string;
+    },
+  ) {
+    await this.assertOperator(operatorUserId);
+    if (!input?.youtubeVideoId?.trim()) {
+      throw new BadRequestException('youtubeVideoId обязателен');
+    }
+    const queue = await this.ensureSandboxQueue(operatorUserId);
+    const item = await this.mediaReview.addItem(operatorUserId, queue.id, {
+      youtubeVideoId: input.youtubeVideoId,
+      title: input.title ?? '',
+      channelName: input.channelName ?? '',
+      thumbnailUrl: input.thumbnailUrl ?? '',
+      durationSeconds: input.durationSeconds,
+      publishedAt: input.publishedAt,
+    });
+    return { queueId: queue.id, itemId: item.id };
+  }
+
+  /** Привязка загруженного разговора к элементу очереди — продовый
+   * MediaReviewService.linkConversation, элемент переходит в READY. */
+  async linkQueueItem(operatorUserId: string, itemId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    return this.mediaReview.linkConversation(operatorUserId, itemId, conversationId);
+  }
+
+  /** Песочная очередь целиком — продовый getQueue(), который заодно
+   * синхронизирует статусы элементов с реальными Conversation.status
+   * (READY→PROCESSING→DONE). Именно этот вызов показывает, что DONE
+   * ставится только после turning-points. */
+  async getSandboxQueue(operatorUserId: string) {
+    await this.assertOperator(operatorUserId);
+    const queues = await this.mediaReview.listQueues(operatorUserId);
+    const queue = queues.find((q) => q.title === SANDBOX_QUEUE_TITLE);
+    if (!queue) return { queue: null };
+    const full = await this.mediaReview.getQueue(operatorUserId, queue.id);
+    return {
+      queue: {
+        id: full.id,
+        title: full.title,
+        items: (full.items as Array<Record<string, unknown>>).map((i) => ({
+          id: i.id,
+          youtubeVideoId: i.youtubeVideoId,
+          title: i.title,
+          status: i.status,
+          conversationId: i.conversationId ?? null,
+        })),
+      },
     };
   }
 

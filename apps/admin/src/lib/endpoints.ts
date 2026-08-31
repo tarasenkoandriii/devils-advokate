@@ -283,3 +283,26 @@ export function sandboxTranscribe(conversationId: string, languageCode?: string)
     languageCode,
   });
 }
+
+// ── Sandbox: песочная очередь медиа-разбора (третья итерация 2026-08-31) ──
+// Кнопка «Разобрать» у результата поиска. Скачивания ролика здесь НЕТ
+// намеренно (ТЗ медиа-разбора §2.2): элемент очереди хранит метаданные,
+// файл приносит сам оператор.
+import type { SandboxQueue, SandboxYouTubeResult } from './types';
+
+export function sandboxAddToQueue(video: SandboxYouTubeResult) {
+  return apiPost<{ queueId: string; itemId: string }>('/admin/sandbox/queue/items', {
+    youtubeVideoId: video.videoId,
+    title: video.title,
+    channelName: video.channelName,
+    thumbnailUrl: video.thumbnailUrl,
+    durationSeconds: video.durationSeconds ?? undefined,
+    publishedAt: video.publishedAt ?? undefined,
+  });
+}
+export function sandboxLinkQueueItem(itemId: string, conversationId: string) {
+  return apiPost<{ id: string; status: string }>('/admin/sandbox/queue/link', { itemId, conversationId });
+}
+export function getSandboxQueue() {
+  return apiGet<{ queue: SandboxQueue | null }>('/admin/sandbox/queue');
+}

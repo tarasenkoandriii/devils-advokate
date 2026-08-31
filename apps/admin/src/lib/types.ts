@@ -222,3 +222,16 @@ export interface SandboxConversation {
   participants: number;
   updatedAt: string;
 }
+
+export interface SandboxQueueItem {
+  id: string;
+  youtubeVideoId: string;
+  title: string;
+  status: string;
+  conversationId: string | null;
+}
+export interface SandboxQueue {
+  id: string;
+  title: string;
+  items: SandboxQueueItem[];
+}

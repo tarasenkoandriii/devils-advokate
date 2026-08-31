@@ -40,6 +40,21 @@ class TranscribeDto {
   languageCode?: string;
 }
 
+// Третья итерация 2026-08-31 — песочная очередь медиа-разбора.
+class AddToQueueDto {
+  youtubeVideoId!: string;
+  title!: string;
+  channelName!: string;
+  thumbnailUrl!: string;
+  durationSeconds?: number;
+  publishedAt?: string;
+}
+
+class LinkQueueItemDto {
+  itemId!: string;
+  conversationId!: string;
+}
+
 @Controller('admin/sandbox')
 @UseGuards(AdminSessionGuard)
 @UseInterceptors(ApiResponseInterceptor)
@@ -100,5 +115,22 @@ export class AdminSandboxController {
   @Post('transcribe')
   async transcribe(@CurrentUser() userId: string, @Body() dto: TranscribeDto) {
     return this.sandbox.transcribeUploaded(userId, dto.conversationId, dto.languageCode);
+  }
+
+  // ── Песочная очередь медиа-разбора (третья итерация 2026-08-31) ──
+
+  @Post('queue/items')
+  async addToQueue(@CurrentUser() userId: string, @Body() dto: AddToQueueDto) {
+    return this.sandbox.addToQueue(userId, dto);
+  }
+
+  @Post('queue/link')
+  async linkQueueItem(@CurrentUser() userId: string, @Body() dto: LinkQueueItemDto) {
+    return this.sandbox.linkQueueItem(userId, dto.itemId, dto.conversationId);
+  }
+
+  @Get('queue')
+  async queue(@CurrentUser() userId: string) {
+    return this.sandbox.getSandboxQueue(userId);
   }
 }
