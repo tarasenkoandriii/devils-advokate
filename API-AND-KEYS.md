@@ -62,6 +62,7 @@
 | Сервис | Переменная | Вызовы | От чего зависит | Без ключа |
 | --- | --- | --- | --- | --- |
 | **SerpApi** (Google Lens) | `SERPAPI_KEY` | `GET /search?engine=google_lens` | реверс-поиск фото | 500 на проверке фото |
+| **Gemini (Google AI)** | `GEMINI_API_KEY` | `POST /v1beta/interactions` (background), `GET /v1beta/interactions/{id}` | пункт [multimodal]: автоматический разбор публичного YouTube-видео ПО URI (байты ролика никогда не проходят через нашу инфраструктуру) и паралингвистика собственных записей | элемент очереди уходит в AWAITING_UPLOAD с причиной; ручной путь работает. Free tier: 8 ч YouTube-видео/сутки НА КЛЮЧ, не на пользователя |
 | **Vercel Blob** | `VERCEL_BLOB_READ_WRITE_TOKEN` | `PUT /{pathname}`, `POST /delete`, `POST /signed-token` | доказательства ДТП; временная публикация фото на время реверс-поиска; **прямая загрузка аудио разговоров** (пункт [blob-upload]) | 500 на этих фичах; на Vercel загрузка разговоров не работает вовсе; удаление аккаунта деградирует мягко |
 | **Telegram Bot API** | `TELEGRAM_BOT_TOKEN` | `POST /bot{token}/sendMessage` | push-напоминания планировщика | см. ниже — **особый случай** |
 | **Windy Point Forecast** | `WINDY_API_KEY` | `POST /api/point-forecast/v2` | прогноз погоды к дате встречи (первичный источник) | ✅ тихий откат на Open-Meteo — единственная по-настоящему опциональная интеграция |
@@ -84,6 +85,7 @@
 | `SECRET_PROVIDER_TYPE` | `env` (рабочий) либо `managed` (заглушка, бросает ошибку) | по умолчанию `env` |
 | `SCHEDULER_DISPATCH_SECRET` | `x-dispatch-secret` для трёх pg_cron-эндпоинтов | нужна, если используются фоновые задания |
 | `API_PUBLIC_BASE_URL` | собственный публичный адрес API для вебхуков | нужна для расшифровки |
+| `AI_JOB_DISPATCH_SECRET` | `x-dispatch-secret` воркера асинхронной AI-полосы (`/internal/ai-jobs/submit|poll|reap`, три pg_cron-джобы — `pg_cron_ai_jobs.sql`) | нужна для мультимодального анализа: без воркера джобы остаются в QUEUED и падают по lease |
 | `PORT` | локальный запуск | на Vercel не нужна |
 
 ---

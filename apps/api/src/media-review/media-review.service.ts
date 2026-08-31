@@ -6,7 +6,8 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ConversationProcessingStatus } from '@prisma/client';
+import { ConversationProcessingStatus, MediaReviewItemStatus } from '@prisma/client';
+import { MediaReviewAutoService } from './media-review-auto.service';
 
 export interface CreateQueueItemInput {
   youtubeVideoId: string;
@@ -30,7 +31,10 @@ function mapConversationStatusToItemStatus(status: ConversationProcessingStatus)
 
 @Injectable()
 export class MediaReviewService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auto: MediaReviewAutoService,
+  ) {}
 
   private async assertOwnedQueue(userId: string, queueId: string) {
     const queue = await this.prisma.mediaReviewQueue.findUnique({ where: { id: queueId } });
@@ -50,7 +54,17 @@ export class MediaReviewService {
   }
 
   async createQueue(userId: string, title: string) {
-    return this.prisma.mediaReviewQueue.create({ data: { userId, title } });
+    // Пункт [multimodal] §6.1.1 — очередь создаётся ВМЕСТЕ с
+    // проектом-контейнером: Conversation без projectId невозможен, а
+    // при автоматическом разборе Conversation создаём мы. Один проект
+    // на очередь, не на ролик. ProjectMode — STANDARD (дефолт), новый
+    // режим не заводится — решение ТЗ, зафиксированное явно.
+    return this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({
+        data: { ownerId: userId, question: title },
+      });
+      return tx.mediaReviewQueue.create({ data: { userId, title, projectId: project.id } });
+    });
   }
 
   async addItem(userId: string, queueId: string, input: CreateQueueItemInput) {
@@ -62,7 +76,7 @@ export class MediaReviewService {
     });
     const orderIndex = (maxOrder._max.orderIndex ?? -1) + 1;
 
-    return this.prisma.mediaReviewQueueItem.create({
+    const item = await this.prisma.mediaReviewQueueItem.create({
       data: {
         queueId,
         youtubeVideoId: input.youtubeVideoId,
@@ -74,6 +88,16 @@ export class MediaReviewService {
         orderIndex,
       },
     });
+
+    // Пункт [multimodal] §6.1 — автоматический разбор запускается СРАЗУ
+    // при добавлении: ни одного действия пользователя между «выбрал
+    // ролик» и «смотрю разбор». Отказ автоматики (длительность,
+    // согласия, квота) НЕ роняет добавление — элемент остаётся в
+    // AWAITING_UPLOAD с причиной, ручной путь §2.2 доступен как раньше.
+    const queue = await this.prisma.mediaReviewQueue.findUniqueOrThrow({ where: { id: queueId } });
+    await this.auto.tryEnqueueAnalysis(userId, queue, item);
+
+    return this.prisma.mediaReviewQueueItem.findUniqueOrThrow({ where: { id: item.id } });
   }
 
   /** §2.2 ТЗ: файл завантажується користувачем самостійно через уже
@@ -123,6 +147,25 @@ export class MediaReviewService {
         // ANALYZED. Раньше синхронизировался только READY, и элемент навсегда
         // застревал в PROCESSING (найдено аудитом, покрыто тестом).
         if ((item.status === 'READY' || item.status === 'PROCESSING') && item.conversation) {
+          // Пункт [multimodal] §6.4 [R2] — ветка FAILED. Общий маппинг
+          // ниже сводит FAILED в PROCESSING (осознанное упрощение
+          // ручного флоу), но для автоматического разбора это вернуло
+          // бы тот самый «елемент назавжди застряг у PROCESSING», уже
+          // однажды найденный аудитом: если воркер упал между
+          // AIJob→FAILED и откатом элемента, каждый следующий GET
+          // оставлял бы его в PROCESSING. Поэтому FAILED здесь — явный
+          // откат в AWAITING_UPLOAD с причиной, ручной путь доступен.
+          if (item.conversation.status === ConversationProcessingStatus.FAILED) {
+            return this.prisma.mediaReviewQueueItem.update({
+              where: { id: item.id },
+              data: {
+                status: MediaReviewItemStatus.AWAITING_UPLOAD,
+                autoAnalysisError:
+                  item.autoAnalysisError ??
+                  'Разбор завершился ошибкой — можно загрузить файл вручную либо повторить попытку',
+              },
+            });
+          }
           const mapped = mapConversationStatusToItemStatus(item.conversation.status);
           if (mapped !== item.status) {
             return this.prisma.mediaReviewQueueItem.update({ where: { id: item.id }, data: { status: mapped } });

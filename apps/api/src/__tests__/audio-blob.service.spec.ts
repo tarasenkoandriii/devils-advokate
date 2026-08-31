@@ -139,7 +139,13 @@ describe('AudioBlobService.confirmUpload', () => {
 
     expect(mockHead).toHaveBeenCalledWith(PATHNAME, { token: 'vercel_blob_rw_FAKE' });
     expect(res.sizeBytes).toBe(12345);
-    expect(deps.prisma._updates[0].data).toEqual({ audioBlobPathname: PATHNAME, audioBlobBytes: 12345 });
+    expect(deps.prisma._updates[0].data).toEqual({
+      audioBlobPathname: PATHNAME,
+      audioBlobBytes: 12345,
+      // Пункт [multimodal]: MIME-тип — тоже из head() у стора, не со
+      // слов клиента; нужен MediaRef'у паралингвистики.
+      audioBlobContentType: 'audio/mp4',
+    });
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: pathname вне нашего префикса отвергается', async () => {

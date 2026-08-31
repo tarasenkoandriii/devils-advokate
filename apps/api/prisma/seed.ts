@@ -61,6 +61,60 @@ async function main() {
     },
   });
 
+  // Пункт [multimodal] §5 — Gemini: единственный провайдер с медиа и
+  // фоновыми задачами (Interactions API, background: true). Ключ — в
+  // query-параметре, не в заголовке: authMethod 'query-key' наконец
+  // читается кодом (до этого поле существовало с чекпоинта 1 и нигде
+  // не использовалось, как и vision/audio ниже).
+  //
+  // ВЕРСИЯ МОДЕЛИ: значение ниже — плейсхолдер по актуальной на
+  // 2026-08-31 документации. ТЗ §1.2 прямо запрещает брать версии из
+  // документа: перед продом сверить со списком моделей, доступных
+  // ВАШЕМУ ключу, и поправить сид (иначе сид уедет в прод с устаревшей
+  // версией).
+  const google = await prisma.aIProvider.upsert({
+    where: { name: 'google' },
+    update: {},
+    create: {
+      name: 'google',
+      region: 'US',
+      apiEndpoint: 'https://generativelanguage.googleapis.com',
+      authMethod: 'query-key',
+      credentialRef: 'GEMINI_API_KEY',
+    },
+  });
+  const googleModel = await prisma.aIModel.upsert({
+    where: { providerId_name: { providerId: google.id, name: 'gemini-flash' } },
+    update: {},
+    create: { providerId: google.id, name: 'gemini-flash' },
+  });
+  const googleVersion = await prisma.aIModelVersion.upsert({
+    where: { modelId_version: { modelId: googleModel.id, version: 'gemini-3.7-flash' } },
+    update: {},
+    create: { modelId: googleModel.id, version: 'gemini-3.7-flash' },
+  });
+  for (const mediaTaskType of ['media-public-review', 'conversation-paralinguistics']) {
+    const existing = await prisma.aIModelCapability.findFirst({
+      where: { modelVersionId: googleVersion.id, taskType: mediaTaskType },
+    });
+    if (!existing) {
+      await prisma.aIModelCapability.create({
+        data: {
+          modelVersionId: googleVersion.id,
+          taskType: mediaTaskType,
+          structuredOutput: true,
+          streaming: false,
+          vision: true, // resolveModelVersion фильтрует по vision/audio для медиа-задач (§10.3)
+          audio: true,
+          latencyClass: 'high', // фоновая задача, минуты — потому и асинхронная полоса
+          privacyClass: 'external_processing',
+          costClass: 'high', // ~300 токенов/сек видео — на два порядка дороже текстовых вызовов
+          availability: 'active',
+        },
+      });
+    }
+  }
+
   const openaiModel = await prisma.aIModel.upsert({
     where: { providerId_name: { providerId: openai.id, name: 'gpt-4.1' } },
     update: {},

@@ -218,10 +218,28 @@ class FakeTranscriptionService {
 // blob в ЭТОМ файле — что файл удаляется после расшифровки, причём на
 // ОБЕИХ ветках вебхука. Заглушка, которая ничего не записывает, дала бы
 // зелёный тест и на коде, где удаления нет вовсе.
+function makeFakeParalinguistics() {
+  return {
+    wireCalls: 0,
+    enqueueCalls: [] as string[],
+    wireRelease() {
+      this.wireCalls += 1;
+    },
+    async enqueueForConversation(conversationId: string) {
+      this.enqueueCalls.push(conversationId);
+      return { jobId: 'para-job-1' };
+    },
+  };
+}
+
 function makeFakeAudioBlob() {
   return {
     presignCalls: [] as string[],
+    deleteCalls: [] as string[],
     releaseCalls: [] as { conversationId: string; pathname: string | null }[],
+    async deleteByPathname(pathname: string) {
+      this.deleteCalls.push(pathname);
+    },
     async presignForTranscription(pathname: string) {
       this.presignCalls.push(pathname);
       return `https://blob.example.com/${pathname}?signature=fake`;
@@ -258,7 +276,7 @@ async function run() {
       {} as SecretsService,
       {} as ConsentService,
       fakeTranscription as any,
-      makeFakeAudioBlob() as any,
+      makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     const c = await svc.create(USER_ID, PROJECT_ID, {
       sourceType: 'UPLOADED_AUDIO' as any,
@@ -271,7 +289,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, new FakeTranscriptionService() as any, makeFakeAudioBlob() as any,
+      prisma as any, {} as SecretsService, {} as ConsentService, new FakeTranscriptionService() as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     await assertThrowsAsync(
       () => svc.create(USER_ID, PROJECT_ID, { sourceType: 'UPLOADED_AUDIO' as any, occurredAt: new Date().toISOString() }),
@@ -288,7 +306,7 @@ async function run() {
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
     });
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any,
+      prisma as any, {} as SecretsService, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     await assertThrowsAsync(
       () => svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' }),
@@ -305,7 +323,7 @@ async function run() {
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING', occurredAt: new Date() },
     });
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any,
+      prisma as any, {} as SecretsService, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     await assertThrowsAsync(
       () => svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' }),
@@ -325,7 +343,7 @@ async function run() {
     });
 
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
 
     // Ни одного согласия — отказ.
     await assertThrowsAsync(
@@ -361,7 +379,7 @@ async function run() {
     prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
     prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
 
     const updated = await svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' });
     assertEqual(updated.status, 'TRANSCRIBING', 'статус после запроса транскрибации');
@@ -393,7 +411,7 @@ async function run() {
     const transcription = new FakeTranscriptionService();
     const audioBlob = makeFakeAudioBlob();
     const svc = new ConversationsService(
-      prisma as any, secrets, new ConsentService(prisma as any), transcription as any, audioBlob as any,
+      prisma as any, secrets, new ConsentService(prisma as any), transcription as any, audioBlob as any, makeFakeParalinguistics() as any,
     );
 
     await svc.requestTranscription(USER_ID, conv.id, {});
@@ -428,7 +446,7 @@ async function run() {
     prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
     const transcription = new FakeTranscriptionService();
     const svc = new ConversationsService(
-      prisma as any, { resolve: async () => 'k' } as any, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any,
+      prisma as any, { resolve: async () => 'k' } as any, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
 
     await assertThrowsAsync(
@@ -450,7 +468,7 @@ async function run() {
     prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
     const transcription = new FakeTranscriptionService();
     const svc = new ConversationsService(
-      prisma as any, { resolve: async () => 'k' } as any, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any,
+      prisma as any, { resolve: async () => 'k' } as any, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
 
     await assertThrowsAsync(
@@ -471,7 +489,7 @@ async function run() {
     });
     const transcription = new FakeTranscriptionService();
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
 
     // Раньше здесь проверялось только владение разговором — файл уходил
     // AssemblyAI, а согласия спрашивались на следующем шаге, когда байты
@@ -494,7 +512,7 @@ async function run() {
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
     });
     const transcription = new FakeTranscriptionService();
-    const svc = new ConversationsService(prisma as any, {} as SecretsService, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any);
+    const svc = new ConversationsService(prisma as any, {} as SecretsService, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
 
     await assertThrowsAsync(
       () => svc.streamUploadAudio(USER_ID, conv.id, null as any),
@@ -516,7 +534,7 @@ async function run() {
     });
     const transcription = new FakeTranscriptionService();
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
 
     const { audioUrl } = await svc.streamUploadAudio(USER_ID, conv.id, null as any);
     assertEqual(audioUrl, 'https://cdn.assemblyai.com/upload/fake', 'audioUrl после успешной загрузки');
@@ -546,7 +564,7 @@ async function run() {
     };
     const secrets = { resolve: async () => 'fake-key' } as any;
     const svc = new ConversationsService(
-      prisma as any, secrets, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any,
+      prisma as any, secrets, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
 
     // Финальный аудит 2026-08-30: реальный вебхук несёт только transcript_id/status.
@@ -578,7 +596,7 @@ async function run() {
       ],
     };
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
 
     // AssemblyAI ретраит вебхук на любой не-2xx — повторная доставка это
     // штатное поведение провайдера, а не экзотика.
@@ -598,6 +616,9 @@ async function run() {
         projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING',
         occurredAt: new Date(), externalTranscriptionJobId: 'job-blob-ok',
         audioBlobPathname: 'conversation-audio/c9/rec.m4a',
+        // Пункт [multimodal] §7.2: один потребитель (AssemblyAI) —
+        // поведение прежнее: вебхук доводит счётчик до нуля и удаляет.
+        pendingMediaConsumers: 1,
       },
     });
     const transcription = new FakeTranscriptionService();
@@ -607,16 +628,50 @@ async function run() {
     };
     const audioBlob = makeFakeAudioBlob();
     const svc = new ConversationsService(
-      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, transcription as any, audioBlob as any,
+      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, transcription as any, audioBlob as any, makeFakeParalinguistics() as any,
     );
 
     await svc.handleTranscriptionWebhook({ transcript_id: 'job-blob-ok', status: 'completed' } as any);
 
-    assertEqual(audioBlob.releaseCalls.length, 1, 'ровно одно удаление файла');
-    assertEqual(audioBlob.releaseCalls[0].pathname, 'conversation-audio/c9/rec.m4a', 'удалён именно файл этого разговора');
+    assertEqual(audioBlob.deleteCalls, ['conversation-audio/c9/rec.m4a'], 'файл физически удалён на нуле потребителей');
+    assertEqual(prisma._getConversation(conv.id).audioBlobPathname, null, 'ссылка на файл снята тем же путём');
     // Транскрипт при этом должен остаться: удаление стоит ПОСЛЕ записи
     // результата намеренно — потерять можно файл, но не результат.
     assertEqual(prisma._getSegments().length, 1, 'транскрипт сохранён, несмотря на удаление исходника');
+  });
+
+  test('[multimodal] КЛЮЧЕВОЙ ТЕСТ §7.2: при включённой паралингвистике файл НЕ удаляется первым вебхуком — второй потребитель ещё не отработал', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const conv = await prisma.conversation.create({
+      data: {
+        projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING',
+        occurredAt: new Date(), externalTranscriptionJobId: 'job-para-1',
+        audioBlobPathname: 'conversation-audio/c9/rec.m4a',
+        paralinguisticsEnabled: true,
+        pendingMediaConsumers: 2,
+      },
+    });
+    const transcription = new FakeTranscriptionService();
+    transcription.transcriptResultByJobId['job-para-1'] = {
+      status: 'completed', id: 'job-para-1', language_code: 'ru',
+      utterances: [{ speaker: 'A', text: 'реплика', start: 0, end: 1000, confidence: 0.9 }],
+    };
+    const audioBlob = makeFakeAudioBlob();
+    const paralinguistics = makeFakeParalinguistics();
+    const svc = new ConversationsService(
+      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, transcription as any, audioBlob as any, paralinguistics as any,
+    );
+
+    await svc.handleTranscriptionWebhook({ transcript_id: 'job-para-1', status: 'completed' } as any);
+
+    // Без §7.2 вебхук удалил бы файл раньше, чем воркер возьмёт
+    // паралингвистическую джобу — и проход не получил бы файла НИКОГДА
+    // (самоаудит ТЗ: гарантированный отказ, не гипотеза).
+    assertEqual(audioBlob.deleteCalls.length, 0, 'файл ещё жив — его ждёт паралингвистика');
+    assertEqual(prisma._getConversation(conv.id).pendingMediaConsumers, 1, 'потребитель AssemblyAI освобождён, паралингвистика — нет');
+    assertEqual(paralinguistics.enqueueCalls, [conv.id], 'паралингвистический проход поставлен ПОСЛЕ записи транскрипта');
   });
 
   test('[blob] КЛЮЧЕВОЙ ТЕСТ: файл удаляется и при ОШИБКЕ расшифровки — на этой ветке файлы копятся дольше всего', async () => {
@@ -628,6 +683,7 @@ async function run() {
         projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING',
         occurredAt: new Date(), externalTranscriptionJobId: 'job-blob-err',
         audioBlobPathname: 'conversation-audio/c9/bad.m4a',
+        pendingMediaConsumers: 1,
       },
     });
     const transcription = new FakeTranscriptionService();
@@ -636,14 +692,13 @@ async function run() {
     };
     const audioBlob = makeFakeAudioBlob();
     const svc = new ConversationsService(
-      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, transcription as any, audioBlob as any,
+      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, transcription as any, audioBlob as any, makeFakeParalinguistics() as any,
     );
 
     await svc.handleTranscriptionWebhook({ transcript_id: 'job-blob-err', status: 'error' } as any);
 
     assertEqual(prisma._getConversation(conv.id).status, 'FAILED', 'статус после ошибки провайдера');
-    assertEqual(audioBlob.releaseCalls.length, 1, 'файл удалён и на ветке ошибки');
-    assertEqual(audioBlob.releaseCalls[0].pathname, 'conversation-audio/c9/bad.m4a', 'удалён файл именно этого разговора');
+    assertEqual(audioBlob.deleteCalls, ['conversation-audio/c9/bad.m4a'], 'файл удалён и на ветке ошибки');
   });
 
   test('handleTranscriptionWebhook() переводит статус в FAILED при ошибке провайдера', async () => {
@@ -660,7 +715,7 @@ async function run() {
     fakeTranscription.transcriptResultByJobId['ext-job-2'] = { status: 'error', id: 'ext-job-2', error: 'audio too short' };
     const secrets = { resolve: async () => 'fake-key' } as any;
     const svc = new ConversationsService(
-      prisma as any, secrets, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any,
+      prisma as any, secrets, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     // Финальный аудит 2026-08-30: текст ошибки в реальном AssemblyAI API тоже
     // приходит не в вебхуке, а только в результате GET — тут это transcriptResultByJobId.
@@ -672,7 +727,7 @@ async function run() {
     const prisma = createFakePrisma();
     const fakeTranscription = new FakeTranscriptionService();
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any,
+      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     const result = await svc.handleTranscriptionWebhook({ transcript_id: 'unknown-job', status: 'completed' } as any);
     assertEqual(result, { acknowledged: true, matched: false }, 'ответ на webhook с неизвестным job id');
@@ -683,7 +738,7 @@ async function run() {
     const prisma = createFakePrisma();
     const fakeTranscription = new FakeTranscriptionService();
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any,
+      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     const result = await svc.handleTranscriptionWebhook({ status: 'completed' } as any);
     assertEqual(result, { acknowledged: true, matched: false }, 'порожній transcript_id — чесна відмова, не пошук «першого-ліпшого» запису');

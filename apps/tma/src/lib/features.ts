@@ -368,7 +368,7 @@ export function getConversation(conversationId: string): Promise<ConversationDet
 // «возьмём какой-нибудь»: см. dto/request-transcription.dto.ts.
 export function requestTranscription(
   conversationId: string,
-  input: { audioUrl?: string; languageCode?: string } = {},
+  input: { audioUrl?: string; languageCode?: string; enableParalinguistics?: boolean } = {},
 ): Promise<Conversation> {
   return apiPost<Conversation>(`/conversations/${conversationId}/transcribe`, input);
 }
@@ -461,6 +461,21 @@ export async function uploadConversationAudioToBlob(
   return apiPost<{ pathname: string; sizeBytes: number }>(`/conversations/${conversationId}/audio-blob`, {
     pathname: blob.pathname,
   });
+}
+
+// Пункт [multimodal] §7.3 — сигналы подачи (паралингвистика).
+export interface DeliverySignal {
+  id: string;
+  signalType: 'DELIVERY_INCONGRUENCE' | 'EMOTIONAL_SHIFT' | string;
+  channel: string | null;
+  confidence: number | null;
+  segmentText: string;
+  startMs: number;
+  endMs: number;
+}
+
+export function listDeliverySignals(conversationId: string): Promise<DeliverySignal[]> {
+  return apiGet<DeliverySignal[]>(`/conversations/${conversationId}/delivery-signals`);
 }
 
 // Пункт 14 (backend) — Commitment Tracker (§3.49 ТЗ).

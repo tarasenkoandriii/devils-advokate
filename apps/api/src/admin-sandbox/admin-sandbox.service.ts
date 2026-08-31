@@ -237,6 +237,23 @@ export class AdminSandboxService {
       detail: blobOk ? undefined : 'нет ни VERCEL_BLOB_READ_WRITE_TOKEN, ни BLOB_READ_WRITE_TOKEN',
     });
 
+    // 5b. Пункт [multimodal] — мультимодальный анализ (авто-разбор
+    // YouTube + паралингвистика): ключ Gemini и секрет воркера
+    // асинхронной полосы (pg_cron_ai_jobs.sql).
+    items.push({
+      key: 'gemini',
+      label: 'GEMINI_API_KEY (мультимодальный анализ видео/аудио)',
+      ok: await this.secretPresent('GEMINI_API_KEY'),
+    });
+    items.push({
+      key: 'ai-dispatch',
+      label: 'AI_JOB_DISPATCH_SECRET (воркер асинхронных AI-задач)',
+      ok: await this.secretPresent('AI_JOB_DISPATCH_SECRET'),
+      detail: (await this.secretPresent('AI_JOB_DISPATCH_SECRET'))
+        ? undefined
+        : 'без него pg_cron-джобы ai-jobs-* не пройдут аутентификацию — см. prisma/manual-migrations/pg_cron_ai_jobs.sql',
+    });
+
     // 6. LLM-ключи (шаг 8: анализ) — нужен хотя бы один.
     const llm = {
       openai: await this.secretPresent('OPENAI_API_KEY'),

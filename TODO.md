@@ -1123,6 +1123,85 @@ Connect Project создаёт `BLOB_READ_WRITE_TOKEN`, а код и докум�
 на конце, отклоняет адрес с путём и http:// на публичном домене
 (localhost разрешён). 8 тестов.
 
+## Пункт [multimodal] 2026-08-31: полностью автоматический мультимодальный анализ медиа — реализовано, фазы A–F
+
+Реализация `docs/devils-advocate-multimodal-media-analysis-tz.md`
+(редакция 2). Ключевое решение §0 соблюдено дословно: **проект
+по-прежнему ничего не скачивает** — провайдеру (Gemini, Interactions
+API, `background: true`) передаётся YouTube-URI либо подписанная ссылка
+на собственную запись, контент забирает провайдер, байты стороннего
+контента не проходят через нашу инфраструктуру и не сохраняются в ней.
+
+Что построено, по фазам:
+
+- **A — контракт**: `ContentBlock`/`MediaRef`/`MediaUriResolver`,
+  `userPrompt: string | ContentBlock[]` (все 85+ существующих taskType
+  не тронуты ни строкой), явный отказ двух текстовых клиентов от
+  медиа-блоков, `hashInput` по MediaRef (§10.1), фильтр `vision/audio`
+  в `resolveModelVersion` (§10.3 — мёртвые колонки наконец читаются).
+- **B — асинхронная полоса**: `AIJob.pendingRequest/leaseExpiresAt/
+  externalInteractionId` (+ `requestUserId` сверх списка ТЗ — без него
+  «только свои джобы» в GET /ai-jobs/:id проверять нечем),
+  `enqueue()/submitQueued()/pollRunning()/reapExpired()` с
+  FOR UPDATE SKIP LOCKED, воркер-контроллер с `AI_JOB_DISPATCH_SECRET`
+  (паттерн SchedulerController), `pg_cron_ai_jobs.sql` (3 джобы).
+  Функция никогда не ждёт модель — ожидание на стороне Google.
+- **C — GeminiClient** против Interactions API (не legacy
+  generateContent), маппинг всех 8 статусов, ключ в query
+  (`authMethod` ожил), `usage.input_tokens_by_modality` в результат;
+  сид провайдера google + capability(vision, audio). §10.4: роутер —
+  седьмая точка `assertAudioMayLeaveDevice` для blob-медиа.
+- **D — media-review автоматика**: `MediaReviewQueue.projectId`
+  (транзакция очередь+проект; бэкфилл существующих баз —
+  `manual-migrations/multimodal_media_queue_project.sql` ДО db push),
+  `PUBLIC_VIDEO_URI`, авто-enqueue при добавлении в очередь, персистенс
+  §6.2 одной транзакцией (участники→транскрипт→сегменты→сигналы с
+  провенансом), `autoAnalysisError` + откат в AWAITING_UPLOAD, правка
+  `getQueue()` для FAILED (иначе вернулся бы «застрявший PROCESSING»),
+  лимит 20 минут с обоснованием стоимости, промпт через PromptRegistry.
+  Сквозной обязательный тест ТЗ «getSummary() видит сигналы
+  автоматического разбора» — есть и зелёный.
+- **E — паралингвистика**: `pendingMediaConsumers` +
+  `releaseMediaConsumer()` (файл удаляется на нуле потребителей, не по
+  первому вебхуку — иначе проход не получил бы файла никогда),
+  `MEDIA_LEASE_MAX_AGE` выведен из потолка ожидания внешней задачи,
+  сторожевая чистка, `DELIVERY_INCONGRUENCE` + `paralinguisticChannel`,
+  включение ТОЛЬКО явным чекбоксом на разговор. §7.4 в трёх местах:
+  промпт, валидация (стоп-паттерны «детекции лжи» проваливают выход),
+  тест.
+- **F — TMA**: чекбокс паралингвистики в форме, статусы/причины
+  авто-разбора в очереди, панель «Подача» в разборе разговора
+  (`GET /conversations/:id/delivery-signals`).
+
+Тесты: gemini-client (15), ai-router-async (10), media-review-auto (7),
+paralinguistics (7) + правки существующих. Всего по API: 653 jest +
+691 standalone, все зелёные; bootstrap-тест DI покрывает новые модули.
+
+**Честные границы (из §12.2 ТЗ, остаются в силе):**
+
+1. Interactions API НЕ подтверждён живым вызовом — контракт по
+   официальной документации; первый реальный прогон на проде и есть
+   проверка.
+2. `EXTERNAL_INTERACTION_MAX_WAIT_MS` (2 ч) и выведенные из него
+   PRESIGN/LEASE — НАЗНАЧЕНЫ, не измерены; пересмотреть по фактическому
+   SLA очереди Google.
+3. SKIP LOCKED-семантика проверена строково (запрос содержит FOR UPDATE
+   SKIP LOCKED), не против живого Postgres.
+4. Окно двойной постановки между POST /interactions и записью
+   externalInteractionId сужено до одного запроса, не закрыто.
+5. Версия модели в сиде (`gemini-3.7-flash`) — плейсхолдер по
+   документации 2026-08-31; сверить со списком моделей вашего ключа.
+6. Prompt injection ВНУТРИ ролика не закрыт — компенсация строгой
+   валидацией выхода, граница названа в §10.2.
+7. **Юридическое (§13) НЕ закрыто кодом**: соотношение условий
+   Gemini/YouTube, статус производного анализа, GDPR для публичных
+   видео с узнаваемыми людьми, и — отдельно — квалификация
+   паралингвистики как биометрии в ЕС. Паралингвистика реализована за
+   явным per-conversation согласием, но вопрос «какая сторона линии
+   VOICE_PROCESSING/VOICE_BIOMETRIC» должен закрыть юрисконсульт ДО
+   включения в проде. Free tier: 8 ч YouTube/сутки НА КЛЮЧ — для
+   многопользовательского прода нужен paid tier (§9.3).
+
 ## Требует решения владельца или отдельного прохода
 
 1. **CSRF на админке.** `SameSite=None` + отсутствие CSRF-токена: браузер

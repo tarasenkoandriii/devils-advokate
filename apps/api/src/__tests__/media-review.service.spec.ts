@@ -38,6 +38,11 @@ function createFakePrisma() {
     },
 
     mediaReviewQueue: {
+      findUniqueOrThrow: async ({ where }: any) => {
+        const q = queues.get(where.id);
+        if (!q) throw new Error('queue not found');
+        return q;
+      },
       findUnique: async ({ where }: any) => queues.get(where.id) ?? null,
       findMany: async ({ where }: any) =>
         Array.from(queues.values())
@@ -50,6 +55,11 @@ function createFakePrisma() {
       },
     },
     mediaReviewQueueItem: {
+      findUniqueOrThrow: async ({ where }: any) => {
+        const it = items.get(where.id);
+        if (!it) throw new Error('item not found');
+        return it;
+      },
       findUnique: async ({ where, include }: any) => {
         const item = items.get(where.id);
         if (!item) return null;
@@ -113,7 +123,11 @@ function createFakePrisma() {
 }
 
 function makeService(prisma: any) {
-  return new MediaReviewService(prisma as any);
+  return new MediaReviewService(prisma as any, {
+    // Пункт [multimodal]: авто-разбор в этих юнит-тестах не запускается
+    // — они проверяют очередь как таковую. tryEnqueueAnalysis — no-op.
+    tryEnqueueAnalysis: async () => undefined,
+  } as any);
 }
 
 describe('MediaReviewService', () => {
@@ -189,6 +203,21 @@ describe('MediaReviewService', () => {
     const result = await service.getQueue('u1', queue.id);
 
     expect(result.items[0].status).toBe('PROCESSING');
+  });
+
+  it('[multimodal] §6.4 КЛЮЧЕВОЙ ТЕСТ: Conversation.status=FAILED переводит элемент в AWAITING_UPLOAD, а не оставляет в PROCESSING навсегда', async () => {
+    const prisma = createFakePrisma();
+    const queue = prisma._seedQueue({ userId: 'u1', title: 'q' });
+    const conv = prisma._seedConversation({ status: 'FAILED' });
+    prisma._seedItem({ queueId: queue.id, conversationId: conv.id, status: 'PROCESSING' });
+    const svc = makeService(prisma);
+
+    const result = await svc.getQueue('u1', queue.id);
+
+    // Без правки §6.4 общий маппинг свёл бы FAILED в PROCESSING — тот
+    // самый «елемент назавжди застряг», уже однажды найденный аудитом.
+    expect(result.items[0].status).toBe('AWAITING_UPLOAD');
+    expect(result.items[0].autoAnalysisError).toBeTruthy();
   });
 
   it('фаза C: listQueues повертає лише свої черги з кількістю елементів', async () => {

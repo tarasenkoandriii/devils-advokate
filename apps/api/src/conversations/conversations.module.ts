@@ -4,6 +4,7 @@ import { ConversationsService } from './conversations.service';
 import { TranscriptionService } from './transcription.service';
 import { AudioUploadController } from './audio-upload.controller';
 import { AudioBlobService } from './audio-blob.service';
+import { ParalinguisticsService } from './paralinguistics.service';
 import { TelegramAuthModule } from '../telegram-auth/telegram-auth.module';
 import { ConsentModule } from '../consent/consent.module';
 import { SecretsModule } from '../secrets/secrets.module';
@@ -15,7 +16,7 @@ import { SecretsModule } from '../secrets/secrets.module';
   // выдачи blob-токена чужой формат ответа (его разбирает клиентский
   // SDK @vercel/blob). Подробное объяснение — в шапке того файла.
   controllers: [ConversationsController, AudioUploadController],
-  providers: [ConversationsService, TranscriptionService, AudioBlobService],
+  providers: [ConversationsService, TranscriptionService, AudioBlobService, ParalinguisticsService],
   // TranscriptionService экспортирован дополнительно к
   // ConversationsService (Пункт 69, §3.26 ТЗ) — переиспользуется в
   // SparringModule для голосового ввода реплик, не задублирован.

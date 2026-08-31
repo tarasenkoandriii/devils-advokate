@@ -162,7 +162,7 @@ describe('Фича 1 — сквозной путь: проект → согла�
     const projectsService = new ProjectsService(prisma as any);
     const consentService = new ConsentService(prisma as any);
     const contentScanService = new ContentScanService(prisma as any);
-    const aiRouter = new AIRouterService(prisma as any, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consentService, contentScanService);
+    const aiRouter = new AIRouterService(prisma as any, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consentService, contentScanService, { resolve: async () => ({ uri: 'https://resolved.example/x' }) } as any);
     const argumentGenService = new ArgumentGenerationService(prisma as any, aiRouter);
 
     const USER_ID = 'user-1';
@@ -203,7 +203,7 @@ describe('Фича 1 — сквозной путь: проект → согла�
     const projectsService = new ProjectsService(prisma as any);
     const consentService = new ConsentService(prisma as any);
     const contentScanService = new ContentScanService(prisma as any);
-    const aiRouter = new AIRouterService(prisma as any, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consentService, contentScanService);
+    const aiRouter = new AIRouterService(prisma as any, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consentService, contentScanService, { resolve: async () => ({ uri: 'https://resolved.example/x' }) } as any);
     const argumentGenService = new ArgumentGenerationService(prisma as any, aiRouter);
 
     const project = await projectsService.create('owner', { question: 'Q' });

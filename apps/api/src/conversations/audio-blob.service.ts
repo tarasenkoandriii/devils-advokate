@@ -211,7 +211,14 @@ export class AudioBlobService {
 
     await this.prisma.conversation.update({
       where: { id: conversationId },
-      data: { audioBlobPathname: pathname, audioBlobBytes: meta.size },
+      data: {
+        audioBlobPathname: pathname,
+        audioBlobBytes: meta.size,
+        // Пункт [multimodal]: MIME-тип нужен MediaRef'у паралингвистики
+        // — провайдер требует mime_type для blob-URI. Берётся из
+        // head() у стора, не со слов клиента, как и размер.
+        audioBlobContentType: meta.contentType,
+      },
     });
 
     return { pathname: meta.pathname, sizeBytes: meta.size, contentType: meta.contentType };

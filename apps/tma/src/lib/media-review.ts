@@ -4,6 +4,9 @@ import { apiGet, apiPatch, apiPost } from './api';
 export interface YouTubeSearchResult { videoId: string; title: string; channelName: string; thumbnailUrl: string; durationSeconds: number | null; publishedAt: string | null }
 export interface MediaReviewQueue { id: string; title: string; createdAt: string; _count?: { items: number } }
 export interface MediaReviewQueueItem {
+  // Пункт [multimodal] §6.4 — причина, по которой автоматический
+  // разбор не сработал (элемент при этом остаётся на ручном пути §2.2).
+  autoAnalysisError?: string | null;
   id: string; orderIndex: number; status: 'AWAITING_UPLOAD' | 'READY' | 'PROCESSING' | 'DONE' | string;
   youtubeVideoId: string; title: string; channelName: string; thumbnailUrl: string; durationSeconds?: number | null; conversationId?: string | null;
   conversation?: { status: string; projectId: string } | null;

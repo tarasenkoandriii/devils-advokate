@@ -37,6 +37,8 @@ import {
   listTurningPoints,
   requestTranscription,
   uploadConversationAudioToBlob,
+  listDeliverySignals,
+  DeliverySignal,
 } from '../lib/features';
 import {
   BestNextMoveRecommendation,
@@ -150,6 +152,10 @@ function AddConversationForm({
   const [needsConsent, setNeedsConsent] = useState(false);
   // Пункт [blob-upload] 2026-08-31 — проценты прямой загрузки в blob.
   const [uploadPercent, setUploadPercent] = useState(0);
+  // Пункт [multimodal] §9.1 — паралингвистика: отдельный явный выбор
+  // на разговор, по умолчанию ВЫКЛЮЧЕНА (дополнительная передача аудио
+  // дополнительному провайдеру — видимое решение, не тихая настройка).
+  const [paralinguistics, setParalinguistics] = useState(false);
 
   const busy = step !== 'idle';
 
@@ -185,7 +191,7 @@ function AddConversationForm({
       setStep('transcribing');
       // audioUrl не передаётся намеренно: бэкенд возьмёт только что
       // загруженный файл и сам сделает для него подписанную ссылку.
-      await requestTranscription(conversation.id);
+      await requestTranscription(conversation.id, { enableParalinguistics: paralinguistics });
 
       haptic('success');
       onDone();
@@ -240,6 +246,24 @@ function AddConversationForm({
           accept="audio/*,video/*,image/*"
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         />
+      </label>
+
+      <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <input
+          type="checkbox"
+          checked={paralinguistics}
+          onChange={(e) => setParalinguistics(e.target.checked)}
+          style={{ marginTop: 3 }}
+        />
+        <span>
+          Анализ подачи (паралингвистика)
+          <br />
+          <small>
+            Дополнительный AI-проход по аудио: паузы, темп, несовпадение слов и интонации.
+            Аудио уйдёт второму провайдеру (Google) по защищённой ссылке; никаких выводов о
+            правдивости или личности — только описание наблюдаемого.
+          </small>
+        </span>
       </label>
 
       {/* Пункт [blob-upload] 2026-08-31 — текст исправлен, потому что
@@ -571,6 +595,7 @@ function ConversationRow({
   // рендерится отдельным блоком после транскрипта, не бейджем внутри
   // списка реплик.
   const [bestNextMove, setBestNextMove] = useState<BestNextMoveRecommendation | null>(null);
+  const [deliverySignals, setDeliverySignals] = useState<DeliverySignal[]>([]);
   const [detectingBestNextMove, setDetectingBestNextMove] = useState(false);
   const [bestNextMoveError, setBestNextMoveError] = useState<string | null>(null);
 
@@ -580,6 +605,12 @@ function ConversationRow({
     getLatestBestNextMove(conversation.id)
       .then(setBestNextMove)
       .catch(() => setBestNextMove(null));
+    // Пункт [multimodal] §7.3 — панель паралингвистики: сигналы подачи,
+    // если проход был включён и уже отработал. Пустой список = панель
+    // не показывается вовсе, ничего не «грузится» вхолостую.
+    listDeliverySignals(conversation.id)
+      .then(setDeliverySignals)
+      .catch(() => setDeliverySignals([]));
   }, [expanded, conversation.id, conversation.status]);
 
   async function handleDetectBestNextMove() {
@@ -640,6 +671,28 @@ function ConversationRow({
                         </select>
                       </label>
                     ))}
+                  </div>
+                )}
+
+                {deliverySignals.length > 0 && (
+                  <div className="participant-assignment">
+                    <p className="steelman-case__label">Подача (паралингвистика)</p>
+                    <ul className="transcript-segments">
+                      {deliverySignals.map((ds) => (
+                        <li key={ds.id}>
+                          <small>
+                            {Math.floor(ds.startMs / 60000)}:{String(Math.floor((ds.startMs % 60000) / 1000)).padStart(2, '0')}
+                            {' · '}
+                            {ds.signalType === 'DELIVERY_INCONGRUENCE' ? 'слова расходятся с подачей' : 'смена эмоционального тона'}
+                            {ds.channel ? ` · канал: ${ds.channel}` : ''}
+                          </small>
+                          <br />«{ds.segmentText}»
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="conversations-section__hint">
+                      Только описание наблюдаемого (темп, паузы, интонация). Это не оценка правдивости и не «детектор лжи».
+                    </p>
                   </div>
                 )}
 

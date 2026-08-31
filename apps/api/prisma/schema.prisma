@@ -317,6 +317,7 @@ model Project {
   safeShareActions SafeShareAction[]
   // Пункт 12: Conversation Dossier
   conversations  Conversation[]
+  mediaReviewQueues MediaReviewQueue[] // Пункт [multimodal] §6.1.1
   agendas        ConversationAgenda[]
   protectedNotes ProtectedNote[]
   // Пункт 14: Commitment Tracker
@@ -860,6 +861,13 @@ enum ConversationSignalType {
   SELF_RISK
   EMOTIONAL_SHIFT
   ARGUMENT_ACCEPTANCE
+  // Пункт [multimodal] §7.3 — слова расходятся с подачей: согласие
+  // произнесено неуверенно, отказ — с облегчением, утверждение — с
+  // восходящей вопросительной интонацией. Единственный класс сигнала,
+  // принципиально недоступный текстовому конвейеру. Ровно один новый
+  // тип на этом проходе; остальное, что модель нашла, остаётся в
+  // AIInference.output до появления реального потребителя.
+  DELIVERY_INCONGRUENCE
 }
 
 enum SignalSeverity {
@@ -914,6 +922,14 @@ model ConversationSignal {
   @@index([signalType])
   @@index([participantId])
   @@index([transcriptSegmentId])
+  // ── Пункт [multimodal] §7.3 — поле, осмысленное только для
+  // DELIVERY_INCONGRUENCE (по уже принятому в модели паттерну
+  // «поля, осмысленные только для одного типа») ──
+  // Канал наблюдения: 'prosody' | 'pace' | 'pause' | 'visual'.
+  // Строкой, не enum — тот же принцип, что inferenceType/taskType:
+  // не гадаем набор до появления реальных потребителей.
+  paralinguisticChannel String?
+
   @@map("conversation_signals")
 }
 
@@ -1010,6 +1026,12 @@ enum ConversationSourceType {
   // без шага транскрибации: текст уже текст. См. подробное
   // обоснование над ChatImportService.
   TEXT_IMPORT
+  // Пункт [multimodal] §6.3 — публичное видео, разобранное по URI
+  // провайдером. Файл никогда не существовал в нашей инфраструктуре —
+  // отличается от UPLOADED_VIDEO именно этим, а не происхождением
+  // контента. rawFileRef = ссылка на YouTube (по прямому назначению
+  // поля), audioBlobPathname остаётся null навсегда.
+  PUBLIC_VIDEO_URI
 }
 
 enum ConversationProcessingStatus {
@@ -1065,6 +1087,38 @@ model Conversation {
   // отдельного согласия; сейчас такого решения нет.
   audioBlobPathname String?
   audioBlobBytes    Int?
+
+  // Пункт [multimodal] §7.2 — счётчик потребителей файла в blob.
+  // requestTranscription() инкрементирует (AssemblyAI = 1, плюс 1 при
+  // включённой паралингвистике); каждый потребитель по завершении —
+  // успеху ИЛИ отказу — декрементирует через releaseMediaConsumer().
+  // Файл удаляется ТОЛЬКО при достижении нуля, а не по первому
+  // вебхуку: иначе паралингвистический проход не получил бы файла
+  // никогда (найдено самоаудитом ТЗ, гарантированный отказ, не риск).
+  // Сторожевая джоба принудительно чистит по MEDIA_LEASE_MAX_AGE:
+  // утечка файла хуже потерянного анализа.
+  pendingMediaConsumers Int @default(0)
+
+  // Пункт [multimodal] §7.2 — потолок аренды файла: выставляется при
+  // requestTranscription (now + MEDIA_LEASE_MAX_AGE); сторожевая джоба
+  // принудительно удаляет blob и обнуляет счётчик по его истечении.
+  // Утечка файла хуже потерянного анализа.
+  mediaLeaseExpiresAt DateTime?
+
+  // MIME-тип загруженного файла (из head() при подтверждении) — нужен
+  // MediaRef'у паралингвистического вызова: провайдер требует mime_type
+  // для blob-URI (§5).
+  audioBlobContentType String?
+
+  // Пункт [multimodal] §9.1 — паралингвистика включается ОТДЕЛЬНЫМ
+  // явным выбором пользователя на разговор, не по умолчанию: это
+  // дополнительная передача аудио дополнительному провайдеру.
+  // Выключено ⇒ конвейер работает ровно как раньше.
+  paralinguisticsEnabled Boolean @default(false)
+
+  // AIJob паралингвистического прохода — по нему обработчик завершения
+  // находит разговор. Строкой без FK, как aiJobId у элемента очереди.
+  paralinguisticsJobId String?
 
   // Пункт 13: интеграция STT/диаризации (AssemblyAI, см. README) —
   // provider отслеживается через уже существующий реестр AIModelVersion
@@ -1392,6 +1446,36 @@ model AIJob {
   // значения и не должны становиться невалидными задним числом.
   taskType String?
 
+  // ── Пункт [multimodal] §4.3 — асинхронная полоса ──
+
+  // Сериализованный AIRouterRequest для QUEUED-джоб асинхронной
+  // полосы. Медиа хранится как MediaRef (videoId/pathname), НЕ как
+  // подписанный URL: подпись протухает, а inputHash по подписанному
+  // URL был бы бесполезен для дедупликации (§10.1). Обнуляется тем же
+  // апдейтом, что переводит джобу в COMPLETED/FAILED — «есть
+  // pendingRequest» всегда значит «джоба ещё не исполнена».
+  pendingRequest Json?
+
+  // Момент, после которого джоба считается зависшей и переводится
+  // в FAILED сторожевой джобой (§4.5). Для QUEUED — защита от упавшего
+  // воркера; для RUNNING — потолок ожидания внешней задачи
+  // (EXTERNAL_INTERACTION_MAX_WAIT_MS, §3.3).
+  leaseExpiresAt DateTime?
+
+  // id задачи на стороне провайдера (Interactions API,
+  // background: true). Заполняется при переводе QUEUED → RUNNING;
+  // по нему pollRunning() забирает результат. Отдельное поле, не
+  // часть pendingRequest: pendingRequest — это ЧТО отправить,
+  // externalInteractionId — КУДА идти за ответом.
+  externalInteractionId String?
+
+  // Владелец запроса — для GET /ai-jobs/:id («только свои джобы»,
+  // ТЗ §4.4). Добавлено сверх списка §4.3: pendingRequest обнуляется
+  // при завершении, и проверять владение стало бы нечем. Nullable —
+  // существующие записи не имеют значения задним числом (тот же
+  // принцип, что taskType выше).
+  requestUserId String?
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   completedAt DateTime?
@@ -1400,6 +1484,7 @@ model AIJob {
   contentScanResults ContentScanResult[]
 
   @@index([status])
+  @@index([status, createdAt]) // Пункт [multimodal]: выборка воркера submitQueued/pollRunning
   @@index([inputHash])
   @@index([taskType, createdAt]) // Пункт [telemetry]: агрегация по фиче за период на растущей таблице
   @@index([promptVersionId])
@@ -4566,11 +4651,25 @@ model MediaReviewQueue {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   title  String // назва черги, задає користувач ("Дебати про клімат — жовтень")
 
+  // Пункт [multimodal] §6.1.1 — проект-контейнер для разговоров этой
+  // очереди. Обязателен: Conversation без projectId невозможен, а при
+  // автоматическом разборе Conversation создаём мы, не пользователь.
+  // Один проект на ОЧЕРЕДЬ, не на ролик — иначе список проектов
+  // засоряется по одному на каждое видео. Это ТРЕТИЙ случай того же
+  // chicken-egg, дважды уже починенного в проекте (interview-pool →
+  // Project.recruitingTeamId; investment → Project.investmentGroupId).
+  // ProjectMode — STANDARD, решено явно в ТЗ, новый режим не заводится.
+  // Для существующих строк — manual-migrations/multimodal_media_queue_project.sql
+  // ДО db push.
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   items MediaReviewQueueItem[]
 
   createdAt DateTime @default(now())
 
   @@index([userId])
+  @@index([projectId])
   @@map("media_review_queues")
 }
 
@@ -4587,6 +4686,18 @@ model MediaReviewQueueItem {
   publishedAt     DateTime?
 
   status MediaReviewItemStatus @default(AWAITING_UPLOAD)
+
+  // Пункт [multimodal] §6.4 — человекочитаемая причина, по которой
+  // автоматический разбор не сработал и элемент вернулся в
+  // AWAITING_UPLOAD (приватное видео, квота budget_exceeded, отказ
+  // модели). Пользователь при этом может пройти ручным путём §2.2 —
+  // статус для того и сохранён.
+  autoAnalysisError String?
+
+  // Пункт [multimodal] §6.1 — AIJob автоматического разбора этого
+  // элемента. Строкой без FK намеренно: связь диагностическая
+  // (найти джобу в телеметрии), каскады и join'ы ей не нужны.
+  aiJobId String?
 
   // Заповнюється, коли користувач завантажив файл і зв'язав його —
   // звідси й далі вся аналітика йде через уже наявний конвеєр

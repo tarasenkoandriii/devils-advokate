@@ -18,9 +18,16 @@ import { ConsentService } from '../consent/consent.service';
 import { ContentScanService } from '../content-scan/content-scan.service';
 import {
   AIProviderCompletionParams,
+  ContentBlock,
+  MediaRef,
+  requiresMedia,
   selectProviderClient,
+  EXTERNAL_INTERACTION_MAX_WAIT_MS,
 } from './ai-provider-client';
+import { MediaUriResolverService } from './media-uri-resolver.service';
+import { isBackgroundCapable } from './gemini-client';
 import {
+  Prisma,
   AIJobStatus,
   SchemaValidationResult,
   ConsentType,
@@ -35,7 +42,11 @@ export interface AIRouterRequest {
   taskType: string;
   promptVersionId?: string;
   systemPrompt?: string;
-  userPrompt: string;
+  /** Пункт [multimodal] §3.2 — строка ИЛИ блоки. Все существующие
+   * вызовы передают строку и не меняются. Медиа-блоки допустимы
+   * ТОЛЬКО через enqueue() — execute() их отвергает (§4.1: вызов не
+   * помещается в maxDuration функции). */
+  userPrompt: string | ContentBlock[];
   maxTokens?: number;
   temperature?: number;
   jsonMode?: boolean;
@@ -73,6 +84,36 @@ export class AIRouterContentBlockedError extends Error {
   }
 }
 
+// ── Пункт [multimodal] §4 — асинхронная полоса ──
+
+/** Лизинг QUEUED-джобы: если воркер не поставил задачу провайдеру за
+ * это время, сторожевая переводит её в FAILED — иначе джоба висит
+ * навсегда (класс бага «застрявший PROCESSING», уже найденный аудитом
+ * в media-review). */
+export const QUEUED_LEASE_MS = 15 * 60 * 1000;
+
+/** Сериализуемая часть AIRouterRequest для AIJob.pendingRequest.
+ * validateOutput сюда не попадает (функция не сериализуется) —
+ * валидация асинхронных джоб живёт в реестре по taskType, см.
+ * registerOutputValidator(). */
+export interface PendingRequestPayload {
+  userId: string;
+  projectId?: string;
+  taskType: string;
+  promptVersionId?: string;
+  systemPrompt?: string;
+  userPrompt: string | ContentBlock[];
+  maxTokens?: number;
+  temperature?: number;
+  jsonMode?: boolean;
+  maxRetries: number;
+}
+
+export type AsyncJobOutcome =
+  | { kind: 'completed'; jobId: string; aiInferenceId: string }
+  | { kind: 'failed'; jobId: string; reason: string }
+  | { kind: 'waiting'; jobId: string };
+
 type ModelVersionWithProvider = {
   id: string;
   version: string;
@@ -91,32 +132,137 @@ export class AIRouterService {
     private readonly secrets: SecretsService,
     private readonly consent: ConsentService,
     private readonly contentScan: ContentScanService,
+    private readonly mediaResolver: MediaUriResolverService,
   ) {}
 
+  // ── Пункт [multimodal] — реестры асинхронной полосы ──
+  //
+  // validateOutput — функция и в pendingRequest не сериализуется,
+  // поэтому для асинхронных джоб валидатор регистрируется по taskType
+  // (модуль-владелец делает это в onModuleInit). Обработчик завершения
+  // — тем же способом: роутер не знает про media-review, media-review
+  // знает про роутер, цикла модулей нет.
+  private readonly outputValidators = new Map<string, (text: string) => boolean>();
+  private readonly completionHandlers = new Map<
+    string,
+    (outcome: AsyncJobOutcome) => Promise<void>
+  >();
+
+  registerOutputValidator(taskType: string, validator: (text: string) => boolean): void {
+    this.outputValidators.set(taskType, validator);
+  }
+
+  registerCompletionHandler(taskType: string, handler: (outcome: AsyncJobOutcome) => Promise<void>): void {
+    this.completionHandlers.set(taskType, handler);
+  }
+
+  private async notifyCompletion(taskType: string | null, outcome: AsyncJobOutcome): Promise<void> {
+    if (!taskType) return;
+    const handler = this.completionHandlers.get(taskType);
+    if (!handler) return;
+    try {
+      await handler(outcome);
+    } catch (err) {
+      // Обработчик — потребитель результата, его сбой не должен
+      // ронять воркер целиком: остальные джобы батча важнее.
+      this.logger.error(`Completion handler for "${taskType}" failed on job ${outcome.jobId}: ${err}`);
+    }
+  }
+
   async execute(request: AIRouterRequest): Promise<AIRouterResult> {
-    // Закрывает первый TODO: без активного согласия на внешний AI —
-    // ForbiddenException, а не тихий вызов. requireConsent() сам решает,
-    // проверять ли глобальное согласие или согласие по конкретному
-    // проекту — см. ConsentService.hasActiveConsent().
+    // Пункт [multimodal] §4.1: медиа-вызов не помещается в maxDuration
+    // serverless-функции (замерено 25–32 с на 30-секундном ролике) —
+    // тот же класс отказа, что лимит 4,5 МБ: платформа отказывает выше
+    // нашего кода. Для медиа существует enqueue().
+    if (requiresMedia(request.userPrompt)) {
+      throw new AIRouterContentBlockedError(
+        'media content blocks must go through enqueue() — synchronous execute() cannot outlive the serverless function',
+      );
+    }
+
+    const prepared = await this.prepareJob(request);
+
+    try {
+      return await this.attemptWithRetryAndFallback(
+        prepared.job.id,
+        prepared.modelVersion,
+        prepared.sanitizedRequest,
+        prepared.maxRetries,
+      );
+    } catch (err) {
+      await this.prisma.aIJob.update({
+        where: { id: prepared.job.id },
+        data: { status: AIJobStatus.FAILED, completedAt: new Date() },
+      });
+      throw err;
+    }
+  }
+
+  /** Пункт [multimodal] §4.4 — асинхронная постановка. Тот же пролог,
+   * что execute() (общий prepareJob — дублирования нет намеренно),
+   * но вместо вызова провайдера джоба остаётся QUEUED с сериализованным
+   * запросом; исполняет её воркер (submitQueued/pollRunning). */
+  async enqueue(request: AIRouterRequest): Promise<{ jobId: string }> {
+    const prepared = await this.prepareJob(request);
+
+    const payload: PendingRequestPayload = {
+      userId: prepared.sanitizedRequest.userId,
+      projectId: prepared.sanitizedRequest.projectId,
+      taskType: prepared.sanitizedRequest.taskType,
+      promptVersionId: prepared.sanitizedRequest.promptVersionId,
+      systemPrompt: prepared.sanitizedRequest.systemPrompt,
+      userPrompt: prepared.sanitizedRequest.userPrompt,
+      maxTokens: prepared.sanitizedRequest.maxTokens,
+      temperature: prepared.sanitizedRequest.temperature,
+      jsonMode: prepared.sanitizedRequest.jsonMode,
+      maxRetries: prepared.maxRetries,
+    };
+
+    await this.prisma.aIJob.update({
+      where: { id: prepared.job.id },
+      data: {
+        pendingRequest: payload as never,
+        leaseExpiresAt: new Date(Date.now() + QUEUED_LEASE_MS),
+      },
+    });
+
+    return { jobId: prepared.job.id };
+  }
+
+  /** Общий пролог execute()/enqueue() — ТЗ §4.4 требует именно общий
+   * метод, а не копию: копия проверки в каждой точке — способ
+   * разъехаться, уже дважды стоивший дыр (см. ConsentService). */
+  private async prepareJob(request: AIRouterRequest) {
+    // Согласие на внешний AI — для любых вызовов.
     await this.consent.requireConsent(request.userId, ConsentType.EXTERNAL_AI, request.projectId);
 
-    // Закрывает второй TODO: prompt injection/PII scan перед тем, как
-    // текст вообще попадёт в AIJob. Если заблокировано — используем
-    // очищенный (или пустой, при блокировке) текст, не сырой ввод.
-    const scanOutcome = await this.contentScan.scan({
-      text: request.userPrompt,
-      targetType: ScanTargetType.AI_JOB_INPUT,
-    });
-    if (scanOutcome.blocked) {
+    // Пункт [multimodal] §10.4 — как только через роутер идёт АУДИО
+    // пользователя (blob-медиа), включается та же тройка проверок, что
+    // у шести существующих точек выхода аудио наружу: MAXIMUM_PRIVACY
+    // (жёсткий запрет) → RECORDING → EPHEMERAL_SERVER. Роутер — седьмая
+    // и последняя точка. Публичное YouTube-видео проверки не требует:
+    // своих данных пользователя там нет.
+    if (Array.isArray(request.userPrompt)) {
+      const hasBlobMedia = request.userPrompt.some(
+        (b) => b.type === 'media' && b.ref.source === 'blob',
+      );
+      if (hasBlobMedia) {
+        await this.consent.assertAudioMayLeaveDevice(request.userId, request.projectId);
+      }
+    }
+
+    const { sanitizedPrompt, scanResultIds, blocked } = await this.scanPrompt(request.userPrompt);
+    if (blocked) {
       throw new AIRouterContentBlockedError(
         'prompt injection pattern detected in userPrompt — request rejected before reaching any AI provider',
       );
     }
-    const sanitizedRequest: AIRouterRequest = { ...request, userPrompt: scanOutcome.sanitizedText };
+    const sanitizedRequest: AIRouterRequest = { ...request, userPrompt: sanitizedPrompt };
 
     const modelVersion = await this.resolveModelVersion(
       sanitizedRequest.taskType,
       sanitizedRequest.preferredModelVersionId,
+      requiresMedia(sanitizedRequest.userPrompt),
     );
 
     const inputHash = this.hashInput(sanitizedRequest);
@@ -133,27 +279,82 @@ export class AIRouterService {
         taskType: sanitizedRequest.taskType,
         status: AIJobStatus.QUEUED,
         retryPolicy: `${maxRetries} attempts, then fallback if configured`,
+        // Владелец запроса — для GET /ai-jobs/:id («только свои
+        // джобы»). Поле добавлено сверх списка ТЗ §4.3 ровно потому,
+        // что без него требование §4.4 о проверке владения выполнить
+        // нечем: pendingRequest обнуляется при завершении.
+        requestUserId: sanitizedRequest.userId,
       },
     });
 
-    // Привязываем результат скана к конкретной job постфактум — на
+    // Привязываем результаты скана к конкретной job постфактум — на
     // момент scan() job ещё не существовала (скан идёт до подбора модели
     // намеренно: не тратим выбор модели на контент, который всё равно
     // будет заблокирован/очищен).
-    await this.prisma.contentScanResult.updateMany({
-      where: { id: scanOutcome.resultId },
-      data: { aiJobId: job.id },
-    });
-
-    try {
-      return await this.attemptWithRetryAndFallback(job.id, modelVersion, sanitizedRequest, maxRetries);
-    } catch (err) {
-      await this.prisma.aIJob.update({
-        where: { id: job.id },
-        data: { status: AIJobStatus.FAILED, completedAt: new Date() },
+    if (scanResultIds.length > 0) {
+      await this.prisma.contentScanResult.updateMany({
+        where: { id: { in: scanResultIds } },
+        data: { aiJobId: job.id },
       });
-      throw err;
     }
+
+    return { job, modelVersion, sanitizedRequest, maxRetries };
+  }
+
+  /** Пункт [multimodal] §10.2 — скан промпта, который может быть
+   * строкой или блоками. Текстовые блоки сканируются как раньше,
+   * КАЖДЫЙ отдельно (иначе санитизацию не разложить обратно по
+   * блокам). Медиа-блоки регэкспом сканировать нечего — они
+   * записываются в ContentScanResult как непроверенные, с MediaRef в
+   * externalRef. Prompt injection ВНУТРИ ролика (текст на экране,
+   * произнесённая инструкция) этим НЕ закрывается — реальный вектор,
+   * частично компенсируемый строгой валидацией выхода; принятая
+   * граница, названная в ТЗ прямо. */
+  private async scanPrompt(userPrompt: string | ContentBlock[]): Promise<{
+    sanitizedPrompt: string | ContentBlock[];
+    scanResultIds: string[];
+    blocked: boolean;
+  }> {
+    if (typeof userPrompt === 'string') {
+      const outcome = await this.contentScan.scan({
+        text: userPrompt,
+        targetType: ScanTargetType.AI_JOB_INPUT,
+      });
+      return {
+        sanitizedPrompt: outcome.sanitizedText,
+        scanResultIds: [outcome.resultId],
+        blocked: outcome.blocked,
+      };
+    }
+
+    const scanResultIds: string[] = [];
+    const sanitized: ContentBlock[] = [];
+    for (const block of userPrompt) {
+      if (block.type === 'text') {
+        const outcome = await this.contentScan.scan({
+          text: block.text,
+          targetType: ScanTargetType.AI_JOB_INPUT,
+        });
+        scanResultIds.push(outcome.resultId);
+        if (outcome.blocked) {
+          return { sanitizedPrompt: userPrompt, scanResultIds, blocked: true };
+        }
+        sanitized.push({ type: 'text', text: outcome.sanitizedText });
+      } else {
+        const refLabel =
+          block.ref.source === 'youtube'
+            ? `media:youtube:${block.ref.videoId}`
+            : `media:blob:${block.ref.pathname}`;
+        const outcome = await this.contentScan.scan({
+          text: '',
+          targetType: ScanTargetType.AI_JOB_INPUT,
+          externalRef: refLabel,
+        });
+        scanResultIds.push(outcome.resultId);
+        sanitized.push(block);
+      }
+    }
+    return { sanitizedPrompt: sanitized, scanResultIds, blocked: false };
   }
 
   /** Подбор модели: явный выбор пользователя > первая active-модель
@@ -166,6 +367,7 @@ export class AIRouterService {
   private async resolveModelVersion(
     taskType: string,
     preferredId?: string,
+    needsMedia = false,
   ): Promise<ModelVersionWithProvider> {
     if (preferredId) {
       const preferred = await this.prisma.aIModelVersion.findUnique({
@@ -178,8 +380,16 @@ export class AIRouterService {
       return preferred;
     }
 
+    // Пункт [multimodal] §10.3 — мёртвые колонки vision/audio наконец
+    // читаются: без фильтра роутер отдал бы видео-задачу текстовой
+    // модели, и отказ выглядел бы как ошибка провайдера, а не
+    // конфигурации.
     const capability = await this.prisma.aIModelCapability.findFirst({
-      where: { taskType, availability: 'active' },
+      where: {
+        taskType,
+        availability: 'active',
+        ...(needsMedia ? { OR: [{ vision: true }, { audio: true }] } : {}),
+      },
       include: {
         modelVersion: { include: { model: { include: { provider: true } } } },
       },
@@ -305,9 +515,348 @@ export class AIRouterService {
     return { aiInferenceId: inference.id, jobId, text: result.text };
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Пункт [multimodal] §4.4–§4.5 — воркер асинхронной полосы.
+  //
+  // Наша функция НИКОГДА не ждёт модель: submitQueued ставит задачу
+  // провайдеру (background: true, ~1 c), pollRunning забирает статус
+  // (~1 c). Ожидание целиком на стороне Google — сколько бы ролик ни
+  // считался, в maxDuration: 10 мы укладываемся всегда.
+  //
+  // AIJob при этом остаётся единицей УЧЁТА, а не ожидания: провенанс
+  // (AIInference), телеметрия по taskType, ретраи с fallback,
+  // идемпотентность по inputHash — ничего из этого внешняя очередь
+  // Google не даёт.
+  // ─────────────────────────────────────────────────────────────────
+
+  /** Атомарный забор джоб. SKIP LOCKED ОБЯЗАТЕЛЕН: без него два
+   * одновременных срабатывания cron возьмут одну джобу дважды и
+   * выставят два счёта провайдеру (ТЗ §4.5). */
+  private async claimQueuedJobs(limit: number): Promise<string[]> {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      UPDATE ai_jobs SET status = 'RUNNING',
+             "leaseExpiresAt" = now() + interval '1 millisecond' * ${EXTERNAL_INTERACTION_MAX_WAIT_MS},
+             "updatedAt" = now()
+      WHERE id IN (
+        SELECT id FROM ai_jobs
+        WHERE status = 'QUEUED' AND "pendingRequest" IS NOT NULL
+        ORDER BY "createdAt"
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id`;
+    return rows.map((r) => r.id);
+  }
+
+  /** QUEUED → постановка задачи провайдеру → RUNNING+externalInteractionId.
+   *
+   * Окно между POST /interactions и записью externalInteractionId
+   * сужено до одного запроса, но не закрыто: упавший ровно здесь воркер
+   * оставит задачу у провайдера без ссылки у нас, и сторожевая пометит
+   * джобу FAILED. Принятая граница, названная в ТЗ (§4.5), не покрытый
+   * риск. */
+  async submitQueued(limit = 3): Promise<{ submitted: number; failed: number }> {
+    const ids = await this.claimQueuedJobs(limit);
+    let submitted = 0;
+    let failed = 0;
+
+    for (const jobId of ids) {
+      const job = await this.prisma.aIJob.findUniqueOrThrow({
+        where: { id: jobId },
+        include: { modelVersion: { include: { model: { include: { provider: true } } } } },
+      });
+      const payload = job.pendingRequest as unknown as PendingRequestPayload | null;
+      try {
+        if (!payload) throw new Error('pendingRequest is empty for a claimed job');
+        const provider = job.modelVersion.model.provider;
+        if (!provider.apiEndpoint || !provider.credentialRef) {
+          throw new Error(`AIProvider "${provider.name}" is missing apiEndpoint/credentialRef`);
+        }
+        const client = selectProviderClient(provider.name);
+        if (!isBackgroundCapable(client)) {
+          throw new Error(
+            `Provider "${provider.name}" does not support background interactions — async lane requires it`,
+          );
+        }
+        const apiKey = await this.secrets.resolve(provider.credentialRef);
+
+        // Разрешение MediaRef → URI только здесь, в момент вызова:
+        // подписанный URL живёт в теле запроса к провайдеру и нигде
+        // больше (§9.2).
+        const resolvedPrompt = await this.resolvePromptMedia(payload.userPrompt);
+
+        const { externalId } = await client.submitBackground(
+          {
+            model: job.modelVersion.version,
+            systemPrompt: payload.systemPrompt,
+            userPrompt: resolvedPrompt,
+            maxTokens: payload.maxTokens,
+            temperature: payload.temperature,
+            jsonMode: payload.jsonMode,
+          },
+          { apiKey, apiEndpoint: provider.apiEndpoint },
+        );
+
+        await this.prisma.aIJob.update({
+          where: { id: jobId },
+          data: { externalInteractionId: externalId },
+        });
+        submitted++;
+      } catch (err) {
+        failed++;
+        this.logger.warn(`submitQueued: job ${jobId} failed to submit: ${err}`);
+        const outcome = await this.failOrRequeue(jobId, payload, `постановка задачи провайдеру не удалась: ${err}`);
+        await this.notifyCompletion(job.taskType, outcome);
+      }
+    }
+    return { submitted, failed };
+  }
+
+  /** Разрешает media-блоки в URI; текстовые блоки и строку не трогает. */
+  private async resolvePromptMedia(
+    userPrompt: string | ContentBlock[],
+  ): Promise<string | ContentBlock[]> {
+    if (!Array.isArray(userPrompt)) return userPrompt;
+    // Клиент провайдера получает уже РАЗРЕШЁННЫЕ блоки — но контракт
+    // ContentBlock несёт MediaRef, поэтому разрешение подкладывается
+    // через закрытое поле, известное GeminiClient (см. gemini-client.ts).
+    const resolved: ContentBlock[] = [];
+    for (const block of userPrompt) {
+      if (block.type === 'media') {
+        resolved.push({ ...block, resolved: await this.mediaResolver.resolve(block.ref) });
+      } else {
+        resolved.push(block);
+      }
+    }
+    return resolved;
+  }
+
+  /** RUNNING с externalInteractionId → опрос провайдера → терминальный
+   * статус или ждём дальше. Маппинг восьми внешних статусов — ТЗ §4.4. */
+  async pollRunning(limit = 10): Promise<{ completed: number; failed: number; waiting: number }> {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM ai_jobs
+      WHERE status = 'RUNNING' AND "externalInteractionId" IS NOT NULL
+      ORDER BY "updatedAt"
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED`;
+
+    let completed = 0;
+    let failed = 0;
+    let waiting = 0;
+
+    for (const { id: jobId } of rows) {
+      const job = await this.prisma.aIJob.findUniqueOrThrow({
+        where: { id: jobId },
+        include: { modelVersion: { include: { model: { include: { provider: true } } } } },
+      });
+      const payload = job.pendingRequest as unknown as PendingRequestPayload | null;
+      const provider = job.modelVersion.model.provider;
+
+      try {
+        const client = selectProviderClient(provider.name);
+        if (!isBackgroundCapable(client) || !provider.apiEndpoint || !provider.credentialRef) {
+          throw new Error(`Provider "${provider.name}" cannot be polled`);
+        }
+        const apiKey = await this.secrets.resolve(provider.credentialRef);
+        const result = await client.fetchBackground(job.externalInteractionId as string, {
+          apiKey,
+          apiEndpoint: provider.apiEndpoint,
+        });
+
+        switch (result.status) {
+          case 'queued':
+          case 'in_progress':
+            waiting++;
+            break;
+          case 'completed': {
+            const text = result.text ?? '';
+            const validator = this.outputValidators.get(job.taskType ?? '');
+            const valid = validator ? validator(text) : true;
+            if (!valid) {
+              // Ретрай = НОВАЯ постановка задачи (новый externalInteractionId),
+              // не повторный опрос старой (§4.4).
+              await this.prisma.aIJob.update({
+                where: { id: jobId },
+                data: { schemaValidation: SchemaValidationResult.FAIL, partialResult: text },
+              });
+              const outcome = await this.failOrRequeue(jobId, payload, 'выход не прошёл валидацию схемы');
+              if (outcome.kind === 'failed') failed++;
+              await this.notifyCompletion(job.taskType, outcome);
+              break;
+            }
+            const inference = await this.prisma.aIInference.create({
+              data: {
+                output: text,
+                modelVersionId: job.modelVersionId,
+                promptVersionId: job.promptVersionId,
+                aiJobId: jobId,
+                inferenceType: job.taskType ?? 'unknown',
+                confidence: null,
+              },
+            });
+            await this.prisma.aIJob.update({
+              where: { id: jobId },
+              data: {
+                status: AIJobStatus.COMPLETED,
+                schemaValidation: SchemaValidationResult.PASS,
+                completedAt: new Date(),
+                pendingRequest: Prisma.DbNull,
+                leaseExpiresAt: null,
+              },
+            });
+            completed++;
+            await this.notifyCompletion(job.taskType, {
+              kind: 'completed',
+              jobId,
+              aiInferenceId: inference.id,
+            });
+            break;
+          }
+          case 'failed':
+          case 'cancelled': {
+            const outcome = await this.failOrRequeue(
+              jobId,
+              payload,
+              `провайдер завершил задачу со статусом ${result.status}: ${result.error ?? 'без деталей'}`,
+            );
+            if (outcome.kind === 'failed') failed++;
+            await this.notifyCompletion(job.taskType, outcome);
+            break;
+          }
+          case 'budget_exceeded': {
+            // Исчерпание квоты — не сбой и не повод для ретрая: новая
+            // постановка упрётся в тот же лимит (§9.3).
+            const outcome = await this.failJob(
+              jobId,
+              'исчерпан суточный лимит медиа-анализа провайдера (budget_exceeded) — попробуйте завтра либо перейдите на платный тариф',
+            );
+            failed++;
+            await this.notifyCompletion(job.taskType, outcome);
+            break;
+          }
+          case 'incomplete': {
+            const outcome = await this.failJob(
+              jobId,
+              'ответ упёрся в max_output_tokens (incomplete) — чинится промптом/длительностью, не ретраем',
+            );
+            failed++;
+            await this.notifyCompletion(job.taskType, outcome);
+            break;
+          }
+          case 'requires_action': {
+            const outcome = await this.failJob(
+              jobId,
+              'провайдер запросил tool-действие (requires_action), которых мы не передаём — контракт разошёлся',
+            );
+            failed++;
+            await this.notifyCompletion(job.taskType, outcome);
+            break;
+          }
+          default: {
+            const outcome = await this.failJob(jobId, `неизвестный статус провайдера: ${String(result.status)}`);
+            failed++;
+            await this.notifyCompletion(job.taskType, outcome);
+          }
+        }
+      } catch (err) {
+        // Сетевая ошибка опроса — не терминальна: задача у провайдера
+        // жива, попробуем в следующий тик. Терминальность обеспечивает
+        // leaseExpiresAt + сторожевая.
+        this.logger.warn(`pollRunning: job ${jobId} poll failed: ${err}`);
+        waiting++;
+      }
+    }
+
+    return { completed, failed, waiting };
+  }
+
+  /** Ретрай новой постановкой, пока есть попытки; иначе FAILED. */
+  private async failOrRequeue(
+    jobId: string,
+    payload: PendingRequestPayload | null,
+    reason: string,
+  ): Promise<AsyncJobOutcome> {
+    const job = await this.prisma.aIJob.findUniqueOrThrow({ where: { id: jobId } });
+    const maxRetries = payload?.maxRetries ?? 2;
+    if (payload && job.retryCount < maxRetries - 1) {
+      await this.prisma.aIJob.update({
+        where: { id: jobId },
+        data: {
+          status: AIJobStatus.QUEUED,
+          retryCount: { increment: 1 },
+          externalInteractionId: null,
+          leaseExpiresAt: new Date(Date.now() + QUEUED_LEASE_MS),
+        },
+      });
+      return { kind: 'waiting', jobId };
+    }
+    return this.failJob(jobId, reason);
+  }
+
+  private async failJob(jobId: string, reason: string): Promise<AsyncJobOutcome> {
+    await this.prisma.aIJob.update({
+      where: { id: jobId },
+      data: {
+        status: AIJobStatus.FAILED,
+        completedAt: new Date(),
+        partialResult: reason,
+        pendingRequest: Prisma.DbNull,
+        leaseExpiresAt: null,
+      },
+    });
+    return { kind: 'failed', jobId, reason };
+  }
+
+  /** Сторожевая (§4.5): протухший lease → FAILED, отдельными
+   * сообщениями для QUEUED (воркер не поставил задачу) и RUNNING
+   * (провайдер не ответил за EXTERNAL_INTERACTION_MAX_WAIT_MS). */
+  async reapExpired(): Promise<{ reaped: number }> {
+    const expired = await this.prisma.aIJob.findMany({
+      where: {
+        status: { in: [AIJobStatus.QUEUED, AIJobStatus.RUNNING] },
+        leaseExpiresAt: { lt: new Date() },
+      },
+      select: { id: true, status: true, taskType: true },
+    });
+    for (const job of expired) {
+      const reason =
+        job.status === AIJobStatus.QUEUED
+          ? 'воркер не поставил задачу провайдеру до истечения lease — проверьте pg_cron-джобы ai_jobs'
+          : 'провайдер не завершил задачу за отведённый потолок ожидания (EXTERNAL_INTERACTION_MAX_WAIT_MS); задача могла остаться у провайдера';
+      const outcome = await this.failJob(job.id, reason);
+      await this.notifyCompletion(job.taskType, outcome);
+    }
+    return { reaped: expired.length };
+  }
+
+  /** GET /ai-jobs/:id — только свои джобы (§4.4). */
+  async getJobForUser(userId: string, jobId: string) {
+    const job = await this.prisma.aIJob.findUnique({
+      where: { id: jobId },
+      include: { inferences: { select: { id: true }, take: 1, orderBy: { createdAt: 'desc' } } },
+    });
+    if (!job || job.requestUserId !== userId) {
+      return null;
+    }
+    return {
+      id: job.id,
+      status: job.status,
+      taskType: job.taskType,
+      aiInferenceId: job.inferences[0]?.id ?? null,
+      error: job.status === AIJobStatus.FAILED ? job.partialResult : null,
+    };
+  }
+
   private hashInput(request: AIRouterRequest): string {
     // Простой детерминированный хэш для идемпотентности (implementation-ready §7)
     // — не криптографический, только для дедупликации повторных запросов.
+    //
+    // Пункт [multimodal] §10.1: для ContentBlock[] хэш стабилен ИМЕННО
+    // потому, что блоки несут MediaRef (videoId/pathname), а не
+    // подписанный URL — подпись менялась бы при каждом presign и
+    // убивала дедупликацию. Разрешение в URL происходит позже, в
+    // момент вызова провайдера.
     const raw = JSON.stringify({
       taskType: request.taskType,
       systemPrompt: request.systemPrompt,

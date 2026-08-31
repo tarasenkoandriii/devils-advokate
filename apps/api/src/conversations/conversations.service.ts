@@ -18,26 +18,40 @@
 // не было способа её заполнить, TMA UI показывал лейбл диаризации
 // ("SPEAKER_00") как есть.
 
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { TranscriptionService, AssemblyAiWebhookPayload } from './transcription.service';
 import { AudioBlobService } from './audio-blob.service';
+import { ParalinguisticsService } from './paralinguistics.service';
+import { MEDIA_LEASE_MAX_AGE_MS } from '../ai-router/ai-provider-client';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
 import { ConversationProcessingStatus } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
 
 @Injectable()
-export class ConversationsService {
+export class ConversationsService implements OnModuleInit {
+  private readonly logger = new Logger(ConversationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly secrets: SecretsService,
     private readonly consent: ConsentService,
     private readonly transcription: TranscriptionService,
     private readonly audioBlob: AudioBlobService,
+    private readonly paralinguistics: ParalinguisticsService,
   ) {}
+
+  onModuleInit(): void {
+    // Проводка release-функции в ParalinguisticsService — инъекция
+    // функцией вместо forwardRef: циклическая DI ради одного вызова
+    // была бы дороже, чем это (см. комментарий у wireRelease).
+    this.paralinguistics.wireRelease((conversationId, count) =>
+      this.releaseMediaConsumer(conversationId, count ?? 1),
+    );
+  }
 
   async create(userId: string, projectId: string, dto: CreateConversationDto) {
     await this.assertProjectOwnership(userId, projectId);
@@ -117,12 +131,27 @@ export class ConversationsService {
       where: { model: { providerId: provider.id } },
     });
 
+    // Пункт [multimodal] §7.2 — счётчик потребителей файла. AssemblyAI
+    // — всегда потребитель №1 (для blob-пути); паралингвистика — №2,
+    // если включена. Файл удаляется на нуле, а не по первому вебхуку —
+    // иначе паралингвистический проход не получил бы файла никогда.
+    const hasBlob = conversation.audioBlobPathname != null; // != null: у фейков в тестах поле бывает undefined
+    const wantsParalinguistics = dto.enableParalinguistics === true;
+    if (wantsParalinguistics && !hasBlob) {
+      throw new ForbiddenException(
+        'Паралингвистика требует файла в хранилище (прямая загрузка): потоковый путь файла не оставляет, комментировать подачу не по чему',
+      );
+    }
+
     return this.prisma.conversation.update({
       where: { id: conversationId },
       data: {
         status: ConversationProcessingStatus.TRANSCRIBING,
         externalTranscriptionJobId: externalJobId,
         transcriptionProviderVersionId: modelVersion.id,
+        paralinguisticsEnabled: wantsParalinguistics,
+        pendingMediaConsumers: hasBlob ? (wantsParalinguistics ? 2 : 1) : 0,
+        mediaLeaseExpiresAt: hasBlob ? new Date(Date.now() + MEDIA_LEASE_MAX_AGE_MS) : null,
       },
     });
   }
@@ -167,13 +196,15 @@ export class ConversationsService {
         data: { status: ConversationProcessingStatus.FAILED },
       });
       // Пункт [blob-upload] 2026-08-31: удаление ОБЯЗАТЕЛЬНО и на ветке
-      // ошибки тоже. Соблазн «оставим файл, вдруг пользователь захочет
-      // повторить» — ровно тот механизм, которым транзитный буфер
-      // незаметно превращается в хранилище записей разговоров: на
-      // ошибках файлы копятся дольше всего и вспоминают о них позже
-      // всего. Повторная попытка = повторная загрузка, это дешевле
-      // честности насчёт того, что мы храним.
-      await this.audioBlob.releaseConversationAudio(conversation.id, conversation.audioBlobPathname);
+      // ошибки тоже — транзитный буфер не должен превращаться в
+      // хранилище. Пункт [multimodal] §7.2: теперь через счётчик
+      // потребителей; при ошибке транскрибации паралингвистика тоже не
+      // состоится (ей нужен транскрипт), поэтому освобождаются ОБА
+      // резерва разом.
+      await this.releaseMediaConsumer(
+        conversation.id,
+        conversation.paralinguisticsEnabled ? 2 : 1,
+      );
       return { acknowledged: true, matched: true };
     }
 
@@ -239,19 +270,97 @@ export class ConversationsService {
       data: { status: ConversationProcessingStatus.TRANSCRIBED },
     });
 
-    // Пункт [blob-upload] 2026-08-31 — файл больше не нужен: транскрипт
-    // получен и лежит в БД, а исходное аудио дальше по конвейеру
-    // (анализ манипуляций/расхождений/поворотных точек) не участвует
-    // вовсе — все три работают с текстом сегментов. Удаляем сразу, не
-    // дожидаясь TTL: §2 ТЗ про «сырые файлы не хранятся» соблюдается
-    // тем, что окно существования файла равно длительности
-    // транскрибации, а не сроку жизни разговора.
-    //
-    // Стоит ПОСЛЕ записи транскрипта намеренно: если удаление
-    // подвесится или упадёт, потерять можно файл, но не результат.
-    await this.audioBlob.releaseConversationAudio(conversation.id, conversation.audioBlobPathname);
+    // Пункт [multimodal] §7.1 — паралингвистический проход запускается
+    // строго ПОСЛЕ записи транскрипта: модель комментирует известные
+    // сегменты, не транскрибирует заново. Если постановка не удалась,
+    // зарезервированный под неё потребитель файла освобождается тут же
+    // — иначе blob висел бы до сторожевой.
+    let paralinguisticsReleases = 0;
+    if (conversation.paralinguisticsEnabled && conversation.audioBlobPathname) {
+      try {
+        await this.paralinguistics.enqueueForConversation(conversation.id);
+      } catch (err) {
+        paralinguisticsReleases = 1;
+        this.logger.warn(
+          `Паралингвистика для разговора ${conversation.id} не запустилась: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    // Пункт [blob-upload] → [multimodal] §7.2: раньше файл удалялся
+    // сразу по вебхуку; теперь — декремент потребителя AssemblyAI, и
+    // физическое удаление происходит на нуле. Для разговора без
+    // паралингвистики поведение НЕ меняется: 1 → 0 → удаление тем же
+    // вебхуком. Стоит ПОСЛЕ записи транскрипта намеренно: потерять
+    // можно файл, но не результат.
+    await this.releaseMediaConsumer(conversation.id, 1 + paralinguisticsReleases);
 
     return { acknowledged: true, matched: true };
+  }
+
+  /** Пункт [multimodal] §7.2 — единственная точка удаления файла.
+   * Декремент счётчика потребителей; на нуле — физическое удаление
+   * blob'а и обнуление ссылок. Инвариант «pathname в БД ⇒ файл
+   * существует» сохраняется; инвариант «удаляется сразу по завершении
+   * транскрибации» ОСЛАБЛЕН до «удаляется по завершении всех
+   * потребителей, но не позже MEDIA_LEASE_MAX_AGE» — осознанное
+   * расширение окна хранения, отражённое в тексте согласия
+   * EPHEMERAL_SERVER, не только здесь. */
+  async releaseMediaConsumer(conversationId: string, count = 1): Promise<void> {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { pendingMediaConsumers: true, audioBlobPathname: true },
+    });
+    if (!conversation) return;
+
+    const remaining = Math.max(0, (conversation.pendingMediaConsumers ?? 0) - count);
+    await this.prisma.conversation.update({
+      where: { id: conversationId },
+      data: { pendingMediaConsumers: remaining },
+    });
+
+    if (remaining === 0 && conversation.audioBlobPathname) {
+      await this.audioBlob.deleteByPathname(conversation.audioBlobPathname);
+      await this.prisma.conversation.update({
+        where: { id: conversationId },
+        data: {
+          audioBlobPathname: null,
+          audioBlobBytes: null,
+          audioBlobContentType: null,
+          mediaLeaseExpiresAt: null,
+        },
+      });
+    }
+  }
+
+  /** Сторожевая §7.2: потребители зависли дольше MEDIA_LEASE_MAX_AGE →
+   * принудительное удаление файла и обнуление счётчика. Утечка файла
+   * хуже потерянного анализа — приоритет прямо здесь. Вызывается из
+   * POST /internal/ai-jobs/reap (pg_cron). */
+  async reapExpiredMediaLeases(): Promise<{ mediaReaped: number }> {
+    const expired = await this.prisma.conversation.findMany({
+      where: {
+        pendingMediaConsumers: { gt: 0 },
+        mediaLeaseExpiresAt: { lt: new Date() },
+      },
+      select: { id: true, audioBlobPathname: true },
+    });
+    for (const conversation of expired) {
+      if (conversation.audioBlobPathname) {
+        await this.audioBlob.deleteByPathname(conversation.audioBlobPathname);
+      }
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: {
+          pendingMediaConsumers: 0,
+          audioBlobPathname: null,
+          audioBlobBytes: null,
+          audioBlobContentType: null,
+          mediaLeaseExpiresAt: null,
+        },
+      });
+    }
+    return { mediaReaped: expired.length };
   }
 
   /** Загрузка аудио клиентом — потоковая передача без буферизации,
@@ -323,6 +432,34 @@ export class ConversationsService {
       'Для разговора нет аудио: сначала загрузите файл (POST /conversations/:id/audio-upload-token → загрузка в хранилище → ' +
         'POST /conversations/:id/audio-blob) либо передайте готовый audioUrl.',
     );
+  }
+
+  /** Пункт [multimodal] §7.3, фаза F — сигналы подачи для панели
+   * паралингвистики в TMA. Возвращаются оба паралингвистических типа
+   * с текстом сегмента; без нового AI-вызова — только чтение. */
+  async listDeliverySignals(userId: string, conversationId: string) {
+    const conversation = await this.findOwnedConversation(userId, conversationId);
+    const signals = await this.prisma.conversationSignal.findMany({
+      where: {
+        signalType: { in: ['DELIVERY_INCONGRUENCE', 'EMOTIONAL_SHIFT'] },
+        transcriptSegment: { transcript: { conversationId: conversation.id } },
+        // Только сигналы с paralinguisticChannel или из паралингвистики:
+        // EMOTIONAL_SHIFT умеет создавать и текстовый конвейер, панель
+        // подачи показывает только «как сказано».
+        paralinguisticChannel: { not: null },
+      },
+      include: { transcriptSegment: { select: { text: true, startMs: true, endMs: true } } },
+      orderBy: { transcriptSegment: { startMs: 'asc' } },
+    });
+    return signals.map((s) => ({
+      id: s.id,
+      signalType: s.signalType,
+      channel: s.paralinguisticChannel,
+      confidence: s.confidence,
+      segmentText: s.transcriptSegment?.text ?? '',
+      startMs: s.transcriptSegment?.startMs ?? 0,
+      endMs: s.transcriptSegment?.endMs ?? 0,
+    }));
   }
 
   private async findOwnedConversation(userId: string, conversationId: string) {

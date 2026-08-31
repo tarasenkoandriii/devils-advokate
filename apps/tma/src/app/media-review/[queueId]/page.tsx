@@ -104,6 +104,18 @@ export default function MediaReviewQueuePage() {
                 <span><strong>{it.title}</strong><br /><small>{it.channelName}</small></span>
                 <span className="domain-badge">{STATUS_LABEL[it.status] ?? it.status}</span>
               </div>
+              {/* Пункт [multimodal] §6.4: если автоматика не сработала —
+                  показываем причину, ручной путь остаётся доступным. */}
+              {it.autoAnalysisError && (
+                <p className="card-section__empty" style={{ marginTop: 6 }}>
+                  Авто-разбор: {it.autoAnalysisError}
+                </p>
+              )}
+              {it.status === 'PROCESSING' && it.conversation?.status === 'ANALYZING' && (
+                <p className="card-section__empty" style={{ marginTop: 6 }}>
+                  Идёт автоматический разбор — видео анализирует провайдер по ссылке, приложение файл не скачивает.
+                </p>
+              )}
               {it.status === 'AWAITING_UPLOAD' && (
                 linkFor === it.id ? (
                   <div className="entity-form">

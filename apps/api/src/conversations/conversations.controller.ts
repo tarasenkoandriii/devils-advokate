@@ -112,6 +112,13 @@ export class ConversationsController {
     return this.conversations.streamUploadAudio(userId, id, webStream);
   }
 
+  // Пункт [multimodal] §7.3 — сигналы подачи (паралингвистика).
+  @Get('conversations/:id/delivery-signals')
+  @UseGuards(TelegramAuthGuard)
+  async deliverySignals(@CurrentUser() userId: string, @Param('id') id: string) {
+    return this.conversations.listDeliverySignals(userId, id);
+  }
+
   @Post('conversations/:id/transcribe')
   @UseGuards(TelegramAuthGuard)
   async transcribe(

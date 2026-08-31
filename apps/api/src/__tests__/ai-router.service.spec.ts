@@ -89,7 +89,7 @@ const openaiSuccessBody = { choices: [{ message: { content: '[{"text":"arg1","st
 function buildRouter(prisma: any, secretsMap: Record<string, string> = { OPENAI_API_KEY: 'sk-test' }) {
   const consent = new ConsentService(prisma as any);
   const contentScan = new ContentScanService(prisma as any);
-  return new AIRouterService(prisma as any, fakeSecrets(secretsMap) as any, consent, contentScan);
+  return new AIRouterService(prisma as any, fakeSecrets(secretsMap) as any, consent, contentScan, { resolve: async () => ({ uri: 'https://resolved.example/x' }) } as any);
 }
 
 const USER_ID = 'user-1';

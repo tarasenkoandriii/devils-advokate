@@ -122,7 +122,7 @@ const PERSON_ID = 'person-1';
 function buildSteelmanService(prisma: any) {
   const consent = new ConsentService(prisma);
   const contentScan = new ContentScanService(prisma);
-  const router = new AIRouterService(prisma, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consent, contentScan);
+  const router = new AIRouterService(prisma, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consent, contentScan, { resolve: async () => ({ uri: 'https://resolved.example/x' }) } as any);
   return new SteelmanService(prisma, router);
 }
 
