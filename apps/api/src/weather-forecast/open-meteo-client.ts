@@ -16,7 +16,9 @@ export interface ForecastResult {
 
 // WMO Weather interpretation codes — официальная таблица Open-Meteo,
 // не выдуманное сопоставление.
-const WEATHER_CODE_LABELS: Record<number, string> = {
+// Экспортирован (2026-08-30) — переиспользуется windy-client.ts: коды
+// weatherWarnings-surface у Windy построены на той же WMO-таблице.
+export const WEATHER_CODE_LABELS: Record<number, string> = {
   0: 'ясно',
   1: 'преимущественно ясно',
   2: 'переменная облачность',
@@ -54,7 +56,7 @@ export async function geocodeCity(cityName: string): Promise<Coordinates | null>
   if (!response.ok) {
     throw new Error(`Open-Meteo (геокодирование) вернул ошибку: ${response.status}`);
   }
-  const data = await response.json();
+  const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
   const result = data.results?.[0];
   if (!result) return null;
   return { latitude: result.latitude, longitude: result.longitude };
@@ -75,7 +77,7 @@ export async function getForecast(coords: Coordinates, targetDate: Date): Promis
   if (!response.ok) {
     throw new Error(`Open-Meteo (прогноз) вернул ошибку: ${response.status}`);
   }
-  const data = await response.json();
+  const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
   const times: string[] = data.hourly?.time ?? [];
   const temps: number[] = data.hourly?.temperature_2m ?? [];
   const codes: number[] = data.hourly?.weathercode ?? [];

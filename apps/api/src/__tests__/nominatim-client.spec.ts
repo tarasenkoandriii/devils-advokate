@@ -34,9 +34,9 @@ async function run() {
   });
 
   test('reverseGeocode() парсит country/city из ответа', async () => {
-    (global as any).fetch = async () => ({ ok: true, json: async () => ({ address: { country: 'Ukraine', city: 'Kyiv' } }) });
+    (global as any).fetch = async () => ({ ok: true, json: async () => ({ address: { country: 'Ukraine', country_code: 'ua', city: 'Kyiv' } }) });
     const result = await reverseGeocode(50.45, 30.52);
-    assertEqual(result, { country: 'Ukraine', city: 'Kyiv' }, 'country/city распознаны');
+    assertEqual(result, { country: 'Ukraine', countryCode: 'UA', city: 'Kyiv' }, 'country/city распознаны; аудит 2026-08-30: country_code → ISO-2 в верхнем регистре');
   });
 
   test('reverseGeocode() падает обратно на town/village/municipality, если city нет', async () => {
@@ -48,7 +48,7 @@ async function run() {
   test('reverseGeocode() возвращает {null, null} для координат вне покрытия (не бросает исключение)', async () => {
     (global as any).fetch = async () => ({ ok: true, json: async () => ({ error: 'Unable to geocode' }) });
     const result = await reverseGeocode(0, 0);
-    assertEqual(result, { country: null, city: null }, 'честный пустой результат, не падение');
+    assertEqual(result, { country: null, countryCode: null, city: null }, 'честный пустой результат, не падение');
   });
 
   test('reverseGeocode() бросает NominatimError при не-ok HTTP-ответе', async () => {

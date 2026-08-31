@@ -75,7 +75,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedFact({ id: 'fact-2', personId: 'person-1' });
     prisma._seedProjectPersonLink({ personId: 'person-1', projectId: 'proj-1' });
 
-    const service = new PrivacyCenterService(prisma as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
     const overview = await service.getOverview(USER_ID);
 
     expect(overview.projectsCount).toBe(2);
@@ -90,7 +90,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedProject({ id: 'proj-1', ownerId: 'other-user' });
     prisma._seedPerson({ id: 'person-1', createdByUserId: 'other-user', displayName: 'Чужой' });
 
-    const service = new PrivacyCenterService(prisma as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
     const overview = await service.getOverview(USER_ID);
 
     expect(overview.projectsCount).toBe(0);
@@ -103,7 +103,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedFact({ id: 'fact-1', personId: 'person-1' });
     prisma._seedFact({ id: 'fact-2', personId: 'person-1' });
 
-    const service = new PrivacyCenterService(prisma as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
     await service.deletePerson(USER_ID, 'person-1');
 
     expect(prisma._personExists('person-1')).toBe(false);
@@ -114,7 +114,7 @@ describe('PrivacyCenterService', () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: 'person-1', createdByUserId: 'other-user', displayName: 'Чужой' });
 
-    const service = new PrivacyCenterService(prisma as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
     await expect(service.deletePerson(USER_ID, 'person-1')).rejects.toThrow(NotFoundException);
     expect(prisma._personExists('person-1')).toBe(true);
   });
@@ -126,7 +126,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedFact({ id: 'fact-1', personId: 'person-1', content: 'Факт' });
     prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
 
-    const service = new PrivacyCenterService(prisma as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
     const data = await service.exportData(USER_ID);
 
     expect(data.projects.length).toBe(1);

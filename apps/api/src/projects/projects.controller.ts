@@ -11,6 +11,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
+import { NotRestrictedGuard } from '../telegram-auth/not-restricted.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { ProjectsService } from './projects.service';
@@ -32,6 +33,7 @@ export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
   @Post()
+  @UseGuards(NotRestrictedGuard) // devils-advocate-admin-panel-tz.md §4.3
   async create(@CurrentUser() userId: string, @Body() dto: CreateProjectDto) {
     return this.projects.create(userId, dto);
   }

@@ -68,7 +68,7 @@ describe('DecisionObjectiveService', () => {
 
     expect(updated.desiredOutcome).toBe('Вторая версия');
     const fetched = await service.get(USER_ID, PROJECT_ID);
-    expect(fetched.desiredOutcome).toBe('Вторая версия');
+    expect(fetched!.desiredOutcome).toBe('Вторая версия');
   });
 
   it('save() отклоняет чужой проект', async () => {

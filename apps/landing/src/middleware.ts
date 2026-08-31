@@ -18,9 +18,34 @@ function resolveLocale(request: NextRequest): Locale {
   const geoLocale = COUNTRY_TO_LOCALE[country];
   if (geoLocale) return geoLocale;
 
+  // ПОВТОРНЫЙ АУДИТ 2026-08-30: раньше здесь было
+  // `locales.find((l) => acceptLanguage.includes(l))` — поиск подстроки
+  // в порядке массива locales = ['en','uk','ru']. Для украинского
+  // браузера с "uk-UA,uk;q=0.9,en-US;q=0.8" первым совпадал 'en'
+  // (подстрока в заголовке присутствует), и пользователь получал
+  // английскую версию. Вне Vercel (или при x-vercel-ip-country=XX) это
+  // единственный работающий путь определения языка, то есть ошибка
+  // затрагивала всех, кто не попал в маппинг стран выше.
+  //
+  // Теперь заголовок разбирается по спецификации: пары "язык;q=вес",
+  // сортировка по убыванию веса, сопоставление по префиксу до дефиса.
   const acceptLanguage = (request.headers.get('accept-language') ?? '').toLowerCase();
-  const langMatch = locales.find((locale) => acceptLanguage.includes(locale));
-  if (langMatch) return langMatch;
+  const ranked = acceptLanguage
+    .split(',')
+    .map((part) => {
+      const [tag, ...params] = part.trim().split(';');
+      const qParam = params.find((p) => p.trim().startsWith('q='));
+      const q = qParam ? Number.parseFloat(qParam.trim().slice(2)) : 1;
+      return { tag: tag.trim(), q: Number.isFinite(q) ? q : 0 };
+    })
+    .filter((entry) => entry.tag.length > 0)
+    .sort((a, b) => b.q - a.q);
+
+  for (const { tag } of ranked) {
+    const primary = tag.split('-')[0];
+    const match = locales.find((locale) => locale === primary);
+    if (match) return match;
+  }
 
   return defaultLocale;
 }

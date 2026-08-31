@@ -63,7 +63,19 @@ function createFakePrisma() {
       },
       update: async ({ where, data }: any) => {
         const idx = entries.findIndex((e) => e.id === where.id);
-        entries[idx] = { ...entries[idx], ...data };
+        // Повторный аудит 2026-08-30: сервис перешёл на атомарный
+        // { increment: 1 } вместо read-then-write, значит и мок обязан
+        // трактовать эту форму так же, как Prisma, а не класть объект
+        // в поле счётчика.
+        const applied: any = {};
+        for (const [key, value] of Object.entries(data)) {
+          if (value && typeof value === 'object' && 'increment' in (value as any)) {
+            applied[key] = (entries[idx][key] ?? 0) + (value as any).increment;
+          } else {
+            applied[key] = value;
+          }
+        }
+        entries[idx] = { ...entries[idx], ...applied };
         return entries[idx];
       },
     },
@@ -120,21 +132,21 @@ async function run() {
   test('submitProject() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.submitProject(USER_ID, PROJECT_ID, 'Заголовок', 'Категория'), NotFoundException, 'submitProject() на чужой проект');
   });
 
   test('submitProject() бросает BadRequestException для пустого title/category', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.submitProject(USER_ID, PROJECT_ID, '  ', 'Категория'), BadRequestException, 'submitProject() с пустым title');
   });
 
   test('submitProject() бросает BadRequestException, если в проекте нет общих аргументов', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.submitProject(USER_ID, PROJECT_ID, 'Заголовок', 'Переезд'), BadRequestException, 'submitProject() без аргументов');
   });
 
@@ -144,7 +156,7 @@ async function run() {
     prisma._seedArgument({ projectId: PROJECT_ID, text: 'Общий аргумент за', stance: 'PRO', targetPersonId: null });
     prisma._seedArgument({ projectId: PROJECT_ID, text: 'Адресный аргумент', stance: 'PRO', targetPersonId: 'person-1' });
     prisma._seedArgument({ projectId: PROJECT_ID, text: 'Религиозный аргумент', stance: 'RECONCILIATION', targetPersonId: null });
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
 
     await svc.submitProject(USER_ID, PROJECT_ID, 'Переезд в другой город', 'Переезд');
     assertEqual(prisma._getLibraryArguments().length, 1, 'скопирован только один — общий PRO/CON');
@@ -155,7 +167,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     prisma._seedArgument({ projectId: PROJECT_ID, text: 'x', stance: 'PRO', targetPersonId: null });
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await svc.submitProject(USER_ID, PROJECT_ID, 'Заголовок', 'Категория');
     await assertThrowsAsync(() => svc.submitProject(USER_ID, PROJECT_ID, 'Другой заголовок', 'Другая категория'), BadRequestException, 'submitProject() повторно для того же проекта');
   });
@@ -163,7 +175,7 @@ async function run() {
   test('listPendingForModeration() бросает ForbiddenException для НЕ-модератора', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.listPendingForModeration(USER_ID), ForbiddenException, 'listPendingForModeration() без роли модератора');
   });
 
@@ -171,7 +183,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     prisma._seedEntry({ status: 'PENDING', title: 'x', category: 'y', sourceProjectId: PROJECT_ID, submittedByUserId: USER_ID });
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
 
     const pending = await svc.listPendingForModeration(MODERATOR_ID);
     assertEqual(pending.length, 1, 'модератор видит заявку на модерации');
@@ -182,8 +194,23 @@ async function run() {
     seedProject(prisma);
     prisma._seedEntry({ status: 'PENDING' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.moderate(USER_ID, entry.id, 'ACCEPT'), ForbiddenException, 'moderate() без роли модератора');
+  });
+
+  test('регресійний тест (Пункт [audit-log]): moderate() РЕАЛЬНО викликає auditLog.record', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedEntry({ status: 'PENDING' });
+    const [entry] = prisma._getEntries();
+    const recordedCalls: any[] = [];
+    const svc = new LibraryService(prisma as any, { record: async (input: any) => { recordedCalls.push(input); return {}; } } as any);
+
+    await svc.moderate(MODERATOR_ID, entry.id, 'ACCEPT');
+
+    assertEqual(recordedCalls.length, 1, 'auditLog.record викликаний рівно один раз');
+    assertEqual(recordedCalls[0].action, 'library_entry.moderated', 'дію зафіксовано правильно');
+    assertEqual(recordedCalls[0].resource, 'LibraryEntry', 'ресурс зафіксовано правильно');
   });
 
   test('moderate() ACCEPT переводит запись в статус ACCEPTED', async () => {
@@ -191,7 +218,7 @@ async function run() {
     seedProject(prisma);
     prisma._seedEntry({ status: 'PENDING' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
 
     const updated = await svc.moderate(MODERATOR_ID, entry.id, 'ACCEPT');
     assertEqual(updated.status, 'ACCEPTED', 'статус изменён модератором');
@@ -202,7 +229,7 @@ async function run() {
     seedProject(prisma);
     prisma._seedEntry({ status: 'ACCEPTED' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.moderate(MODERATOR_ID, entry.id, 'REJECT'), BadRequestException, 'moderate() на уже обработанную запись');
   });
 
@@ -210,7 +237,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedEntry({ status: 'ACCEPTED', category: 'Переезд' });
     prisma._seedEntry({ status: 'PENDING', category: 'Переезд' });
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
 
     const list = await svc.browse();
     assertEqual(list.length, 1, 'только принятая запись видна публично');
@@ -220,7 +247,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedEntry({ status: 'PENDING' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.getEntry(entry.id), NotFoundException, 'getEntry() на непринятую запись — не публикуется преждевременно');
   });
 
@@ -228,7 +255,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedEntry({ status: 'ACCEPTED' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
 
     const voted = await svc.vote(entry.id, 'up');
     assertEqual(voted.upvotes, 1, 'счётчик увеличен');
@@ -238,7 +265,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedEntry({ status: 'PENDING' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.vote(entry.id, 'up'), NotFoundException, 'vote() на непринятую запись');
   });
 
@@ -246,7 +273,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedEntry({ status: 'ACCEPTED' });
     const [entry] = prisma._getEntries();
-    const svc = new LibraryService(prisma as any);
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
 
     const experience = await svc.addExperience(entry.id, 'Мой опыт с похожим решением');
     assertEqual(experience.authorDisplayName, null, 'анонимный опыт');

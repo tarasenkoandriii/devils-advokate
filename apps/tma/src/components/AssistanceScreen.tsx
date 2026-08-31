@@ -34,6 +34,7 @@ import { startLiveAudioCapture, LiveAudioCaptureHandle, CaptureState } from '../
 import { connectLiveTranscription, LiveTranscriptionHandle, TranscriptUpdate } from '../lib/live-transcription';
 import { computeRmsDb, categorizeEscalation, VolumeWindow, EscalationCategory } from '../lib/acoustic-monitor';
 import { loadVoiceEmbeddingExtractor, embeddingToArray } from '../lib/voice-embedding';
+import { checkThirdPartyAudioConsent, ThirdPartyAudioConsentPrompt } from './ThirdPartyAudioConsentPrompt';
 import {
   mintTranscriptionToken,
   analyzeLiveManipulation,
@@ -86,6 +87,7 @@ interface TranscriptSegment {
 export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
   const [expanded, setExpanded] = useState(false);
   const [captureState, setCaptureState] = useState<CaptureState>('idle');
+  const [needsAudioConsent, setNeedsAudioConsent] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [category, setCategory] = useState<EscalationCategory | null>(null);
   const [flags, setFlags] = useState<LiveManipulationFlag[]>([]);
@@ -214,6 +216,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
   }
 
   async function handleStart() {
+    if (!(await checkThirdPartyAudioConsent())) { setNeedsAudioConsent(true); return; }
     const captureHandle = await startLiveAudioCapture((state, errorMessage) => {
       setCaptureState(state);
       setCaptureError(errorMessage);
@@ -464,7 +467,10 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
         </button>
       )}
 
-      {captureState === 'idle' && (
+      {needsAudioConsent && (
+        <ThirdPartyAudioConsentPrompt source="assistance-screen" onGranted={() => { setNeedsAudioConsent(false); handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
+      )}
+      {!needsAudioConsent && captureState === 'idle' && (
         <button type="button" onClick={handleStart}>
           Начать
         </button>

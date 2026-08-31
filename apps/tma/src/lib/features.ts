@@ -23,15 +23,10 @@ import {
   DecisionOutcomeRating,
   DecisionOutcome,
   CalibrationSummary,
-  SparringSessionStatus,
-  SparringMessageRole,
   SparringMessage,
   SparringSession,
   SparringVoiceReplyJob,
-  PublicSubmissionStatus,
-  PublicParticipant,
   PublicArgumentSubmission,
-  LibraryModerationStatus,
   LibraryEntry,
   FactScope,
   FactSourceType,
@@ -47,11 +42,8 @@ import {
   VenueRecommendation,
   PlaceSearchCandidate,
   VenueAutofillData,
-  VenueApplicationStatus,
   VenueApplication,
-  ApprovedVenue,
   VenueBookingConfirmation,
-  CommissionSummary,
   ReligiousReminderFrequency,
   ReligiousReminderResult,
   CompromiseSheet,
@@ -94,29 +86,24 @@ import {
   DiscrepancySignal,
   ArchetypeType,
   ArchetypePerspective,
-  CommunicationTraitType,
   PersonCommunicationTrait,
   SourceCheckResult,
+  FactCheckApiResult,
+  LegalDisclaimerResponse,
   FactsToVerifyExport,
   Relationship,
   RelationshipSuggestion,
   StakeholderRole,
-  RoleSuggestion,
-  GapSuggestion,
   SuggestRolesResult,
   TargetedArgument,
   StakeholderMapEntry,
-  PrecedentSimilarity,
   BehaviorPrecedent,
   PrecedentSearchResult,
-  ScenarioType,
-  ScenarioConfidence,
   OutcomeScenario,
   PhotoVerification,
   RelationshipType,
   RelationshipDirection,
   ArgumentLifecycleStatus,
-  ArgumentLifecycleEvent,
   ArgumentFailureInsight,
   OpenLoopsSummary,
   Prediction,
@@ -298,6 +285,19 @@ export function deletePersonData(personId: string): Promise<{ deleted: boolean }
   return apiDelete<{ deleted: boolean }>(`/privacy/person/${personId}`);
 }
 
+export interface AccountDeletionResult {
+  deleted: true;
+  removed: Record<string, number>;
+  externalArtifacts: { evidenceBlobs: number; deleted: number; failed: number };
+  notRemovedHere: string[];
+}
+
+/** Аудит БД 2026-08-30 §2.4 — удаление аккаунта (GDPR art. 17). Backend
+ * требует confirmation: "DELETE" — защита от случайного вызова. */
+export function deleteAccount(): Promise<AccountDeletionResult> {
+  return apiDelete<AccountDeletionResult>('/privacy/account', { confirmation: 'DELETE' });
+}
+
 export function exportPrivacyData(): Promise<unknown> {
   return apiGet('/privacy/export');
 }
@@ -334,6 +334,7 @@ export function saveOnboarding(input: {
   religion?: string | null;
   city?: string | null;
   country?: string | null;
+  countryCode?: string | null;
 }): Promise<OnboardingData> {
   return apiPut<OnboardingData>('/onboarding', input);
 }
@@ -504,13 +505,6 @@ export function transitionArgumentLifecycle(
   return apiPost<Argument>(`/projects/${projectId}/arguments/${argumentId}/lifecycle`, input);
 }
 
-export function getArgumentLifecycleHistory(
-  projectId: string,
-  argumentId: string,
-): Promise<ArgumentLifecycleEvent[]> {
-  return apiGet<ArgumentLifecycleEvent[]>(`/projects/${projectId}/arguments/${argumentId}/lifecycle`);
-}
-
 export function getArgumentFailureInsight(
   projectId: string,
   argumentId: string,
@@ -650,6 +644,20 @@ export function checkAgainstUserSource(
 // Пункт 41 (backend) — выгрузка пронумерованного списка утверждений
 // для ручной проверки, не автономный поиск.
 
+/** Полный аудит 2026-08-30 — сверка утверждения с публичными фактчек-базами
+ * (Google Fact Check Tools). Backend закрыл этим «четвёртый источник» §3.16,
+ * но из TMA метод не вызывался. Утверждение — текст сегмента (или правка). */
+export function checkAgainstFactCheckApi(conversationId: string, segmentId: string, claimText: string): Promise<FactCheckApiResult> {
+  return apiPost<FactCheckApiResult>(`/conversations/${conversationId}/discrepancies/check-against-fact-check-api`, { segmentId, claimText });
+}
+
+/** Полный аудит 2026-08-30 — юридические ссылки по режиму проекта и
+ * юрисдикции пользователя (по User.country). null = для этой пары ничего
+ * нет; фронтенд прячет блок сам. */
+export function getLegalDisclaimer(mode: string): Promise<LegalDisclaimerResponse | null> {
+  return apiGet<LegalDisclaimerResponse | null>(`/legal-disclaimer?mode=${encodeURIComponent(mode)}`);
+}
+
 export function exportFactsToVerify(conversationId: string): Promise<FactsToVerifyExport> {
   return apiGet<FactsToVerifyExport>(`/conversations/${conversationId}/discrepancies/export`);
 }
@@ -726,6 +734,13 @@ export function generateOutcomeScenarios(
 
 export function listOutcomeScenarios(projectId: string): Promise<OutcomeScenario[]> {
   return apiGet<OutcomeScenario[]>(`/projects/${projectId}/outcome-scenarios`);
+}
+
+/** Полный аудит 2026-08-30 — «сбылось / не сбылось» по сценарию. Backend
+ * называет это единственным источником данных калибровочного gate
+ * (CalibrationService); до этого из UI не вызывалось никогда. */
+export function confirmOutcomeScenario(projectId: string, scenarioId: string, confirmed: boolean): Promise<OutcomeScenario> {
+  return apiPatch<OutcomeScenario>(`/projects/${projectId}/outcome-scenarios/${scenarioId}/confirm-outcome`, { confirmed });
 }
 
 // Пункт 48 (backend) — Photo Verification (§4.4 ТЗ).
@@ -910,18 +925,10 @@ export function submitProjectToLibrary(
   return apiPost<LibraryEntry>(`/projects/${projectId}/submit-to-library`, { title, category });
 }
 
-// Требует User.isLibraryModerator на стороне backend — не self-service,
-// см. обоснование в apps/api/prisma/README.md, «Пункт 57».
-export function listLibraryModerationQueue(): Promise<LibraryEntry[]> {
-  return apiGet<LibraryEntry[]>('/library/moderation-queue');
-}
-
-export function moderateLibraryEntry(
-  entryId: string,
-  decision: 'ACCEPT' | 'REJECT',
-): Promise<LibraryEntry> {
-  return apiPatch<LibraryEntry>(`/library/${entryId}/moderate`, { decision });
-}
+// Модерация библиотеки (moderation-queue / :id/moderate) с Пункта
+// [admin-panel] живёт за AdminSessionGuard (httpOnly cookie админки), а не
+// за Telegram initData — из TMA эти вызовы всегда получали бы 401.
+// Функции и страница /library/moderate удалены аудитом; UI — apps/admin.
 
 // Пункт 58 (backend) — PersonFact create/list (§4.2/§3.19 ТЗ).
 
@@ -1073,31 +1080,11 @@ export function submitVenueApplication(input: SubmitVenueApplicationInput): Prom
   return apiPost<VenueApplication>('/venue-applications', input);
 }
 
-export function listMyVenueApplications(): Promise<VenueApplication[]> {
-  return apiGet<VenueApplication[]>('/venue-applications/mine');
-}
-
-export function listVenueModerationQueue(): Promise<VenueApplication[]> {
-  return apiGet<VenueApplication[]>('/venue-applications/moderation-queue');
-}
-
-export function moderateVenueApplication(
-  applicationId: string,
-  decision: 'APPROVE' | 'REJECT',
-  referralFeeAmount?: number,
-): Promise<VenueApplication> {
-  return apiPatch<VenueApplication>(`/venue-applications/${applicationId}/moderate`, { decision, referralFeeAmount });
-}
+// Модерация заявок заведений — та же история, что у библиотеки выше:
+// с Пункта [admin-panel] за AdminSessionGuard, из TMA недостижима.
+// Страница /venues/moderate и обёртки удалены аудитом; UI — apps/admin.
 
 // Пункт 67 (backend) — Venue Monetization (§3.22 ТЗ, честный леджер, не платёжная интеграция).
-
-export function setVenueReferralFee(approvedVenueId: string, referralFeeAmount: number | null): Promise<ApprovedVenue> {
-  return apiPatch<ApprovedVenue>(`/approved-venues/${approvedVenueId}/referral-fee`, { referralFeeAmount });
-}
-
-export function setVenuePriorityPartner(approvedVenueId: string, isPriorityPartner: boolean): Promise<ApprovedVenue> {
-  return apiPatch<ApprovedVenue>(`/approved-venues/${approvedVenueId}/priority-partner`, { isPriorityPartner });
-}
 
 export function confirmVenueBooking(
   approvedVenueId: string,
@@ -1106,10 +1093,6 @@ export function confirmVenueBooking(
   return apiPost<VenueBookingConfirmation>(`/approved-venues/${approvedVenueId}/booking-confirmations`, {
     scheduledConversationId,
   });
-}
-
-export function getVenueCommissionSummary(approvedVenueId: string): Promise<CommissionSummary> {
-  return apiGet<CommissionSummary>(`/approved-venues/${approvedVenueId}/commission-summary`);
 }
 
 // Пункт 68 (backend) — Religious Reminder (§3.24 ТЗ).
@@ -1251,12 +1234,15 @@ export function analyzeLiveHint(
   return apiPost<LiveHintEvent | null>(`/projects/${projectId}/live-hints`, { transcriptWindow });
 }
 
-export function dismissLiveHintEvent(projectId: string, eventId: string): Promise<LiveHintEvent> {
-  return apiPatch<LiveHintEvent>(`/projects/${projectId}/live-hints/${eventId}/dismiss`, {});
+/** Полный аудит 2026-08-30 — режим собеседования (Пункт [interview-pool]):
+ * подсказывает следующий ещё не заданный вопрос опросника; backend был, из
+ * TMA не вызывался. */
+export function analyzeLiveHintForInterview(projectId: string, transcriptWindow: string): Promise<LiveHintEvent | null> {
+  return apiPost<LiveHintEvent | null>(`/projects/${projectId}/live-hints/interview`, { transcriptWindow });
 }
 
-export function listLiveHints(projectId: string): Promise<LiveHintEvent[]> {
-  return apiGet<LiveHintEvent[]>(`/projects/${projectId}/live-hints`);
+export function dismissLiveHintEvent(projectId: string, eventId: string): Promise<LiveHintEvent> {
+  return apiPatch<LiveHintEvent>(`/projects/${projectId}/live-hints/${eventId}/dismiss`, {});
 }
 
 // Пункт 83 (backend) — Live Manipulation Flags (§3.33 ТЗ).
@@ -1268,10 +1254,6 @@ export function analyzeLiveManipulation(
   return apiPost<LiveManipulationFlag[]>(`/projects/${projectId}/live-manipulation-flags`, { transcriptWindow });
 }
 
-export function listLiveManipulationFlags(projectId: string): Promise<LiveManipulationFlag[]> {
-  return apiGet<LiveManipulationFlag[]>(`/projects/${projectId}/live-manipulation-flags`);
-}
-
 // Пункт 84 (backend) — Breaking Questions + Live Argument Tracking (§3.33 ТЗ, проход 2).
 
 export function generateBreakingQuestions(
@@ -1280,10 +1262,6 @@ export function generateBreakingQuestions(
   targetPersonId?: string,
 ): Promise<BreakingQuestionSet> {
   return apiPost<BreakingQuestionSet>(`/projects/${projectId}/breaking-questions`, { transcriptWindow, targetPersonId });
-}
-
-export function listBreakingQuestions(projectId: string): Promise<BreakingQuestionSet[]> {
-  return apiGet<BreakingQuestionSet[]>(`/projects/${projectId}/breaking-questions`);
 }
 
 export function initializeArgumentTracking(projectId: string): Promise<LiveArgumentTrackingStatus[]> {
@@ -1297,18 +1275,10 @@ export function checkArgumentTrackingStatus(
   return apiPost<LiveArgumentTrackingStatus[]>(`/projects/${projectId}/live-argument-tracking/check`, { transcriptWindow });
 }
 
-export function listArgumentTracking(projectId: string): Promise<LiveArgumentTrackingStatus[]> {
-  return apiGet<LiveArgumentTrackingStatus[]>(`/projects/${projectId}/live-argument-tracking`);
-}
-
 // Пункт 86 (backend) — Probing Detector (§3.37 ТЗ).
 
 export function analyzeProbing(projectId: string, transcriptWindow: string): Promise<ProbingTopic[]> {
   return apiPost<ProbingTopic[]>(`/projects/${projectId}/probing-topics`, { transcriptWindow });
-}
-
-export function listProbingTopics(projectId: string): Promise<ProbingTopic[]> {
-  return apiGet<ProbingTopic[]>(`/projects/${projectId}/probing-topics`);
 }
 
 // Пункт 87 (backend) — Voice Embedding (голосовой отпечаток).

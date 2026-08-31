@@ -14,9 +14,11 @@
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { MoneyLike, sumMoney } from '../common/money';
 import { SecretsService } from '../secrets/secrets.service';
 import { getPlaceDetails, searchByText } from '../venue-recommendation/google-places-client';
 import { VenueApplicationStatus } from '@prisma/client';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 
@@ -34,6 +36,7 @@ export class VenueApplicationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly secrets: SecretsService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /** "Гео и автоопределение заведения... по геолокации/названию"
@@ -122,10 +125,19 @@ export class VenueApplicationService {
     }
 
     if (decision === 'REJECT') {
-      return this.prisma.venueApplication.update({
+      const updated = await this.prisma.venueApplication.update({
         where: { id: applicationId },
         data: { status: VenueApplicationStatus.REJECTED, moderatedAt: new Date() },
       });
+      await this.auditLog.record({
+        actorId: userId,
+        action: 'venue_application.rejected',
+        resource: 'VenueApplication',
+        resourceId: applicationId,
+        before: { status: application.status },
+        after: { status: updated.status },
+      });
+      return updated;
     }
 
     let rating: number | null = null;
@@ -151,10 +163,23 @@ export class VenueApplicationService {
         referralFeeAmount: referralFeeAmount ?? null,
       },
     });
-    return this.prisma.venueApplication.update({
+    const approved = await this.prisma.venueApplication.update({
       where: { id: applicationId },
       data: { status: VenueApplicationStatus.APPROVED, moderatedAt: new Date() },
     });
+
+    // Пункт [audit-log] — referralFeeAmount у after, бо це фінансово
+    // значуще рішення оператора, не тільки зміна статусу.
+    await this.auditLog.record({
+      actorId: userId,
+      action: 'venue_application.approved',
+      resource: 'VenueApplication',
+      resourceId: applicationId,
+      before: { status: application.status },
+      after: { status: approved.status, referralFeeAmount: referralFeeAmount ?? null },
+    });
+
+    return approved;
   }
 
   // ── public (без аутентификации — "публичная карточка", буквально ТЗ) ──
@@ -226,7 +251,7 @@ export class VenueApplicationService {
     await this.assertModerator(userId);
     await this.assertVenueExists(approvedVenueId);
     const confirmations = await this.prisma.venueBookingConfirmation.findMany({ where: { approvedVenueId } });
-    const totalFeesOwed = confirmations.reduce((sum: number, c: { referralFeeOwed: number | null }) => sum + (c.referralFeeOwed ?? 0), 0);
+    const totalFeesOwed = sumMoney(confirmations.map((c: { referralFeeOwed: MoneyLike }) => c.referralFeeOwed));
     return { totalBookingsConfirmed: confirmations.length, totalFeesOwed };
   }
 

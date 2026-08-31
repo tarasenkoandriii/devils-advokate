@@ -100,24 +100,24 @@ async function run() {
   const originalFetch = (global as any).fetch;
 
   test('searchCandidates() бросает BadRequestException для пустого запроса', async () => {
-    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.searchCandidates('   '), BadRequestException, 'searchCandidates() с пустым запросом');
   });
 
   test('searchCandidates() бросает BadGatewayException при ошибке Google Places', async () => {
     (global as any).fetch = async () => ({ ok: false, status: 403 });
-    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.searchCandidates('Кафе'), BadGatewayException, 'searchCandidates() при ошибке провайдера');
   });
 
   test('submitApplication() бросает BadRequestException без name/address', async () => {
-    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.submitApplication(USER_ID, { name: '', address: 'x' }), BadRequestException, 'submitApplication() без name');
   });
 
   test('submitApplication() создаёт заявку со статусом PENDING', async () => {
     const prisma = createFakePrisma();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const app = await svc.submitApplication(USER_ID, { name: 'Кафе Тихое', address: 'ул. Примерная, 1' });
     assertEqual(app.status, 'PENDING', 'заявка не публикуется автоматически');
@@ -127,7 +127,7 @@ async function run() {
   test('listPendingForModeration() бросает ForbiddenException для НЕ-модератора', async () => {
     const prisma = createFakePrisma();
     seedUsers(prisma);
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.listPendingForModeration(USER_ID), ForbiddenException, 'listPendingForModeration() без роли модератора');
   });
 
@@ -136,7 +136,7 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApplication({ submittedByUserId: USER_ID, name: 'x', address: 'x' });
     const [app] = prisma._getApplications();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.moderate(USER_ID, app.id, 'APPROVE'), ForbiddenException, 'moderate() без роли модератора');
   });
 
@@ -145,11 +145,40 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApplication({ submittedByUserId: USER_ID, name: 'x', address: 'x' });
     const [app] = prisma._getApplications();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const updated = await svc.moderate(MODERATOR_ID, app.id, 'REJECT');
     assertEqual(updated.status, 'REJECTED', 'статус изменён');
     assertEqual(prisma._getApprovedVenues().length, 0, 'публичная карточка не создана для отклонённой заявки');
+  });
+
+  test('регресійний тест (Пункт [audit-log]): moderate() REJECT РЕАЛЬНО викликає auditLog.record', async () => {
+    const prisma = createFakePrisma();
+    seedUsers(prisma);
+    prisma._seedApplication({ submittedByUserId: USER_ID, name: 'x', address: 'x' });
+    const [app] = prisma._getApplications();
+    const recordedCalls: any[] = [];
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async (input: any) => { recordedCalls.push(input); return {}; } } as any);
+
+    await svc.moderate(MODERATOR_ID, app.id, 'REJECT');
+
+    assertEqual(recordedCalls.length, 1, 'auditLog.record викликаний рівно один раз');
+    assertEqual(recordedCalls[0].action, 'venue_application.rejected', 'дію зафіксовано правильно');
+  });
+
+  test('регресійний тест (Пункт [audit-log]): moderate() APPROVE РЕАЛЬНО викликає auditLog.record, включно з referralFeeAmount', async () => {
+    const prisma = createFakePrisma();
+    seedUsers(prisma);
+    prisma._seedApplication({ submittedByUserId: USER_ID, name: 'x', address: 'x', googlePlaceId: null });
+    const [app] = prisma._getApplications();
+    const recordedCalls: any[] = [];
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async (input: any) => { recordedCalls.push(input); return {}; } } as any);
+
+    await svc.moderate(MODERATOR_ID, app.id, 'APPROVE', 500);
+
+    assertEqual(recordedCalls.length, 1, 'auditLog.record викликаний рівно один раз');
+    assertEqual(recordedCalls[0].action, 'venue_application.approved', 'дію зафіксовано правильно');
+    assertEqual(recordedCalls[0].after.referralFeeAmount, 500, 'фінансово значуще рішення зафіксовано в after');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: moderate() APPROVE создаёт ApprovedVenue снапшотом, без googlePlaceId — rating остаётся null, не роняет одобрение', async () => {
@@ -157,7 +186,7 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApplication({ submittedByUserId: USER_ID, name: 'Кафе Тихое', address: 'ул. Примерная, 1', phone: '+7000', googlePlaceId: null });
     const [app] = prisma._getApplications();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const updated = await svc.moderate(MODERATOR_ID, app.id, 'APPROVE');
     assertEqual(updated.status, 'APPROVED', 'статус изменён');
@@ -172,14 +201,14 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApplication({ submittedByUserId: USER_ID, name: 'x', address: 'x', status: 'APPROVED' });
     const [app] = prisma._getApplications();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.moderate(MODERATOR_ID, app.id, 'REJECT'), BadRequestException, 'moderate() на уже обработанную заявку');
   });
 
   test('moderate() бросает NotFoundException для несуществующей заявки', async () => {
     const prisma = createFakePrisma();
     seedUsers(prisma);
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.moderate(MODERATOR_ID, 'nonexistent', 'APPROVE'), NotFoundException, 'moderate() на несуществующую заявку');
   });
 
@@ -188,7 +217,7 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApplication({ submittedByUserId: USER_ID, name: 'Кафе', address: 'x' });
     const [app] = prisma._getApplications();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await svc.moderate(MODERATOR_ID, app.id, 'APPROVE');
 
     const list = await svc.listApprovedVenues();
@@ -198,7 +227,7 @@ async function run() {
   });
 
   test('getApprovedVenue() бросает NotFoundException для несуществующей карточки', async () => {
-    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.getApprovedVenue('nonexistent'), NotFoundException, 'getApprovedVenue() на несуществующую карточку');
   });
 
@@ -209,7 +238,7 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApprovedVenue({ name: 'x' });
     const [venue] = prisma._getApprovedVenues();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.setReferralFee(USER_ID, venue.id, 5), ForbiddenException, 'setReferralFee() без роли модератора');
   });
 
@@ -218,7 +247,7 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApprovedVenue({ name: 'x' });
     const [venue] = prisma._getApprovedVenues();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const updated = await svc.setReferralFee(MODERATOR_ID, venue.id, 5.5);
     assertEqual(updated.referralFeeAmount, 5.5, 'сумма сохранена');
@@ -229,21 +258,21 @@ async function run() {
     seedUsers(prisma);
     prisma._seedApprovedVenue({ name: 'x' });
     const [venue] = prisma._getApprovedVenues();
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const updated = await svc.setPriorityPartner(MODERATOR_ID, venue.id, true);
     assertEqual(updated.isPriorityPartner, true, 'флаг включён');
   });
 
   test('confirmBooking() бросает NotFoundException для несуществующего заведения', async () => {
-    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.confirmBooking(USER_ID, 'nonexistent'), NotFoundException, 'confirmBooking() на несуществующее заведение');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: confirmBooking() фиксирует referralFeeOwed снапшотом на момент подтверждения, не пересчитывается позже', async () => {
     const prisma = createFakePrisma();
     prisma._seedApprovedVenue({ id: 'venue-1', name: 'Кафе', referralFeeAmount: 5 });
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const confirmation = await svc.confirmBooking(USER_ID, 'venue-1');
     assertEqual(confirmation.referralFeeOwed, 5, 'снапшот суммы на момент подтверждения');
@@ -256,7 +285,7 @@ async function run() {
   test('confirmBooking() честно сохраняет referralFeeOwed=null, если комиссия не согласована', async () => {
     const prisma = createFakePrisma();
     prisma._seedApprovedVenue({ id: 'venue-1', name: 'Кафе', referralFeeAmount: null });
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     const confirmation = await svc.confirmBooking(USER_ID, 'venue-1');
     assertEqual(confirmation.referralFeeOwed, null, 'честно null, не выдуманная сумма');
@@ -266,7 +295,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedUsers(prisma);
     prisma._seedApprovedVenue({ id: 'venue-1', name: 'x' });
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.getCommissionSummary(USER_ID, 'venue-1'), ForbiddenException, 'getCommissionSummary() без роли модератора');
   });
 
@@ -274,7 +303,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedUsers(prisma);
     prisma._seedApprovedVenue({ id: 'venue-1', name: 'Кафе', referralFeeAmount: 5 });
-    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any);
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
     await svc.confirmBooking(USER_ID, 'venue-1');
     await svc.confirmBooking(USER_ID, 'venue-1');

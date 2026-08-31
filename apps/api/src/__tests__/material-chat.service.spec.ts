@@ -346,6 +346,66 @@ async function run() {
     await assertThrowsAsync(() => svc.startSession(USER_ID, PROJECT_ID, MATERIAL_ID), BadGatewayException, 'startSession() при недоступности AI-провайдера');
   });
 
+  // ── Финальный аудит 2026-08-30 — handleVoiceReplyWebhook() не имел вообще
+  // ── ни одного теста; заодно у него был тот же баг с полем payload.id/
+  // ── payload.utterances, что в sparring/conversations (реальный вебхук
+  // ── AssemblyAI несёт только transcript_id/status, не полный результат).
+
+  class FakeTranscriptionForWebhook {
+    getResultCalls: string[] = [];
+    transcriptResultByJobId: Record<string, any> = {};
+    async getTranscriptResult(_apiKey: string, transcriptId: string) {
+      this.getResultCalls.push(transcriptId);
+      return this.transcriptResultByJobId[transcriptId] ?? { status: 'completed', id: transcriptId };
+    }
+  }
+  const fakeSecrets = { resolve: async () => 'fake-assemblyai-key' };
+
+  test('handleVoiceReplyWebhook() при успехе создаёт USER+ASSISTANT сообщения и переводит job в COMPLETED', async () => {
+    const prisma = createFakePrisma();
+    seedBase(prisma);
+    prisma._seedSession({ id: 'sess-1', workingMaterialId: MATERIAL_ID });
+    prisma._seedVoiceReplyJob({ id: 'job-1', materialChatSessionId: 'sess-1', externalTranscriptionJobId: 'ext-1' });
+    const fakeTranscription = new FakeTranscriptionForWebhook();
+    fakeTranscription.transcriptResultByJobId['ext-1'] = {
+      status: 'completed', id: 'ext-1',
+      utterances: [{ speaker: 'A', text: 'Голосовой вопрос по материалу', start: 0, end: 1000 }],
+    };
+    const svc = new MaterialChatService(prisma, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any);
+
+    await svc.handleVoiceReplyWebhook({ transcript_id: 'ext-1', status: 'completed' } as any);
+
+    assertEqual(fakeTranscription.getResultCalls, ['ext-1'], 'полный результат запрошен отдельным GET по transcript_id из вебхука');
+    const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === 'job-1');
+    assertEqual(updatedJob.status, 'COMPLETED', 'job переведён в COMPLETED');
+    const userMsg = prisma._getMessages().find((m: any) => m.id === updatedJob.userMessageId);
+    assertEqual(userMsg.text, 'Голосовой вопрос по материалу', 'транскрибированный текст стал текстом сообщения пользователя');
+  });
+
+  test('handleVoiceReplyWebhook() при ошибке AssemblyAI переводит job в FAILED, текст ошибки сохранён', async () => {
+    const prisma = createFakePrisma();
+    seedBase(prisma);
+    prisma._seedSession({ id: 'sess-1', workingMaterialId: MATERIAL_ID });
+    prisma._seedVoiceReplyJob({ id: 'job-1', materialChatSessionId: 'sess-1', externalTranscriptionJobId: 'ext-2' });
+    const fakeTranscription = new FakeTranscriptionForWebhook();
+    fakeTranscription.transcriptResultByJobId['ext-2'] = { status: 'error', id: 'ext-2', error: 'audio too short' };
+    const svc = new MaterialChatService(prisma, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any);
+
+    await svc.handleVoiceReplyWebhook({ transcript_id: 'ext-2', status: 'error' } as any);
+
+    const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === 'job-1');
+    assertEqual(updatedJob.status, 'FAILED', 'job честно переведён в FAILED');
+    assertEqual(updatedJob.errorMessage, 'audio too short', 'текст ошибки из GET-результата сохранён, не потерян');
+  });
+
+  test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): handleVoiceReplyWebhook() без transcript_id — не падає, GET не робиться', async () => {
+    const prisma = createFakePrisma();
+    const fakeTranscription = new FakeTranscriptionForWebhook();
+    const svc = new MaterialChatService(prisma, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any);
+    await svc.handleVoiceReplyWebhook({ status: 'completed' } as any);
+    assertEqual(fakeTranscription.getResultCalls, [], 'без transcript_id зайвий зовнішній виклик не робиться');
+  });
+
   for (const [name, fn] of scenarios) {
     try {
       await fn();

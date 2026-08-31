@@ -110,16 +110,36 @@ async function run() {
     assertEqual(fetchCallCount, 2, 'разные голоса — раздельные записи кэша, оба реально сгенерированы');
   });
 
-  test('synthesize() бросает BadGatewayException при ошибке ElevenLabs (не ok)', async () => {
-    (global as any).fetch = async () => ({ ok: false, status: 401 });
+  test('synthesize() бросает BadGatewayException при ошибке ElevenLabs (не ok), текст ошибки провайдера сохранён', async () => {
+    (global as any).fetch = async () => ({ ok: false, status: 401, text: async () => '{"detail":{"message":"Invalid API key"}}' });
     const svc = new TextToSpeechService(createFakePrisma() as any, createFakeConsentService() as any, createFakeSecrets() as any);
-    await assertThrowsAsync(() => svc.synthesize(USER_ID, 'Текст'), BadGatewayException, 'synthesize() при ошибке ElevenLabs');
+    try {
+      await svc.synthesize(USER_ID, 'Текст');
+      throw new Error('FAIL: synthesize() при ошибке ElevenLabs — ожидалось исключение');
+    } catch (err: any) {
+      if (!(err instanceof BadGatewayException)) throw err;
+      if (!String(err.message).includes('Invalid API key')) {
+        throw new Error(`FAIL: аудит ElevenLabs 2026-08-30 — тело ответа провайдера должно попадать в текст ошибки, получено: ${err.message}`);
+      }
+    }
   });
 
   test('synthesize() бросает BadGatewayException при сетевой ошибке', async () => {
     (global as any).fetch = async () => { throw new Error('network down'); };
     const svc = new TextToSpeechService(createFakePrisma() as any, createFakeConsentService() as any, createFakeSecrets() as any);
     await assertThrowsAsync(() => svc.synthesize(USER_ID, 'Текст'), BadGatewayException, 'synthesize() при сетевой ошибке');
+  });
+
+  test('РЕГРЕСІЯ (аудит ElevenLabs 2026-08-30): synthesize() задає model_id=eleven_flash_v2_5 (real-time, не eleven_multilingual_v2) і явний output_format', async () => {
+    let capturedBody: any;
+    (global as any).fetch = async (_url: string, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return { ok: true, arrayBuffer: async () => new ArrayBuffer(4) };
+    };
+    const svc = new TextToSpeechService(createFakePrisma() as any, createFakeConsentService() as any, createFakeSecrets() as any);
+    await svc.synthesize(USER_ID, 'Текст для синтеза');
+    assertEqual(capturedBody.model_id, 'eleven_flash_v2_5', 'документація ElevenLabs прямо рекомендує Flash v2.5 для real-time (озвучка репліки в живому спарингу) — Multilingual v2 оптимізований під якість/аудіокниги, не латентність; український підтримується в обох');
+    assertEqual(capturedBody.output_format, 'mp3_44100_128', 'явний output_format замість неявного дефолту провайдера');
   });
 
   for (const [name, fn] of scenarios) {

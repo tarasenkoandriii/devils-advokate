@@ -20,8 +20,16 @@ export function Footer({ dict, lang }: { dict: Dictionary; lang: Locale }) {
         </div>
 
         <div className="footer__links">
-          <a href="/privacy-policy">{dict.footer.privacyPolicy}</a>
-          <a href="/terms-of-service">{dict.footer.termsOfService}</a>
+          {/* ПОВТОРНЫЙ АУДИТ 2026-08-30: обе ссылки вели в 404 —
+              маршрутов /privacy-policy и /terms-of-service в приложении
+              нет. Политика приватности есть как секция этой же страницы
+              (id="privacy-policy"), поэтому ссылка стала якорной.
+              Пользовательского соглашения нет вообще — ни страницы, ни
+              текста; ссылка на него убрана, потому что битая ссылка на
+              юридический документ хуже её отсутствия. Когда текст
+              появится, вернуть строку вместе со страницей, а не раньше
+              (см. отчёт аудита, раздел «Лендинг»). */}
+          <a href="#privacy-policy">{dict.footer.privacyPolicy}</a>
           {contactHandle && (
             <a href={`https://t.me/${contactHandle}`} target="_blank" rel="noopener noreferrer">
               {dict.footer.contact}

@@ -8,7 +8,7 @@
 // не вперемешку по времени создания (сортировка уже сделана на backend).
 
 import { useEffect, useState } from 'react';
-import { generateOutcomeScenarios, listOutcomeScenarios } from '../lib/features';
+import { confirmOutcomeScenario, generateOutcomeScenarios, listOutcomeScenarios } from '../lib/features';
 import { OutcomeScenario, ScenarioType } from '../lib/types';
 import { haptic } from '../lib/telegram';
 
@@ -31,6 +31,19 @@ const CONFIDENCE_LABELS: Record<string, string> = {
 
 export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionProps) {
   const [scenarios, setScenarios] = useState<OutcomeScenario[]>([]);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  async function handleConfirm(scenarioId: string, confirmed: boolean) {
+    setConfirmingId(scenarioId);
+    try {
+      const updated = await confirmOutcomeScenario(projectId, scenarioId, confirmed);
+      setScenarios((prev) => prev.map((x) => (x.id === scenarioId ? { ...x, outcomeConfirmed: updated.outcomeConfirmed ?? confirmed, outcomeConfirmedAt: updated.outcomeConfirmedAt ?? new Date().toISOString() } : x)));
+    } catch {
+      // тихо: подтверждение не должно ломать чтение сценариев
+    } finally {
+      setConfirmingId(null);
+    }
+  }
   const [loading, setLoading] = useState(true);
   const [userScenarioInputs, setUserScenarioInputs] = useState<string[]>(['']);
   const [generating, setGenerating] = useState(false);
@@ -95,6 +108,17 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
               <p>{s.outcomeDescription}</p>
               {s.precedentBasis && <p className="outcome-scenarios-list__note">Опора на прецедент: {s.precedentBasis}</p>}
               {s.protectedNoteHint && <p className="outcome-scenarios-list__note">💡 {s.protectedNoteHint}</p>}
+              <div className="outcome-scenarios-list__confirm">
+                {s.outcomeConfirmed === null || s.outcomeConfirmed === undefined ? (
+                  <>
+                    <span className="conversations-section__hint">Разговор состоялся? Отметьте, что случилось на самом деле — так прогнозы со временем калибруются.</span>
+                    <button type="button" onClick={() => handleConfirm(s.id, true)} disabled={confirmingId === s.id}>Сбылось</button>
+                    <button type="button" onClick={() => handleConfirm(s.id, false)} disabled={confirmingId === s.id}>Не сбылось</button>
+                  </>
+                ) : (
+                  <span className="conversations-section__hint">{s.outcomeConfirmed ? '✓ сбылось' : '✕ не сбылось'} <button type="button" onClick={() => handleConfirm(s.id, !s.outcomeConfirmed)} disabled={confirmingId === s.id}>изменить</button></span>
+                )}
+              </div>
             </li>
           ))}
         </ul>

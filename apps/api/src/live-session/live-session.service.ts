@@ -19,6 +19,8 @@
 
 import { Injectable, NotFoundException, BadGatewayException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsentService } from '../consent/consent.service';
+import { ConsentType } from '@prisma/client';
 import { SecretsService } from '../secrets/secrets.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 
@@ -29,14 +31,27 @@ export class LiveSessionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly secrets: SecretsService,
+    private readonly consent: ConsentService,
   ) {}
 
   /** Задел под §3.4/§3.33 — минтит короткоживущий токен для прямого
    * browser→AssemblyAI подключения, backend не держит WebSocket сам.
    * expiresInSeconds по умолчанию 300 (5 минут) — достаточно для
    * инициализации клиентского подключения, не для всей сессии
-   * разговора (сессия обновляет токен по мере надобности сама). */
-  async mintTranscriptionToken(expiresInSeconds = 300): Promise<{ token: string; expiresInSeconds: number }> {
+   * разговора (сессия обновляет токен по мере надобности сама).
+   *
+   * Аудит моделей БД 2026-08-30, §2.3 — этот токен открывает прямой
+   * канал browser→AssemblyAI, которым живой аудиопоток разговора
+   * (включая голос собеседника, не только пользователя) стримится
+   * внешнему провайдеру в реальном времени — ровно случай, под который
+   * заведён ConsentType.THIRD_PARTY_AUDIO_RECORDING (см. её doc-комментарий
+   * в schema.prisma и precedent в DtpService.addEvidence). До этой правки
+   * ни один из потребителей (LiveHintsSession, AssistanceScreen,
+   * VoiceTextInput в intake-квизе) не требовал согласия — токен
+   * выдавался безусловно. Уровень пользователя, не проекта — токен не
+   * привязан к конкретному проекту (тот же довод, что ниже про клиента). */
+  async mintTranscriptionToken(userId: string, expiresInSeconds = 300): Promise<{ token: string; expiresInSeconds: number }> {
+    await this.consent.requireConsent(userId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
     const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
 
@@ -52,7 +67,7 @@ export class LiveSessionService {
     if (!response.ok) {
       throw new BadGatewayException(`AssemblyAI (временный токен) вернул ошибку: ${response.status}`);
     }
-    const data = await response.json();
+    const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
     return { token: data.token, expiresInSeconds };
   }
 

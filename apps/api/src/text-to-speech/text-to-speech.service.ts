@@ -25,6 +25,21 @@ import { ConsentType } from '@prisma/client';
 
 const ELEVENLABS_API_KEY_REF = 'ELEVENLABS_API_KEY';
 const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // ElevenLabs preset-голос "Bella", разумный дефолт без выбора пользователя
+// Аудит интеграции ElevenLabs (продолжение аудита AssemblyAI, 2026-08-30) —
+// сверено с рабочей реализацией в соседнем проекте (caller-id) и живой
+// документацией ElevenLabs. Было eleven_multilingual_v2 — оптимизирован под
+// качество/эмоциональность (аудиокниги, закадровый текст), а не латентность.
+// Использование здесь — озвучка реплик AI-собеседника в живом диалоге
+// (спарринг, чат по материалам): пользователь ждёт ответ прямо в разговоре.
+// Документация прямо для этого случая: «For real-time applications, Flash
+// v2.5 provides ultra-low 75ms latency». Украинский язык не теряется —
+// Flash v2.5 поддерживает 32 языка, документация описывает набор как
+// «все языки v2-моделей плюс ещё», украинский указан явно в обоих списках.
+const DEFAULT_MODEL_ID = 'eleven_flash_v2_5';
+// Дефолт самого ElevenLabs при отсутствии параметра — тот же mp3_44100_128;
+// задаём явно, не полагаясь на дефолт провайдера (тот же принцип, что
+// applied к speech_models/speech_model в TranscriptionService/live-transcription).
+const OUTPUT_FORMAT = 'mp3_44100_128';
 
 export interface SynthesizeResult {
   audioBase64: string;
@@ -81,13 +96,18 @@ export class TextToSpeechService {
       response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
-        body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2' }),
+        body: JSON.stringify({ text, model_id: DEFAULT_MODEL_ID, output_format: OUTPUT_FORMAT }),
       });
     } catch {
       throw new BadGatewayException('ElevenLabs недоступен — сетевая ошибка');
     }
     if (!response.ok) {
-      throw new BadGatewayException(`ElevenLabs вернул ошибку: ${response.status}`);
+      // Аудит ElevenLabs 2026-08-30 — раньше тело ответа отбрасывалось,
+      // хотя ElevenLabs обычно возвращает JSON с detail.message (например
+      // voice_not_found, quota_exceeded) — та же дисциплина, что уже
+      // применена к ошибкам AssemblyAI в TranscriptionService.
+      const body = await response.text().catch(() => '<unreadable>');
+      throw new BadGatewayException(`ElevenLabs вернул ошибку: ${response.status} — ${body.slice(0, 300)}`);
     }
     const buffer = await response.arrayBuffer();
     return Buffer.from(buffer).toString('base64');

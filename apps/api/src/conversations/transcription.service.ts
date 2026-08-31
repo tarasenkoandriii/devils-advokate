@@ -1,26 +1,7 @@
-// Пункт 13: TranscriptionService — интеграция с AssemblyAI.
-//
-// Почему AssemblyAI, а не Whisper/Deepgram/Google/Azure — коротко
-// (подробное обоснование в apps/api/prisma/README.md, "Пункт 13"):
-// 1) STT + диаризация спикеров в ОДНОМ API-вызове (`speaker_labels:
-//    true`) — Whisper даёт только транскрипт, диаризация требовала бы
-//    отдельной интеграции (например pyannote.audio), которая к тому же
-//    не запускается на serverless (тяжёлая ML-модель, не просто HTTP-
-//    вызов) — противоречит архитектуре Vercel Hobby, на которой уже
-//    развёрнут весь остальной бэкенд.
-// 2) Асинхронный job-based флоу с webhook — ложится на уже
-//    спроектированный ConversationProcessingStatus (UPLOADED→
-//    TRANSCRIBING→TRANSCRIBED) без подгонки под синхронный вызов.
-// 3) Простой REST API, без обязательного SDK — тот же принцип "просто
-//    fetch", что уже применён в ai-provider-client.ts.
-//
-// Без официального SDK намеренно — та же причина, что и для LLM-
-// клиентов (сеть отключена в среде разработки, нельзя поставить
-// зависимость). Реальный интеграционный прогон против настоящего
-// API-ключа НЕ выполнялся на этом проходе — как и для AIRouterService
-// при его первой реализации.
 
 import { Injectable, Logger } from '@nestjs/common';
+import { SecretsService } from '../secrets/secrets.service';
+import { ASSEMBLYAI_WEBHOOK_HEADER, ASSEMBLYAI_WEBHOOK_SECRET_REF } from '../common/webhook/assemblyai-webhook.guard';
 
 export interface AssemblyAiSubmitParams {
   audioUrl: string;
@@ -32,10 +13,24 @@ export interface AssemblyAiSubmitResult {
   externalJobId: string;
 }
 
-// Форма входящего webhook-пейлоада AssemblyAI (упрощено до полей,
-// которые реально используются — полный ответ содержит больше служебных
-// полей, не все нужны этому сервису).
+/** Финальный аудит 2026-08-30 — реальное тело вебхука AssemblyAI (сверено с
+ * docs.assemblyai.com/pre-recorded-audio/webhooks): ТОЛЬКО `transcript_id` и
+ * `status`. Ни текста, ни utterances, ни ошибки — их нужно получать отдельным
+ * `GET /v2/transcript/{transcript_id}` (см. getTranscriptResult() ниже).
+ * Прежняя версия этого интерфейса называла поле `id` (которого в реальном
+ * payload не существует) и ожидала utterances/language_code прямо в вебхуке —
+ * из-за этого `payload.id` был всегда `undefined`: в conversations.service.ts
+ * это уходило в Prisma `findFirst({ where: { externalTranscriptionJobId:
+ * undefined } })`, что Prisma трактует как «условие не задано» и возвращает
+ * ПЕРВУЮ ПОПАВШУЮСЯ запись в таблице — риск привязать транскрипт к чужому
+ * разговору. А `payload.utterances` был обречён быть пустым всегда — ни один
+ * разговор не получил бы ни одного сегмента транскрипта. */
 export interface AssemblyAiWebhookPayload {
+  transcript_id: string;
+  status: 'completed' | 'error';
+}
+
+export interface AssemblyAiTranscriptResult {
   status: 'completed' | 'error';
   id: string;
   error?: string;
@@ -74,6 +69,18 @@ export class TranscriptionService {
   private readonly logger = new Logger(TranscriptionService.name);
   private readonly baseUrl = 'https://api.assemblyai.com/v2';
 
+  constructor(private readonly secrets: SecretsService) {}
+
+  /** Fail closed: без секрета задачу не отправляем — иначе вебхук с
+   * результатом никогда не пройдёт guard и разговор зависнет в TRANSCRIBING. */
+  private async webhookSecret(): Promise<string> {
+    const secret = await this.secrets.resolve(ASSEMBLYAI_WEBHOOK_SECRET_REF).catch(() => null);
+    if (!secret) {
+      throw new TranscriptionProviderError(`${ASSEMBLYAI_WEBHOOK_SECRET_REF} не настроен — транскрипция через вебхук невозможна`);
+    }
+    return secret;
+  }
+
   /** Отправить задачу на транскрибацию+диаризацию. audioUrl должен
    * быть публично доступен AssemblyAI на момент вызова — сервер этого
    * файла не хранит и не проксирует байты в этом методе (см.
@@ -90,14 +97,17 @@ export class TranscriptionService {
       },
       body: JSON.stringify({
         audio_url: params.audioUrl,
+        // Финальный аудит 2026-08-30 — speech_models не был задан явно.
+        // Параметр опциональный: при отсутствии AssemblyAI молча откатывается
+        // на ["universal-3-pro", "universal-2"], не на текущий флагман.
+        // Упорядоченный список фолбэков по доступности модели (не языка —
+        // за это отвечает сама universal-3-5-pro, см. language_code ниже).
+        speech_models: ['universal-3-5-pro', 'universal-2'],
         speaker_labels: true,
         webhook_url: params.webhookUrl,
+        webhook_auth_header_name: ASSEMBLYAI_WEBHOOK_HEADER,
+        webhook_auth_header_value: await this.webhookSecret(),
         language_code: params.languageCode,
-        // PII redaction на стороне провайдера — дополнительный слой
-        // поверх собственного ContentScanService проекта (пункт 10),
-        // не замена ему: ContentScanService всё равно проверяет то,
-        // что реально попадает в AIJob дальше по пайплайну извлечения
-        // аргументов/фактов из транскрипта.
         redact_pii: false, // не включено по умолчанию — решение о PII-редактировании транскрипта: отдельная фича, не должна тихо резать текст без явного выбора пользователя
       }),
     });
@@ -113,18 +123,38 @@ export class TranscriptionService {
     return { externalJobId: data.id };
   }
 
-  /** Парсинг входящего webhook-пейлоада в структуру, готовую для
-   * записи в Transcript/TranscriptSegment. Не делает сам запрос к
-   * AssemblyAI — вызывающий код (ConversationsController) уже получил
-   * payload телом POST-запроса на вебхук-эндпоинт. */
-  parseWebhookPayload(payload: AssemblyAiWebhookPayload): ParsedTranscript {
-    if (payload.status === 'error') {
-      throw new TranscriptionProviderError(`AssemblyAI job ${payload.id} failed: ${payload.error ?? 'unknown error'}`);
+  /** Финальный аудит 2026-08-30 — реальный результат по вебхуку получается
+   * НЕ из тела POST-запроса (там только transcript_id/status), а отдельным
+   * запросом сюда. Вызывающий код (webhook-хендлеры трёх модулей) обязан
+   * дёрнуть это ПОСЛЕ получения вебхука — и для status="completed", и для
+   * "error" (текст ошибки тоже не в вебхуке, а в этом ответе, поле error). */
+  async getTranscriptResult(apiKey: string, transcriptId: string): Promise<AssemblyAiTranscriptResult> {
+    const response = await fetch(`${this.baseUrl}/transcript/${transcriptId}`, {
+      headers: { Authorization: apiKey },
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '<unreadable>');
+      throw new TranscriptionProviderError(
+        `AssemblyAI get-transcript failed: ${response.status} ${response.statusText} — ${body}`,
+      );
     }
 
-    const utterances = payload.utterances ?? [];
+    return (await response.json()) as AssemblyAiTranscriptResult;
+  }
+
+  /** Парсинг РЕЗУЛЬТАТА (не входящего webhook-пейлоада — см. коммент к
+   * AssemblyAiWebhookPayload выше) в структуру, готовую для записи в
+   * Transcript/TranscriptSegment. Вызывающий код уже получил result через
+   * getTranscriptResult(). */
+  parseTranscriptResult(result: AssemblyAiTranscriptResult): ParsedTranscript {
+    if (result.status === 'error') {
+      throw new TranscriptionProviderError(`AssemblyAI job ${result.id} failed: ${result.error ?? 'unknown error'}`);
+    }
+
+    const utterances = result.utterances ?? [];
     return {
-      language: payload.language_code ?? null,
+      language: result.language_code ?? null,
       segments: utterances.map((u) => ({
         diarizationLabel: u.speaker,
         text: u.text,
@@ -156,10 +186,9 @@ export class TranscriptionService {
     const response = await fetch(`${this.baseUrl}/upload`, {
       method: 'POST',
       headers: { Authorization: apiKey },
-      // @ts-expect-error — Node fetch требует duplex:'half' для стриминга тела запроса, не входит в стандартный RequestInit-тип текущей версии TS lib.dom
       duplex: 'half',
       body: fileStream,
-    });
+    } as RequestInit);
 
     if (!response.ok) {
       const body = await response.text().catch(() => '<unreadable>');

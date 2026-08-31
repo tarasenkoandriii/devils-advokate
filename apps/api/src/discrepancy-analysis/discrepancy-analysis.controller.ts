@@ -9,6 +9,11 @@ class CheckAgainstUserSourceDto {
   url!: string;
 }
 
+class CheckAgainstFactCheckApiDto {
+  segmentId!: string;
+  claimText!: string;
+}
+
 @Controller()
 @UseGuards(TelegramAuthGuard)
 @UseInterceptors(ApiResponseInterceptor)
@@ -44,6 +49,20 @@ export class DiscrepancyAnalysisController {
     @Body() dto: CheckAgainstUserSourceDto,
   ) {
     return this.discrepancyAnalysis.checkAgainstUserSource(userId, conversationId, dto.segmentId, dto.url);
+  }
+
+  // Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§5)
+  // — путь следует уже установленной конвенции этого контроллера
+  // (conversationId в пути, нужен для проверки владения — ТЗ §5
+  // предлагал segments/:segmentId/... без conversationId, здесь
+  // сохранена согласованность с check-source выше, не буквальный путь ТЗ).
+  @Post('conversations/:conversationId/discrepancies/check-against-fact-check-api')
+  async checkAgainstFactCheckAPI(
+    @CurrentUser() userId: string,
+    @Param('conversationId') conversationId: string,
+    @Body() dto: CheckAgainstFactCheckApiDto,
+  ) {
+    return this.discrepancyAnalysis.checkAgainstFactCheckAPI(userId, conversationId, dto.segmentId, dto.claimText);
   }
 
   // Пункт 41 — выгрузка пронумерованного списка утверждений для

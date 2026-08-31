@@ -67,7 +67,7 @@ const USER_ID = 'user-1';
 async function run() {
   const results: { name: string; error?: string }[] = [];
   const scenarios: [string, () => Promise<void>][] = [];
-  const test = (name: string, fn: () => Promise<void>) => scenarios.push([name, fn]);
+  const test = (name: string, fn: () => Promise<void> | void) => scenarios.push([name, async () => { await fn(); }]);
 
   // ── Чистая математика — тот же класс числовых тестов, что computeRmsDb() (Пункт 81) ──
 

@@ -33,6 +33,23 @@ function isPrivateIPv4Literal(hostname: string): boolean {
   return false;
 }
 
+// ПОВТОРНЫЙ АУДИТ 2026-08-30: приватные IPv6 не проверялись вообще.
+// Отдельная функция, а не пара литералов в BLOCKED_HOSTNAMES, потому
+// что диапазоны — не точечные адреса: fc00::/7 (уникальные локальные)
+// и fe80::/10 (link-local, тот же смысл, что 169.254.0.0/16 у IPv4).
+// Плюс IPv4-mapped формы (::ffff:127.0.0.1), которые иначе проходят
+// мимо обеих проверок — строкового вида IPv6 и разбора IPv4.
+function isPrivateIPv6Literal(hostname: string): boolean {
+  if (!hostname.includes(':')) return false;
+  const h = hostname;
+  if (h === '::1' || h === '::') return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 — unique local
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return true; // fe80::/10 — link-local
+  const mapped = h.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mapped) return isPrivateIPv4Literal(mapped[1]);
+  return false;
+}
+
 export function isUrlSafeToFetch(rawUrl: string): boolean {
   let url: URL;
   try {
@@ -41,9 +58,14 @@ export function isUrlSafeToFetch(rawUrl: string): boolean {
     return false;
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-  const hostname = url.hostname.toLowerCase();
+  // Скобки обязательно снимать: new URL('http://[::1]/').hostname
+  // возвращает "[::1]" ВМЕСТЕ с ними, поэтому литерал '::1' в
+  // BLOCKED_HOSTNAMES никогда не совпадал — loopback по IPv6 проходил
+  // проверку насквозь (найдено повторным аудитом 2026-08-30).
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (BLOCKED_HOSTNAMES.has(hostname)) return false;
   if (isPrivateIPv4Literal(hostname)) return false;
+  if (isPrivateIPv6Literal(hostname)) return false;
   return true;
 }
 

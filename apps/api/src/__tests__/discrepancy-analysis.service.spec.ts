@@ -191,7 +191,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedConversation({ id: CONV_ID, projectId: PROJECT_ID, status: 'UPLOADED' });
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await assertThrowsAsync(() => svc.detect(USER_ID, CONV_ID), BadRequestException, 'detect() при статусе UPLOADED');
   });
 
@@ -199,7 +199,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
     prisma._seedConversation({ id: CONV_ID, projectId: PROJECT_ID, status: 'TRANSCRIBED' });
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await assertThrowsAsync(() => svc.detect(USER_ID, CONV_ID), NotFoundException, 'detect() на чужой разговор');
   });
 
@@ -208,7 +208,7 @@ async function run() {
     seedConversation(prisma);
     prisma._seedArgument({ projectId: PROJECT_ID, text: 'Бюджет команды урезан в этом квартале', stance: 'CON' });
     const fakeRouter = new FakeAIRouterService();
-    await new DiscrepancyAnalysisService(prisma as any, fakeRouter as any).detect(USER_ID, CONV_ID);
+    await new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */).detect(USER_ID, CONV_ID);
 
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Бюджет команды урезан в этом квартале'), true, 'аргумент проекта попал в промпт');
   });
@@ -222,7 +222,7 @@ async function run() {
     prisma._seedSegment({ id: 'seg-old', transcriptId: 'transcript-old', participantId: 'part-old-mapped', text: 'Да, бюджет команды урезали на треть.' });
     const fakeRouter = new FakeAIRouterService();
 
-    await new DiscrepancyAnalysisService(prisma as any, fakeRouter as any).detect(USER_ID, CONV_ID);
+    await new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */).detect(USER_ID, CONV_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('бюджет команды урезали на треть'), true, 'прошлая реплика ТОГО ЖЕ фигуранта попала в промпт');
   });
 
@@ -235,7 +235,7 @@ async function run() {
     prisma._seedSegment({ id: 'seg-1', transcriptId: 'transcript-1', participantId: 'part-unmapped', text: 'Реплика без сопоставления' });
     const fakeRouter = new FakeAIRouterService();
 
-    const created = await new DiscrepancyAnalysisService(prisma as any, fakeRouter as any).detect(USER_ID, CONV_ID);
+    const created = await new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */).detect(USER_ID, CONV_ID);
     assertEqual(created, [], 'не падает при отсутствии сопоставления, просто без истории в промпте');
   });
 
@@ -244,7 +244,7 @@ async function run() {
     seedConversation(prisma);
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ segmentId: 'seg-1', severity: 'DISCREPANCY', sourceDescription: '', potentialImpact: 'x' }]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     await assertThrowsAsync(
       () => svc.detect(USER_ID, CONV_ID),
@@ -258,7 +258,7 @@ async function run() {
     seedConversation(prisma);
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ segmentId: 'seg-1', severity: 'INACCURACY', sourceDescription: '', potentialImpact: 'x' }]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const created = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created.length, 1, 'INACCURACY принята без обязательного источника');
@@ -271,7 +271,7 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { segmentId: 'seg-1', severity: 'STRONG_DISCREPANCY', sourceDescription: 'Противоречит аргументу проекта про урезанный бюджет', potentialImpact: 'Может подорвать доверие к финансовым заявлениям' },
     ]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const created = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created[0].signalType, 'FACTUAL_DISCREPANCY', 'signalType корректный');
@@ -283,7 +283,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedConversation(prisma);
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new DiscrepancyAnalysisService(prisma as any, failingRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, failingRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await assertThrowsAsync(() => svc.detect(USER_ID, CONV_ID), BadGatewayException, 'detect() при недоступности провайдера');
   });
 
@@ -292,7 +292,7 @@ async function run() {
     seedConversation(prisma);
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ segmentId: 'seg-1', severity: 'INACCURACY', sourceDescription: '', potentialImpact: 'x' }]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     const [created] = await svc.detect(USER_ID, CONV_ID);
 
     assertEqual(created.userConfirmedIntentionalFalsehood, false, 'по умолчанию false — сервис никогда сам не проставляет');
@@ -309,7 +309,7 @@ async function run() {
     prisma._seedSegment({ id: 'seg-1', transcriptId: 'transcript-1', participantId: 'part-1', text: 'x' });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ segmentId: 'seg-1', severity: 'INACCURACY', sourceDescription: '', potentialImpact: 'x' }]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     const [created] = await svc.detect('other-user', CONV_ID);
 
     await assertThrowsAsync(
@@ -324,7 +324,7 @@ async function run() {
     seedConversation(prisma);
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ segmentId: 'seg-1', severity: 'DISCREPANCY', sourceDescription: 'Расходится с прошлой беседой', potentialImpact: 'x' }]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await svc.detect(USER_ID, CONV_ID);
     prisma._seedAIInference({ id: fakeRouter.aiInferenceId, output: fakeRouter.responseText });
 
@@ -339,7 +339,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedConversation(prisma);
     const fakeRouter = new FakeAIRouterService();
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     await assertThrowsAsync(
       () => svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'http://localhost/admin'),
@@ -352,7 +352,7 @@ async function run() {
   test('checkAgainstUserSource() бросает NotFoundException для несуществующего segmentId', async () => {
     const prisma = createFakePrisma();
     seedConversation(prisma);
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     await assertThrowsAsync(
       () => svc.checkAgainstUserSource(USER_ID, CONV_ID, 'does-not-exist', 'https://example.com/article'),
@@ -365,7 +365,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedConversation(prisma);
     (global as any).fetch = async () => ({ ok: false, status: 404, statusText: 'Not Found' });
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     await assertThrowsAsync(
       () => svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'https://example.com/missing'),
@@ -389,7 +389,7 @@ async function run() {
       explanation: 'Источник говорит про увеличение бюджета, утверждение — про отсутствие изменений',
       potentialImpact: 'Может подорвать доверие к финансовым заявлениям в переговорах',
     });
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const result = await svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'https://example.com/report');
     assertEqual(result.outcome, 'CONTRADICTED', 'outcome передан как есть');
@@ -412,7 +412,7 @@ async function run() {
     });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify({ outcome: 'CONFIRMED', explanation: 'Источник подтверждает утверждение' });
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const result = await svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'https://example.com/report');
     assertEqual(result.signal, null, 'сигнал НЕ создан, когда источник подтверждает утверждение');
@@ -428,7 +428,7 @@ async function run() {
     });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify({ outcome: 'INSUFFICIENT', explanation: 'Источник не про бюджет вообще' });
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const result = await svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'https://example.com/unrelated');
     assertEqual(result.signal, null, 'сигнал НЕ создан, когда источник не даёт достаточно информации');
@@ -439,7 +439,7 @@ async function run() {
     seedConversation(prisma);
     (global as any).fetch = async () => ({ ok: true, headers: { get: () => null }, text: async () => '<p>x</p>' });
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new DiscrepancyAnalysisService(prisma as any, failingRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, failingRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     await assertThrowsAsync(
       () => svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'https://example.com/x'),
@@ -454,7 +454,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedConversation({ id: CONV_ID, projectId: PROJECT_ID, status: 'TRANSCRIBED', occurredAt: new Date() });
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const result = await svc.exportFactsToVerify(USER_ID, CONV_ID);
     assertEqual(result.count, 0, 'нечего выгружать без реплик');
@@ -463,7 +463,7 @@ async function run() {
   test('exportFactsToVerify() возвращает пояснение, если расхождений не найдено', async () => {
     const prisma = createFakePrisma();
     seedConversation(prisma);
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     const result = await svc.exportFactsToVerify(USER_ID, CONV_ID);
     assertEqual(result.count, 0, 'нечего выгружать без расхождений');
@@ -477,7 +477,7 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { segmentId: 'seg-1', severity: 'STRONG_DISCREPANCY', sourceDescription: 'Противоречит аргументу проекта про бюджет', potentialImpact: 'Может подорвать доверие ко всем финансовым заявлениям' },
     ]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await svc.detect(USER_ID, CONV_ID);
     prisma._seedAIInference({ id: fakeRouter.aiInferenceId, output: fakeRouter.responseText });
 
@@ -507,7 +507,7 @@ async function run() {
     });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify({ outcome: 'CONTRADICTED', severity: 'DISCREPANCY', explanation: 'x', potentialImpact: 'x' });
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await svc.checkAgainstUserSource(USER_ID, CONV_ID, 'seg-1', 'https://example.com/report');
     // FakeAIRouterService не создаёт реальную запись AIInference (в
     // отличие от настоящего AIRouterService) — засеиваем вручную с тем
@@ -533,7 +533,7 @@ async function run() {
       { segmentId: 'seg-1', severity: 'INACCURACY', sourceDescription: '', potentialImpact: 'Низкий приоритет' },
       { segmentId: 'seg-2', severity: 'DISCREPANCY', sourceDescription: 'x', potentialImpact: 'Выше приоритет' },
     ]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await svc.detect(USER_ID, CONV_ID);
 
     const result = await svc.exportFactsToVerify(USER_ID, CONV_ID);
@@ -560,7 +560,7 @@ async function run() {
     prisma._seedSegment({ id: 'seg-1', transcriptId: 'transcript-1', participantId: 'part-named', text: 'Утверждение.' });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ segmentId: 'seg-1', severity: 'INACCURACY', sourceDescription: '', potentialImpact: 'x' }]);
-    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, fakeRouter as any, {} as any /* SecretsService — не используется в detect()/list() */);
     await svc.detect(USER_ID, CONV_ID);
 
     const result = await svc.exportFactsToVerify(USER_ID, CONV_ID);
@@ -571,7 +571,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
     prisma._seedConversation({ id: CONV_ID, projectId: PROJECT_ID, status: 'TRANSCRIBED', occurredAt: new Date() });
-    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new DiscrepancyAnalysisService(prisma as any, new FakeAIRouterService() as any, {} as any /* SecretsService — не используется в detect()/list() */);
 
     await assertThrowsAsync(() => svc.exportFactsToVerify(USER_ID, CONV_ID), NotFoundException, 'exportFactsToVerify() на чужой разговор');
   });

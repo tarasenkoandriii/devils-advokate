@@ -29,7 +29,7 @@
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { ConversationProcessingStatus, ConversationSignalType } from '@prisma/client';
+import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType } from '@prisma/client';
 
 const TASK_TYPE = 'turning-point-detection';
 
@@ -153,7 +153,7 @@ export class TurningPointsService {
       ).map((s: { transcriptSegmentId: string | null }) => s.transcriptSegmentId),
     );
 
-    const created = [];
+    const created: Array<ConversationSignal & { segment: (typeof segments)[number]; description: string }> = [];
     for (const point of rawPoints) {
       const segment = segmentById.get(point.segmentId);
       if (!segment) continue; // AI сослался на несуществующий id реплики — пропускаем, не падаем на всём батче

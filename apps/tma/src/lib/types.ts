@@ -162,6 +162,7 @@ export interface OnboardingData {
 
 export interface LocationSuggestion {
   country: string | null;
+  countryCode: string | null; // ISO-2 из Nominatim — уходит в saveOnboarding для юрисдикции
   city: string | null;
   suggestedReligion: string | null;
   reasoning: string | null;
@@ -259,6 +260,13 @@ export type ConsentType =
   // Пункт 48 (backend) — отдельный тип согласия, не переиспользующий
   // формулировку EPHEMERAL_SERVER (см. schema.prisma).
   | 'PUBLIC_IMAGE_SEARCH'
+  // Домен «Здоровье» (health.controller: createProject требует HEALTH_DATA) — раньше
+  // отсутствовал на клиенте, т.к. у домена не было UI (аудит 2026-08-30 §7.1).
+  | 'HEALTH_DATA'
+  // Аудит БД 2026-08-30 §2.3 — live-транскрипция (LiveHints/AssistanceScreen/
+  // VoiceTextInput) стримит звук напрямую в AssemblyAI; раньше на клиенте
+  // этого значения не было вообще, backend не мог его требовать.
+  | 'THIRD_PARTY_AUDIO_RECORDING'
   // Пункт 87 (backend) — отдельный от VOICE_PROCESSING тип согласия
   // для персистентного биометрического отпечатка (см. schema.prisma).
   | 'VOICE_BIOMETRIC';
@@ -565,6 +573,41 @@ export interface PersonCommunicationTrait {
 // автономного поиска (см. обоснование в discrepancy-analysis.service.ts).
 export type SourceCheckOutcome = 'CONFIRMED' | 'CONTRADICTED' | 'INSUFFICIENT';
 
+// Полный аудит 2026-08-30 — Google Fact Check Tools API (Пункт
+// [fact-check-source-closure]); backend был, UI — нет.
+export interface FactCheckClaim {
+  claimId: string;
+  text: string;
+  claimant?: string;
+  claimDate?: string;
+  publisher: string;
+  textualRating: string;
+  reviewUrl: string;
+  // Расширение на будущее (2026-08-30, по прямому запросу) — заголовок
+  // и дата публикации разбора у фактчекера, если они есть.
+  title?: string;
+  reviewDate?: string;
+}
+export interface FactCheckApiResult {
+  claims: FactCheckClaim[];
+  signal: DiscrepancySignal | null;
+}
+
+// Полный аудит 2026-08-30 — GET /legal-disclaimer?mode=… (Пункт
+// [legal-disclaimer]) существовал на backend, но манифест доменов
+// планировал disclaimerKey, а вызова так и не было.
+export interface LegalReference {
+  actName: string;
+  citation: string;
+  summary: string;
+  sourceUrl?: string;
+  lastVerifiedAt: string;
+}
+export interface LegalDisclaimerResponse {
+  bucket: string;
+  references: LegalReference[];
+}
+
 export interface SourceCheckResult {
   outcome: SourceCheckOutcome;
   explanation: string;
@@ -684,6 +727,11 @@ export interface OutcomeScenario {
   precedentBasis: string | null;
   protectedNoteHint: string | null;
   confidence: ScenarioConfidence;
+  // Полный аудит 2026-08-30 — поле существовало на backend с Пункта
+  // [prompt-framework] §4.3 (единственный вход калибровочного gate), но
+  // клиентский тип и UI его не знали — калибровка не получала ни одной точки.
+  outcomeConfirmed: boolean | null;
+  outcomeConfirmedAt: string | null;
   createdAt: string;
 }
 

@@ -37,7 +37,7 @@ import { BadGatewayException, BadRequestException, ForbiddenException, Injectabl
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
-import { ConversationProcessingStatus, ConversationSignalType, SelfRiskCategory } from '@prisma/client';
+import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SelfRiskCategory } from '@prisma/client';
 
 const TASK_TYPE = 'do-not-say-detection';
 
@@ -126,7 +126,7 @@ export class DoNotSayService {
     const rawItems: RawDoNotSayItem[] = JSON.parse(result.text);
     const segmentById = new Map(selfSegments.map((s: any) => [s.id, s]));
 
-    const created = [];
+    const created: Array<ConversationSignal & { segment: (typeof allSegments)[number]; why: string; saferAlternative: string }> = [];
     for (const item of rawItems) {
       const segment: any = segmentById.get(item.segmentId);
       if (!segment) continue; // AI сослался на несуществующий/чужой сегмент — пропускаем, не падаем на всём батче

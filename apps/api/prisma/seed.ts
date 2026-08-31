@@ -72,9 +72,25 @@ async function main() {
     create: { providerId: anthropic.id, name: 'claude-sonnet-5' },
   });
   const xaiModel = await prisma.aIModel.upsert({
-    where: { providerId_name: { providerId: xai.id, name: 'grok-4' } },
+    // Полный аудит периметров 2026-08-30 (по прямому запросу — сверка
+    // с рабочей реализацией в silverfinance): grok-4 официально снят
+    // xAI с производства 15 мая 2026 (вся линейка grok-4-*/grok-3
+    // отправляется на редирект). Запросы к retired-слагам всё ещё
+    // формально проходят (xAI редиректит их на grok-4.3), но: (1)
+    // тарифицируются по цене grok-4.3 независимо от ожиданий проекта,
+    // (2) reasoning effort молча становится "low"/"none" через
+    // редирект, не выбирается явно, (3) сама xAI прямо советует «для
+    // новых конфигураций используйте актуальный canonical model ID
+    // напрямую», не полагаться на редирект как постоянное решение.
+    // grok-4.3 — тот же слаг, что silverfinance подтвердил рабочим в
+    // production после того, как более старый grok-2-vision-1212 стал
+    // возвращать HTTP 400 "model not available" — не самый новый
+    // флагман xAI на сегодня (Grok 4.6 вышел 12 августа 2026), но
+    // осознанно взят подтверждённый рабочий слаг, не самый свежий
+    // неподтверждённый.
+    where: { providerId_name: { providerId: xai.id, name: 'grok-4.3' } },
     update: {},
-    create: { providerId: xai.id, name: 'grok-4' },
+    create: { providerId: xai.id, name: 'grok-4.3' },
   });
 
   const openaiVersion = await prisma.aIModelVersion.upsert({
@@ -88,9 +104,9 @@ async function main() {
     create: { modelId: anthropicModel.id, version: 'claude-sonnet-5' },
   });
   const xaiVersion = await prisma.aIModelVersion.upsert({
-    where: { modelId_version: { modelId: xaiModel.id, version: 'grok-4' } },
+    where: { modelId_version: { modelId: xaiModel.id, version: 'grok-4.3' } },
     update: {},
-    create: { modelId: xaiModel.id, version: 'grok-4' },
+    create: { modelId: xaiModel.id, version: 'grok-4.3' },
   });
 
   // Пункт 13: AssemblyAI "best" tier — комбинированные STT+диаризация

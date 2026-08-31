@@ -20,7 +20,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
-import { ConsentType } from '@prisma/client';
+import { ConsentType, VenueRecommendation } from '@prisma/client';
 import { getPlaceDetails, searchNearbyVenues } from './google-places-client';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
@@ -73,7 +73,7 @@ export class VenueRecommendationService {
       throw new BadRequestException('Поблизости не найдено подходящих заведений');
     }
 
-    const created = [];
+    const created: VenueRecommendation[] = [];
     for (const candidate of candidates.slice(0, MAX_CANDIDATES)) {
       let details;
       try {

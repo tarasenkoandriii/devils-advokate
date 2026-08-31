@@ -23,10 +23,14 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../prisma/prisma.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, LibraryModerationStatus } from '@prisma/client';
+import { AuditLogService } from '../audit-log/audit-log.service';
 
 @Injectable()
 export class LibraryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   // ═══════════════════════ authenticated (TelegramAuthGuard) ═══════════════════════
 
@@ -81,13 +85,25 @@ export class LibraryService {
     if (entry.status !== LibraryModerationStatus.PENDING) {
       throw new BadRequestException(`LibraryEntry ${entryId} already moderated (status=${entry.status})`);
     }
-    return this.prisma.libraryEntry.update({
+    const updated = await this.prisma.libraryEntry.update({
       where: { id: entryId },
       data: {
         status: decision === 'ACCEPT' ? LibraryModerationStatus.ACCEPTED : LibraryModerationStatus.REJECTED,
         moderatedAt: new Date(),
       },
     });
+
+    // Пункт [audit-log]
+    await this.auditLog.record({
+      actorId: userId,
+      action: 'library_entry.moderated',
+      resource: 'LibraryEntry',
+      resourceId: entryId,
+      before: { status: entry.status },
+      after: { status: updated.status },
+    });
+
+    return updated;
   }
 
   // ═══════════════════════ public (no auth) ═══════════════════════
@@ -117,9 +133,23 @@ export class LibraryService {
     if (!entry) {
       throw new NotFoundException(`LibraryEntry ${entryId} not found or not yet published`);
     }
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30: было read-then-write
+    // (`entry.upvotes + 1`) на ПУБЛИЧНОМ неаутентифицированном
+    // эндпоинте — два одновременных голоса перезаписывали друг друга
+    // (классический lost update), и на однопоточном моке это не
+    // воспроизводится в принципе. { increment: 1 } делает инкремент
+    // на стороне Postgres, где он атомарен.
+    //
+    // Плюс явная проверка direction: раньше ЛЮБОЕ значение, кроме
+    // строки 'up', молча считалось голосом «против» — при отсутствии
+    // ValidationPipe в проекте это означало, что опечатка клиента
+    // тихо превращалась в противоположный голос.
+    if (direction !== 'up' && direction !== 'down') {
+      throw new BadRequestException(`direction должен быть 'up' или 'down', получено: ${String(direction)}`);
+    }
     return this.prisma.libraryEntry.update({
       where: { id: entryId },
-      data: direction === 'up' ? { upvotes: entry.upvotes + 1 } : { downvotes: entry.downvotes + 1 },
+      data: direction === 'up' ? { upvotes: { increment: 1 } } : { downvotes: { increment: 1 } },
     });
   }
 

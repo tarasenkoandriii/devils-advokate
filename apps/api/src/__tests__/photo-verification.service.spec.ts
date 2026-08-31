@@ -158,7 +158,7 @@ async function run() {
     let deleteCalled = false;
     (global as any).fetch = async (url: string, init: any) => {
       if (init?.method === 'PUT') return { ok: true, json: async () => ({ url: 'https://store.public.blob.vercel-storage.com/x.jpg', pathname: 'x.jpg', contentType: 'image/jpeg' }) };
-      if (url.includes('serpapi.com')) return { ok: true, json: async () => ({ search_metadata: { status: 'Success' }, image_results: [] }) };
+      if (url.includes('serpapi.com')) return { ok: true, json: async () => ({ search_metadata: { status: 'Success' }, visual_matches: [] }) };
       if (url.endsWith('/delete')) { deleteCalled = true; return { ok: true }; }
       return { ok: true, json: async () => ({}) };
     };
@@ -193,7 +193,7 @@ async function run() {
     seedOwnedFact(prisma);
     (global as any).fetch = async (url: string, init: any) => {
       if (init?.method === 'PUT') return { ok: true, json: async () => ({ url: 'https://store.public.blob.vercel-storage.com/x.jpg', pathname: 'x.jpg', contentType: 'image/jpeg' }) };
-      if (url.includes('serpapi.com')) return { ok: true, json: async () => ({ search_metadata: { status: 'Success' }, image_results: [] }) };
+      if (url.includes('serpapi.com')) return { ok: true, json: async () => ({ search_metadata: { status: 'Success' }, visual_matches: [] }) };
       return { ok: true, json: async () => ({}) };
     };
     const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
@@ -213,8 +213,11 @@ async function run() {
           ok: true,
           json: async () => ({
             search_metadata: { status: 'Success' },
-            image_results: [
-              { title: 'Похожая статья', link: 'https://example.com/a', date: '2024-01-15' },
+            // Полный аудит периметров 2026-08-30: visual_matches — реальная
+            // форма ответа рабочего движка (google_lens); image_results был
+            // от google_reverse_image, который больше не функционирует.
+            visual_matches: [
+              { title: 'Похожая статья', link: 'https://example.com/a' },
               { title: 'Ещё одна страница', link: 'https://example.com/b' },
             ],
           }),

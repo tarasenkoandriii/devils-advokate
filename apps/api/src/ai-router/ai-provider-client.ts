@@ -73,7 +73,7 @@ export class OpenAiCompatibleClient implements AIProviderClient {
       );
     }
 
-    const json = await response.json();
+    const json: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
     const text = json?.choices?.[0]?.message?.content;
     if (typeof text !== 'string') {
       throw new Error('OpenAI-compatible provider returned unexpected shape (no choices[0].message.content)');
@@ -124,7 +124,7 @@ export class AnthropicClient implements AIProviderClient {
       );
     }
 
-    const json = await response.json();
+    const json: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
     const textBlock = Array.isArray(json?.content)
       ? json.content.find((block: { type?: string }) => block?.type === 'text')
       : undefined;

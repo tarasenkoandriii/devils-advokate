@@ -37,6 +37,7 @@ export function OnboardingForm() {
   const [religion, setReligion] = useState('');
   const [city, setCity] = useState('');
   const [country, setCountry] = useState('');
+  const [countryCode, setCountryCode] = useState<string | null>(null);
 
   const [detecting, setDetecting] = useState(false);
   const [suggestion, setSuggestion] = useState<LocationSuggestion | null>(null);
@@ -61,7 +62,7 @@ export function OnboardingForm() {
     setSaving(true);
     setError(null);
     try {
-      await saveOnboarding({ religion: religion || null, city: city || null, country: country || null });
+      await saveOnboarding({ religion: religion || null, city: city || null, country: country || null, countryCode });
       haptic('success');
     } catch (err) {
       haptic('error');
@@ -114,6 +115,7 @@ export function OnboardingForm() {
   function handleUseSuggestion() {
     if (!suggestion) return;
     if (suggestion.country) setCountry(suggestion.country);
+    setCountryCode(suggestion.countryCode ?? null);
     if (suggestion.city) setCity(suggestion.city);
     if (suggestion.suggestedReligion) {
       const matches = RELIGION_OPTIONS.some((opt) => opt.value === suggestion.suggestedReligion);
@@ -131,7 +133,7 @@ export function OnboardingForm() {
 
       <label className="onboarding-field">
         Страна
-        <input type="text" value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Не указана" />
+        <input type="text" value={country} onChange={(e) => { setCountry(e.target.value); setCountryCode(null); }} placeholder="Не указана" />
       </label>
 
       <label className="onboarding-field">

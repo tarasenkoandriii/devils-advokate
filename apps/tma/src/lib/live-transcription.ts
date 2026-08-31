@@ -99,8 +99,22 @@ export function connectLiveTranscription(
   onTranscript: (update: TranscriptUpdate) => void,
   onError: (message: string) => void,
 ): LiveTranscriptionHandle {
+  // Финальный аудит 2026-08-30 (продолжение) — WS URL не задавал speech_model
+  // и mode вообще. Живая документация AssemblyAI по этому конкретному параметру
+  // противоречива между источниками (часть говорит «обязателен, без дефолта»,
+  // часть — «недавно стал опциональным с дефолтом на стороне аккаунта») — то
+  // есть сам API в этой части ещё не устоялся. При любой трактовке отсутствие
+  // параметра — плохой исход: либо соединение не открывается вовсе, либо тихо
+  // закрепляется за моделью, отличной от той, что нужна продукту (older
+  // universal-streaming-* модели не поддерживают, например, mode). Явно
+  // указываем ту же модель, что и в async-пути (transcription.service.ts) —
+  // universal-3-5-pro, и mode=balanced как основной регулятор
+  // латентность/точность, который сама документация советует ставить в первую
+  // очередь. Точное имя параметра/значения — сверить с
+  // /docs/streaming/select-the-speech-model перед следующим релизом, если
+  // AssemblyAI выпустит новую модель речи.
   const ws = new WebSocket(
-    `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speaker_labels=true&token=${encodeURIComponent(token)}`,
+    `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&mode=balanced&speaker_labels=true&token=${encodeURIComponent(token)}`,
   );
 
   const source = audioContext.createMediaStreamSource(mediaStream);
@@ -127,11 +141,61 @@ export function connectLiveTranscription(
     onError('Подключение к транскрипции прервалось');
   };
 
+  // Финальный аудит 2026-08-30 (продолжение) — до этой правки не было
+  // ws.onclose вообще. Проблема: сервер может закрыть сокет с конкретным
+  // кодом (документация перечисляет 1008/3005-3009) БЕЗ события error —
+  // по спецификации WebSocket error и close различны, серверное закрытие
+  // с ненулевым кодом не обязано порождать error. Без onclose live-функции
+  // (подсказки, экран сопровождения) молча переставали бы получать
+  // транскрипт, ничем это не показывая — пользователь считал бы сессию
+  // всё ещё активной. closingIntentionally отличает наш собственный
+  // stop() (Terminate → ожидаемое закрытие) от закрытия по инициативе
+  // сервера — не полагаемся на угадывание, каким кодом AssemblyAI
+  // закроет сокет после Terminate.
+  let closingIntentionally = false;
+  const CLOSE_CODE_MESSAGES: Record<number, string> = {
+    1008: 'Не удалось авторизоваться в сервисе транскрипции — токен недействителен или истёк',
+    3005: 'Сессия транскрипции отменена сервисом (внутренняя ошибка провайдера)',
+    3006: 'Сервис транскрипции отклонил сообщение — некорректный формат',
+    3007: 'Сервис транскрипции прервал передачу аудио — поток передавался некорректно',
+    3008: 'Сессия транскрипции истекла по времени — начните заново',
+    3009: 'Слишком много одновременных сессий транскрипции — попробуйте позже',
+  };
+  ws.onclose = (event) => {
+    if (closingIntentionally || event.code === 1000) return;
+    onError(CLOSE_CODE_MESSAGES[event.code] ?? `Соединение с сервисом транскрипции закрыто (код ${event.code})`);
+  };
+
   return {
     stop: () => {
       processor.disconnect();
       source.disconnect();
-      if (ws.readyState === WebSocket.OPEN) ws.close();
+      closingIntentionally = true;
+      // Финальный аудит 2026-08-30 (продолжение) — раньше здесь сразу
+      // вызывался ws.close() без отправки управляющего сообщения Terminate.
+      // Документация прямо называет это обязательным шагом: без него
+      // AssemblyAI продолжает тарифицировать соединение вплоть до
+      // 3-часового потолка (код закрытия 3008), даже если браузер уже
+      // разорвал сокет со своей стороны. С speaker_labels=true (включён
+      // выше) это имеет и вторую цену: SpeakerRevision — уточнение меток
+      // говорящих по всей сессии — приходит СТРОГО в ответ на Terminate,
+      // прямо перед закрытием; без него клиент никогда не получил бы
+      // уточнённую диаризацию (сам разбор SpeakerRevision в
+      // parseStreamingMessage — отдельная задача, здесь только
+      // корректное завершение сессии, не ретроактивная перерисовка уже
+      // показанных реплик).
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'Terminate' }));
+        // Защитный таймаут: сервер обычно закрывает сокет сам после
+        // Terminate/SpeakerRevision (~400 мс), но если вкладка сворачивается
+        // или сеть моргает, форсируем закрытие, чтобы не держать ресурс
+        // браузера открытым бесконечно.
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.close();
+        }, 2000);
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
     },
   };
 }

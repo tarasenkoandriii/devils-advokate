@@ -15,6 +15,7 @@ import {
   NestInterceptor,
 } from '@nestjs/common';
 import { Observable, map } from 'rxjs';
+import { decimalsToNumbers } from './money';
 
 export interface ApiSuccessResponse<T> {
   success: true;
@@ -46,6 +47,7 @@ export class ApiResponseInterceptor<T>
     _context: ExecutionContext,
     next: CallHandler<T>,
   ): Observable<ApiSuccessResponse<T>> {
-    return next.handle().pipe(map((data) => ({ success: true, data })));
+    // Decimal(14,2) денежных полей → number на границе API (см. common/money.ts)
+    return next.handle().pipe(map((data) => ({ success: true, data: decimalsToNumbers(data) })));
   }
 }

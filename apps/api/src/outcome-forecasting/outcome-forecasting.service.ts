@@ -187,4 +187,21 @@ export class OutcomeForecastingService {
     const TYPE_ORDER: Record<string, number> = { DO_NOTHING: 0, ASSUME_HARM: 1, ASSUME_HELP: 2, USER_DEFINED: 3 };
     return [...scenarios].sort((a: any, b: any) => (TYPE_ORDER[a.scenarioType] ?? 99) - (TYPE_ORDER[b.scenarioType] ?? 99));
   }
+
+  // Пункт [prompt-framework], devils-advocate-prompt-framework-tz.md
+  // §4.3 — без этого метода калибровочный gate не над чем считать:
+  // "сбылся ли сценарий на самом деле" никогда раньше не фиксировалось
+  // нигде в проекте. Пользователь подтверждает постфактум, когда узнал
+  // реальный исход — не AI-вывод, честное свидетельство человека.
+  async confirmOutcome(userId: string, projectId: string, scenarioId: string, confirmed: boolean) {
+    await assertProjectOwnership(this.prisma, userId, projectId);
+    const scenario = await this.prisma.outcomeScenario.findFirst({ where: { id: scenarioId, projectId } });
+    if (!scenario) {
+      throw new BadRequestException(`OutcomeScenario ${scenarioId} not found in project ${projectId}`);
+    }
+    return this.prisma.outcomeScenario.update({
+      where: { id: scenarioId },
+      data: { outcomeConfirmed: confirmed, outcomeConfirmedAt: new Date() },
+    });
+  }
 }

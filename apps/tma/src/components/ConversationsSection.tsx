@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import {
   assignParticipant,
   checkAgainstUserSource,
+  checkAgainstFactCheckApi,
   confirmIntentionalFalsehood,
   createConversation,
   detectBestNextMove,
@@ -44,6 +45,7 @@ import {
   ConversationSourceType,
   DiscrepancySignal,
   SourceCheckResult,
+  FactCheckApiResult,
   FactsToVerifyExport,
   DoNotSayItem,
   ManipulationPoint,
@@ -51,6 +53,7 @@ import {
   TurningPoint,
 } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { AudioProcessingConsentPrompt, checkAudioProcessingConsent } from './AudioProcessingConsentPrompt';
 import { SpeakButton } from './SpeakButton';
 import { CooldownNudgeSession } from './CooldownNudgeSession';
 import { LiveHintsSession } from './LiveHintsSession';
@@ -139,6 +142,12 @@ function AddConversationForm({
   const [file, setFile] = useState<File | null>(null);
   const [step, setStep] = useState<'idle' | 'creating' | 'uploading' | 'transcribing'>('idle');
   const [error, setError] = useState<string | null>(null);
+  // ПОВТОРНЫЙ АУДИТ 2026-08-30: раньше форма отправляла файл сразу и
+  // получала 403 от бэкенда, если согласия RECORDING/EPHEMERAL_SERVER
+  // не выданы — а выдать их в TMA было негде вообще. Теперь гейт
+  // показывается ДО загрузки: пользователь видит, что именно произойдёт
+  // с файлом, а не сообщение об ошибке после нажатия кнопки.
+  const [needsConsent, setNeedsConsent] = useState(false);
 
   const busy = step !== 'idle';
 
@@ -148,6 +157,12 @@ function AddConversationForm({
       return;
     }
     setError(null);
+
+    if (!(await checkAudioProcessingConsent())) {
+      setNeedsConsent(true);
+      return;
+    }
+
     try {
       setStep('creating');
       const conversation = await createConversation(projectId, {
@@ -172,6 +187,19 @@ function AddConversationForm({
       );
       setStep('idle');
     }
+  }
+
+  if (needsConsent) {
+    return (
+      <AudioProcessingConsentPrompt
+        source="conversations-add-form"
+        onGranted={() => {
+          setNeedsConsent(false);
+          void handleSubmit();
+        }}
+        onCancel={() => setNeedsConsent(false)}
+      />
+    );
   }
 
   return (
@@ -410,6 +438,25 @@ function ConversationRow({
   const [sourceCheckUrl, setSourceCheckUrl] = useState('');
   const [checkingSource, setCheckingSource] = useState(false);
   const [sourceCheckResults, setSourceCheckResults] = useState<Record<string, SourceCheckResult>>({});
+  const [factCheckResults, setFactCheckResults] = useState<Record<string, FactCheckApiResult>>({});
+  const [factCheckingId, setFactCheckingId] = useState<string | null>(null);
+  const [factCheckError, setFactCheckError] = useState<string | null>(null);
+
+  async function handleFactCheck(segmentId: string, claimText: string) {
+    setFactCheckingId(segmentId);
+    setFactCheckError(null);
+    try {
+      const result = await checkAgainstFactCheckApi(conversation.id, segmentId, claimText);
+      setFactCheckResults((prev) => ({ ...prev, [segmentId]: result }));
+      if (result.signal) setDiscrepancies(await listDiscrepancies(conversation.id));
+      haptic(result.claims.length ? 'success' : 'light');
+    } catch (err) {
+      haptic('error');
+      setFactCheckError(err instanceof Error ? err.message : 'Фактчек-базы недоступны');
+    } finally {
+      setFactCheckingId(null);
+    }
+  }
   const [sourceCheckError, setSourceCheckError] = useState<string | null>(null);
 
   async function handleCheckSource(segmentId: string) {
@@ -648,9 +695,37 @@ function ConversationRow({
                             </div>
                           </div>
                         ) : (
-                          <button type="button" onClick={() => setSourceCheckOpenFor(seg.id)}>
-                            Проверить по ссылке
-                          </button>
+                          <div className="conversations-section__add-actions">
+                            <button type="button" onClick={() => setSourceCheckOpenFor(seg.id)}>
+                              Проверить по ссылке
+                            </button>
+                            <button type="button" onClick={() => handleFactCheck(seg.id, seg.text)} disabled={factCheckingId === seg.id}>
+                              {factCheckingId === seg.id ? 'Ищем…' : 'Сверить с фактчек-базами'}
+                            </button>
+                          </div>
+                        )}
+                        {factCheckError && <p className="generation-error">{factCheckError}</p>}
+                        {factCheckResults[seg.id] && (
+                          <div className="source-check-result">
+                            {factCheckResults[seg.id].claims.length === 0 ? (
+                              <span>❓ В публичных фактчек-базах (Google Fact Check Tools) похожих утверждений не найдено — это не значит «правда», только «никто не проверял».</span>
+                            ) : (
+                              <>
+                                <span className="source-check-result__badge">{factCheckResults[seg.id].signal ? '❌ Есть опровержение' : '🔎 Найдено в фактчек-базах'}</span>
+                                <ul className="dtp-access-log">
+                                  {factCheckResults[seg.id].claims.slice(0, 3).map((c) => (
+                                    <li key={c.claimId}>
+                                      <strong>{c.publisher}:</strong> «{c.textualRating}»
+                                      {c.title && <> — <a href={c.reviewUrl} target="_blank" rel="noreferrer">{c.title}</a></>}
+                                      {!c.title && <> — <a href={c.reviewUrl} target="_blank" rel="noreferrer">разбор</a></>}
+                                      {c.reviewDate && <span className="dtp-muted"> · {c.reviewDate}</span>}
+                                      {c.claimant && <span className="dtp-muted"> · утверждал: {c.claimant}</span>}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </>
+                            )}
+                          </div>
                         )}
                         {manipulationPoint && (
                           <div className="manipulation-point">

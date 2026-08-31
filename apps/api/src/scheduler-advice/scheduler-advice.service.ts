@@ -22,7 +22,7 @@ import { BadGatewayException, BadRequestException, ForbiddenException, Injectabl
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
-import { FactSourceType } from '@prisma/client';
+import { FactSourceType, SchedulerAdvice } from '@prisma/client';
 
 const TASK_TYPE = 'scheduler-advice';
 
@@ -134,7 +134,7 @@ export class SchedulerAdviceService {
 
     const rawItems: RawAdviceItem[] = JSON.parse(result.text);
 
-    const created = [];
+    const created: SchedulerAdvice[] = [];
     for (const item of rawItems) {
       const advice = await this.prisma.schedulerAdvice.create({
         data: { projectId, adviceText: item.adviceText, generatedByInferenceId: result.aiInferenceId },

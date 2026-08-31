@@ -17,7 +17,12 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
     "prisma:seed": "prisma db seed",
-    "test": "jest"
+    "prisma:seed:dev": "ts-node prisma/seed-dev.ts",
+    "prisma:push": "prisma db push",
+    "test": "npm run test:jest && npm run test:standalone",
+    "test:jest": "jest",
+    "test:standalone": "node ../../scripts/run-standalone-specs.js src/__tests__",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

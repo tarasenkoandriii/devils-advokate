@@ -11,6 +11,8 @@ import {
   getPrivacyOverview,
   deletePersonData,
   exportPrivacyData,
+  deleteAccount,
+  AccountDeletionResult,
   revokeConsent,
   getSafeShareLog,
   getRetentionClasses,
@@ -21,6 +23,10 @@ import { haptic } from '../../lib/telegram';
 import { OnboardingForm } from '../../components/OnboardingForm';
 
 export default function PrivacyPage() {
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletionResult, setDeletionResult] = useState<AccountDeletionResult | null>(null);
   const router = useRouter();
   const [overview, setOverview] = useState<PrivacyOverview | null>(null);
   const [safeShareLog, setSafeShareLog] = useState<SafeShareLogEntry[]>([]);
@@ -201,6 +207,36 @@ export default function PrivacyPage() {
           </ul>
         ) : (
           <p className="card-section__empty">Пока ничего не отправлялось через Safe Share</p>
+        )}
+      </section>
+
+      <section className="card-section" style={{ borderColor: '#d33' }}>
+        <h3>Удалить аккаунт и все данные</h3>
+        <p className="card-section__empty">
+          Проекты, разговоры и транскрипты, люди и факты о них, согласия, доказательства ДТП, анализы, профили кандидатов, intake-сессии — всё удаляется безвозвратно. Команды и группы без вас останутся. Копии транскриптов у STT-провайдера хранятся по его политике; у нас остаётся только обезличенная запись в журнале аудита.
+        </p>
+        {deletionResult ? (
+          <div className="dtp-status dtp-status--ok">
+            Аккаунт удалён. Удалено: {Object.entries(deletionResult.removed).map(([k, v]) => `${k}: ${v}`).join(', ')}.
+            {deletionResult.externalArtifacts.failed > 0 && ` Не удалось удалить файлов во внешнем хранилище: ${deletionResult.externalArtifacts.failed} — напишите нам, удалим вручную.`}
+            <br />При следующем открытии приложение начнёт с чистого листа.
+          </div>
+        ) : (
+          <>
+            <label className="entity-form__field">
+              <span>Чтобы подтвердить, введите слово УДАЛИТЬ</span>
+              <input value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} placeholder="УДАЛИТЬ" />
+            </label>
+            {deleteError && <p className="generation-error">{deleteError}</p>}
+            <button type="button" className="secondary" style={{ borderColor: '#d33', color: '#d33' }} disabled={deleting || deleteConfirm.trim().toUpperCase() !== 'УДАЛИТЬ'}
+              onClick={async () => {
+                if (!window.confirm('Это необратимо. Удалить аккаунт и все данные?')) return;
+                setDeleting(true); setDeleteError(null);
+                try { setDeletionResult(await deleteAccount()); haptic('success'); }
+                catch (e) { haptic('error'); setDeleteError(e instanceof Error ? e.message : 'Не удалось удалить'); }
+                finally { setDeleting(false); }
+              }}>{deleting ? 'Удаляем…' : 'Удалить аккаунт'}</button>
+          </>
         )}
       </section>
     </main>

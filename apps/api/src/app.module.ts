@@ -72,6 +72,23 @@ import { LiveArgumentTrackingModule } from './live-argument-tracking/live-argume
 import { ProbingDetectorModule } from './probing-detector/probing-detector.module';
 import { VoiceEmbeddingModule } from './voice-embedding/voice-embedding.module';
 import { MaterialChatModule } from './material-chat/material-chat.module';
+import { PromptRegistryModule } from './prompt-registry/prompt-registry.module';
+import { EvaluationModule } from './evaluation/evaluation.module';
+import { CalibrationModule } from './calibration/calibration.module';
+import { TelemetryModule } from './telemetry/telemetry.module';
+import { AdminAuthModule } from './admin-auth/admin-auth.module';
+import { AdminUsersModule } from './admin-users/admin-users.module';
+import { MediaReviewModule } from './media-review/media-review.module';
+import { IntakeModule } from './intake/intake.module';
+import { AdminDomainsModule } from './admin-domains/admin-domains.module';
+import { MajorPurchaseModule } from './major-purchase/major-purchase.module';
+import { InterviewPoolModule } from './interview-pool/interview-pool.module';
+import { AuditLogModule } from './audit-log/audit-log.module';
+import { InvestmentModule } from './investment/investment.module';
+import { LegalDisclaimerModule } from './legal-disclaimer/legal-disclaimer.module';
+import { HealthModule } from './health/health.module';
+import { FamilyLawModule } from './family-law/family-law.module';
+import { DtpModule } from './dtp/dtp.module';
 
 @Module({
   imports: [
@@ -148,6 +165,31 @@ import { MaterialChatModule } from './material-chat/material-chat.module';
     ProbingDetectorModule,
     VoiceEmbeddingModule,
     MaterialChatModule,
+    PromptRegistryModule,
+    EvaluationModule,
+    CalibrationModule,
+    TelemetryModule,
+    // Пункт [continue]: AdminAuthModule/AdminUsersModule были
+    // импортированы как TS-модули (см. import выше), но ни разу не
+    // зарегистрированы в этом массиве — реальный баг, найденный при
+    // продолжении работы над Пунктом [media-review], не относящийся
+    // к нему по сути. Без этой строки весь backend admin-панели
+    // (AdminAuthController/AdminUsersController/AdminSessionGuard)
+    // физически не подключён к приложению — ни один /admin/auth/*
+    // или /admin/users/* запрос не находил бы обработчик.
+    AdminAuthModule,
+    AdminUsersModule,
+    MediaReviewModule,
+    IntakeModule, // ТЗ domain-ui-and-voice-intake §2 — голосовой квиз на входе
+    AdminDomainsModule, // ТЗ domain-ui-and-voice-intake §1.4 — операторский обзор доменов/intake/media-review
+    MajorPurchaseModule,
+    InterviewPoolModule,
+    AuditLogModule,
+    InvestmentModule,
+    LegalDisclaimerModule,
+    HealthModule,
+    FamilyLawModule,
+    DtpModule,
   ],
 })
 export class AppModule {}

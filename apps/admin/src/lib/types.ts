@@ -1,0 +1,188 @@
+// Типы отражают контракты из devils-advocate-admin-panel-tz.md §4,
+// devils-advocate-prompt-framework-tz.md §5, devils-advocate-telemetry-tz.md §4
+// и реальные Prisma-модели backend (apps/api/prisma/schema.prisma) —
+// не переизобретены заново, списаны с уже реализованного кода.
+
+// ── Аутентификация (§4.1) ──
+
+export interface AdminMe {
+  userId: string;
+  isLibraryModerator: boolean;
+  isVenueModerator: boolean;
+  isOperator: boolean;
+}
+
+// ── Пользователи (§4.3) ──
+
+export interface AdminUserRow {
+  id: string;
+  telegramId: string;
+  createdAt: string;
+  isRestricted: boolean;
+  isBlocked: boolean;
+  isLibraryModerator: boolean;
+  isVenueModerator: boolean;
+  isOperator: boolean;
+}
+
+export interface AdminUserDetail extends AdminUserRow {
+  restrictedAt: string | null;
+  restrictedNote: string | null;
+  blockedAt: string | null;
+  blockedNote: string | null;
+  projectCount: number;
+  conversationCount: number;
+  lastActivityAt: string | null;
+}
+
+// ── Модерация библиотеки (§3.5 ТЗ, library.service.ts) ──
+
+export interface LibraryArgument {
+  id: string;
+  text: string;
+  stance: 'PRO' | 'CON';
+}
+
+export interface LibraryEntry {
+  id: string;
+  title: string;
+  category: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  upvotes: number;
+  downvotes: number;
+  createdAt: string;
+  arguments: LibraryArgument[];
+}
+
+// ── Модерация заведений + монетизация (§3.22/§3.23 ТЗ) ──
+
+export interface VenueApplication {
+  id: string;
+  name: string;
+  address: string;
+  phone: string | null;
+  openingHours: string[];
+  googlePlaceId: string | null;
+  photoReferences: string[];
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  createdAt: string;
+}
+
+export interface ApprovedVenue {
+  id: string;
+  name: string;
+  address: string;
+  phone: string | null;
+  rating: number | null;
+  referralFeeAmount: number | null;
+  isPriorityPartner: boolean;
+}
+
+export interface CommissionSummary {
+  totalBookingsConfirmed: number;
+  totalFeesOwed: number;
+}
+
+// ── Prompt Registry (devils-advocate-prompt-framework-tz.md §5.1) ──
+
+export type PromptVersionStatus = 'DRAFT' | 'TESTING' | 'ACTIVE' | 'DEPRECATED';
+
+export interface PromptVersion {
+  id: string;
+  promptId: string;
+  version: string;
+  template: string;
+  changelog: string | null;
+  status: PromptVersionStatus;
+  createdAt: string;
+}
+
+// ── Evaluation (§5.2) ──
+
+export interface EvaluationDataset {
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+}
+
+export interface EvaluationCaseResult {
+  id: string;
+  evaluationCaseId: string;
+  actualOutput: string;
+  passed: boolean;
+  note: string | null;
+}
+
+export interface EvaluationMetricResult {
+  id: string;
+  value: number;
+  passed: boolean;
+  evaluationMetric?: { name: string };
+}
+
+export interface ReleaseGate {
+  id: string;
+  passed: boolean;
+  gateType: string;
+}
+
+export interface EvaluationRun {
+  id: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  promptVersionId: string | null;
+  evaluationDatasetId: string;
+  startedAt: string;
+  completedAt: string | null;
+  results?: EvaluationMetricResult[];
+  caseResults?: EvaluationCaseResult[];
+  failedCases?: EvaluationCaseResult[];
+  releaseGate?: ReleaseGate | null;
+}
+
+// ── Calibration (§5.3) ──
+
+export interface CalibrationStatus {
+  sampleSize: number;
+  brierScore: number | null;
+  threshold: number;
+  gatePassed: boolean;
+}
+
+// ── Telemetry (devils-advocate-telemetry-tz.md §4) ──
+
+export interface TelemetrySummaryRow {
+  taskType: string | null;
+  totalCalls: number;
+  byStatus: Record<'COMPLETED' | 'FAILED' | 'TIMEOUT' | 'CANCELLED', number>;
+  avgDurationMs: number | null;
+  p95DurationMs: number | null;
+  retryRate: number;
+  schemaValidationFailRate: number;
+  inputBlockedCount: number;
+}
+
+export interface TelemetryByModelRow extends Omit<TelemetrySummaryRow, 'taskType'> {
+  modelVersion: string;
+}
+
+export interface AIJobDetail {
+  id: string;
+  status: string;
+  modelVersion: string;
+  promptVersionId: string | null;
+  retryCount: number;
+  durationMs: number | null;
+  schemaValidation: string;
+  inputScanStatus: string;
+  createdAt: string;
+}
+
+// ── Доменные сценарии / intake / media-review (ТЗ domain-ui-and-voice-intake §1.4, фаза F) ──
+
+export interface DomainSummaryRow { domain: string; mode: string; total: number; last7: number; last30: number; withConfig: number; configRate: number | null }
+export interface DomainProjectRow { id: string; question: string; createdAt: string; updatedAt: string; frozenAt: string | null; owner: { id: string; telegramId: string }; config: { id: string; createdAt: string } | null }
+export interface DomainProjectList { items: DomainProjectRow[]; total: number; take: number; skip: number }
+export interface DomainProjectDetail { id: string; question: string; goal: string | null; createdAt: string; updatedAt: string; frozenAt: string | null; frozenNote: string | null; owner: { id: string; telegramId: string; isRestricted: boolean; isBlocked: boolean }; config: Record<string, unknown> | null; _count: { conversations: number } }
+export interface IntakeSummary { windowDays: number; total: number; byStatus: Record<string, number>; dispatched: number; mismatches: number; mismatchRate: number | null; avgConfidence: number | null; avgFollowUps: number | null; suggestedVsChosen: Record<string, Record<string, number>> }
+export interface AdminMediaReviewQueue { id: string; title: string; createdAt: string; ownerTelegramId: string; totalItems: number; byStatus: Record<string, number>; stuckProcessing: number }

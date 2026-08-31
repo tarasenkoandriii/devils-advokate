@@ -1,10 +1,9 @@
 'use client';
 
 // Пункт 57 (backend) → TMA UI: Library, owner-side отправка (§3.5
-// ТЗ). Модерация — отдельная страница /library/moderate, доступна
-// только пользователям с User.isLibraryModerator (не self-service,
-// не в этой секции — обычный пользователь её не увидит вообще, кроме
-// как по прямой ссылке, и backend всё равно отклонит запрос без роли).
+// ТЗ). Модерация — НЕ в TMA: с Пункта [admin-panel] она живёт в
+// apps/admin за AdminSessionGuard (страница /library/moderate в TMA
+// удалена аудитом — из Mini App она всегда получала бы 401).
 
 import { useState } from 'react';
 import { submitProjectToLibrary } from '../lib/features';

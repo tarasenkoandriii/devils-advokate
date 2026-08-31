@@ -59,7 +59,47 @@ export async function putPublicBlob(
     throw new VercelBlobError(`Vercel Blob вернул ${response.status} ${response.statusText}`);
   }
 
-  const data = await response.json();
+  const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
+  return { url: data.url, pathname: data.pathname ?? pathname, contentType: data.contentType ?? contentType };
+}
+
+// Пункт [dtp] (§3.4 ТЗ) — putPrivateBlob(), НОВА функція. Доказ ДТП
+// вимагає протилежного до PhotoVerification: приватного,
+// довгострокового зберігання (не миттєвого публічного доступу з
+// негайним видаленням) — тривалість страхового/судового процесу, не
+// секунди. access:'private' — той самий x-access заголовок, що вище,
+// значення 'private' замість 'public' (контракт відновлений з
+// офіційної документації Vercel, той самий клас чесної оговорки, що
+// вже застосований до putPublicBlob/deleteBlob — НЕ перевірено живим
+// викликом у цьому середовищі розробки). НЕМАЄ функції видалення тут
+// навмисно — доказ не підлягає автоматичному видаленню (§2.3 ТЗ).
+export async function putPrivateBlob(
+  token: string,
+  pathname: string,
+  body: Buffer,
+  contentType: string,
+): Promise<VercelBlobPutResult> {
+  const url = `${BLOB_API_HOST}/${pathname}`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-content-type': contentType,
+        'x-access': 'private',
+      },
+      body,
+    });
+  } catch (err) {
+    throw new VercelBlobError(`Не удалось загрузить файл в Vercel Blob: ${err instanceof Error ? err.message : 'неизвестная ошибка сети'}`);
+  }
+
+  if (!response.ok) {
+    throw new VercelBlobError(`Vercel Blob вернул ${response.status} ${response.statusText}`);
+  }
+
+  const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
   return { url: data.url, pathname: data.pathname ?? pathname, contentType: data.contentType ?? contentType };
 }
 

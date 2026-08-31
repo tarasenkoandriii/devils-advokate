@@ -91,4 +91,38 @@ describe('validateTelegramInitData', () => {
     const result = validateTelegramInitData(params.toString(), { botToken: BOT_TOKEN });
     expect(result.user.id).toBe(7);
   });
+
+  it('РЕГРЕСІЯ (аудит Telegram initData 2026-08-30, по трьом незалежним production-проєктам): приймає й ЗВОРОТНИЙ випадок — клієнт, що ВКЛЮЧАЄ signature в HMAC (не тільки виключає)', () => {
+    // Раніше validateTelegramInitData() рахувала hash ЛИШЕ виключаючи і hash,
+    // і signature — жорстко припускаючи один-єдиний варіант поведінки
+    // клієнта. Документація описує signature як частину повністю окремої
+    // Ed25519-схеми (не токен бота), але різні клієнти Telegram на практиці
+    // розходяться, чи бере participation signature в class-hash HMAC. Цей
+    // тест будує initData, де hash порахований З УРАХУВАННЯМ signature —
+    // так, як робить реальний клієнт, що включає signature в HMAC.
+    const authDate = Math.floor(Date.now() / 1000).toString();
+    const user = JSON.stringify({ id: 99, first_name: 'IncludesSig' });
+    const signature = 'some-ed25519-signature-value';
+    const fields = { auth_date: authDate, user, signature };
+
+    const dataCheckString = Object.entries(fields)
+      .map(([k, v]) => `${k}=${v}`)
+      .sort()
+      .join('\n');
+    const secretKey = createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const hash = createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+    const params = new URLSearchParams({ ...fields, hash });
+
+    const result = validateTelegramInitData(params.toString(), { botToken: BOT_TOKEN });
+    expect(result.user.id).toBe(99);
+  });
+
+  it('відхиляє hash іншої довжини (пошкоджений/укорочений) без падіння — timingSafeEqual на різній довжині кине б виняток, якби не перевірявся заздалегідь', () => {
+    const initData = buildValidInitData();
+    const shortened = initData.replace(/hash=[a-f0-9]+/, 'hash=deadbeef');
+    expect(() =>
+      validateTelegramInitData(shortened, { botToken: BOT_TOKEN }),
+    ).toThrow(TelegramInitDataInvalidError);
+  });
 });

@@ -27,7 +27,7 @@ import { BadGatewayException, BadRequestException, ForbiddenException, Injectabl
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
-import { ArgumentStance, ArgumentTrackingState } from '@prisma/client';
+import { ArgumentStance, ArgumentTrackingState, LiveArgumentTrackingStatus } from '@prisma/client';
 
 const TASK_TYPE = 'live-argument-tracking';
 
@@ -152,7 +152,7 @@ export class LiveArgumentTrackingService {
       where: { projectId, createdAt: { gte: new Date(Date.now() - MANIPULATION_LOOKBACK_MS) } },
     });
 
-    const updated = [];
+    const updated: LiveArgumentTrackingStatus[] = [];
     for (const update of rawUpdates) {
       const currentStatus = statusMap.get(update.argumentId);
       if (currentStatus === undefined) continue; // AI указал argumentId, которого нет в отслеживаемых — честно игнорируем, не создаём новую запись

@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import {
   disablePublicSharing,
   enablePublicSharing,
+  grantConsent,
   listPublicSubmissionsForModeration,
   moderatePublicSubmission,
 } from '../lib/features';
@@ -26,6 +27,10 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Аудит БД 2026-08-30, §2.3 — ConsentType.PUBLIC_SHARING раньше ничем не
+  // требовался, включение делало проект читаемым по токену без согласия.
+  const [needsConsent, setNeedsConsent] = useState(false);
+  const [grantingConsent, setGrantingConsent] = useState(false);
 
   function reload() {
     if (!token) {
@@ -51,9 +56,28 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
       haptic('success');
     } catch (err) {
       haptic('error');
-      setError(err instanceof Error ? err.message : 'Не удалось включить публичное обсуждение');
+      if (err instanceof Error && err.message.includes('PUBLIC_SHARING')) {
+        setNeedsConsent(true);
+      } else {
+        setError(err instanceof Error ? err.message : 'Не удалось включить публичное обсуждение');
+      }
     } finally {
       setToggling(false);
+    }
+  }
+
+  async function handleGrantAndEnable() {
+    setGrantingConsent(true);
+    setError(null);
+    try {
+      await grantConsent({ consentType: 'PUBLIC_SHARING', version: 'v1', source: 'public-discussion-section' });
+      setNeedsConsent(false);
+      await handleEnable();
+    } catch (err) {
+      haptic('error');
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить согласие');
+    } finally {
+      setGrantingConsent(false);
     }
   }
 
@@ -131,6 +155,20 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
             </>
           )}
         </>
+      ) : needsConsent ? (
+        <div className="conversations-section__add-actions">
+          <p className="conversations-section__hint">
+            Публичное обсуждение делает ваши аргументы доступными по ссылке любому, у кого она есть — без входа в
+            приложение. Согласие нужно один раз, отозвать можно в любой момент, выключив обсуждение.
+          </p>
+          {error && <p className="generation-error">{error}</p>}
+          <button type="button" onClick={handleGrantAndEnable} disabled={grantingConsent}>
+            {grantingConsent ? 'Включаем…' : 'Согласен(на), включить'}
+          </button>
+          <button type="button" onClick={() => setNeedsConsent(false)} disabled={grantingConsent}>
+            Не сейчас
+          </button>
+        </div>
       ) : (
         <div className="conversations-section__add-actions">
           {error && <p className="generation-error">{error}</p>}

@@ -86,6 +86,6 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
   return handle<T>(await apiReq(path, { method: 'PATCH', body }));
 }
 
-export async function apiDelete<T>(path: string): Promise<T> {
-  return handle<T>(await apiReq(path, { method: 'DELETE' }));
+export async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
+  return handle<T>(await apiReq(path, { method: 'DELETE', body }));
 }

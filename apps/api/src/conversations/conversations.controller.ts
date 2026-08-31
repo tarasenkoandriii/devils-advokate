@@ -21,6 +21,7 @@ import type { Request } from 'express';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
+import { AssemblyAiWebhookGuard } from '../common/webhook/assemblyai-webhook.guard';
 import { ConversationsService } from './conversations.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
@@ -88,6 +89,7 @@ export class ConversationsController {
   }
 
   @Post('conversations/webhook/transcription')
+  @UseGuards(AssemblyAiWebhookGuard)
   async transcriptionWebhook(@Body() payload: AssemblyAiWebhookPayload) {
     return this.conversations.handleTranscriptionWebhook(payload);
   }

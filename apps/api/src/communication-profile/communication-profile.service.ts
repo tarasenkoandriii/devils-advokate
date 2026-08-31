@@ -20,7 +20,7 @@
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { CommunicationTraitType, ConversationProcessingStatus } from '@prisma/client';
+import { CommunicationTraitType, ConversationProcessingStatus, PersonCommunicationTrait } from '@prisma/client';
 
 const TASK_TYPE = 'communication-profile';
 
@@ -146,7 +146,7 @@ export class CommunicationProfileService {
 
     // Накопительное обновление — upsert по @@unique([personId, traitType]),
     // не создание дублирующей записи при каждом refresh().
-    const updated = [];
+    const updated: PersonCommunicationTrait[] = [];
     for (const trait of rawTraits) {
       const record = await this.prisma.personCommunicationTrait.upsert({
         where: { personId_traitType: { personId, traitType: trait.traitType as CommunicationTraitType } },

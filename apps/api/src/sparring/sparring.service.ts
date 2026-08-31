@@ -36,6 +36,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { TranscriptionService, AssemblyAiWebhookPayload } from '../conversations/transcription.service';
 import { SecretsService } from '../secrets/secrets.service';
+import { ConsentService } from '../consent/consent.service';
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ARCHETYPE_DESCRIPTIONS } from '../archetype-perspective/archetype-perspective.service';
@@ -91,6 +92,7 @@ export class SparringService {
     private readonly transcription: TranscriptionService,
     private readonly secrets: SecretsService,
     private readonly textToSpeech: TextToSpeechService,
+    private readonly consent: ConsentService,
   ) {}
 
   async startSession(
@@ -425,7 +427,13 @@ export class SparringService {
 
   /** Шаг 1 — загрузить аудио, получить audioUrl для submitVoiceReply(). */
   async streamUploadVoiceReply(userId: string, sessionId: string, fileStream: ReadableStream<Uint8Array>) {
-    await this.findOwnedSession(userId, sessionId);
+    const session = await this.findOwnedSession(userId, sessionId);
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30: ConsentService не был подключён к
+    // этому модулю вообще — голосовая реплика уходила AssemblyAI без
+    // единой проверки, включая режим MAXIMUM_PRIVACY, который такую
+    // передачу запрещает в принципе. Та же проверка, что у загрузки
+    // разговора: разницы в природе данных нет, микрофон один и тот же.
+    await this.consent.assertAudioMayLeaveDevice(userId, session.projectId);
     const apiKey = await this.resolveAssemblyAiKey();
     const audioUrl = await this.transcription.streamUpload(apiKey, fileStream);
     return { audioUrl };
@@ -435,6 +443,10 @@ export class SparringService {
    * получает jobId и поллит getVoiceReplyStatus(), пока не COMPLETED. */
   async submitVoiceReply(userId: string, sessionId: string, audioUrl: string) {
     const session = await this.findOwnedSession(userId, sessionId);
+    // Проверяется и здесь, и в streamUploadVoiceReply(): шаги независимы
+    // (клиент вправе вызвать submit с audioUrl, полученным раньше), а
+    // согласие могло быть отозвано между ними.
+    await this.consent.assertAudioMayLeaveDevice(userId, session.projectId);
     if (session.status !== SparringSessionStatus.ACTIVE) {
       throw new BadRequestException(`SparringSession ${sessionId} is already ended`);
     }
@@ -472,18 +484,25 @@ export class SparringService {
    * молча игнорируется, не бросает ошибку наружу (AssemblyAI будет
    * ретраить webhook, если получит не-200). */
   async handleVoiceReplyWebhook(payload: AssemblyAiWebhookPayload) {
-    const job = await this.prisma.sparringVoiceReplyJob.findUnique({ where: { externalTranscriptionJobId: payload.id } });
+    // Финальный аудит 2026-08-30 — тот же фикс, что в
+    // ConversationsService.handleTranscriptionWebhook(): реальный вебхук
+    // несёт только transcript_id/status, полный результат — отдельным GET.
+    if (!payload.transcript_id) return;
+    const job = await this.prisma.sparringVoiceReplyJob.findUnique({ where: { externalTranscriptionJobId: payload.transcript_id } });
     if (!job || job.status !== SparringVoiceReplyStatus.PENDING) return;
 
-    if (payload.status === 'error') {
+    const apiKey = await this.resolveAssemblyAiKey();
+    const result = await this.transcription.getTranscriptResult(apiKey, payload.transcript_id);
+
+    if (result.status === 'error') {
       await this.prisma.sparringVoiceReplyJob.update({
         where: { id: job.id },
-        data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: payload.error ?? 'unknown error' },
+        data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: result.error ?? 'unknown error' },
       });
       return;
     }
 
-    const transcribedText = (payload.utterances ?? []).map((u: { text: string }) => u.text).join(' ').trim();
+    const transcribedText = (result.utterances ?? []).map((u: { text: string }) => u.text).join(' ').trim();
     if (!transcribedText) {
       await this.prisma.sparringVoiceReplyJob.update({
         where: { id: job.id },

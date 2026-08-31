@@ -1,4 +1,8 @@
 import { PublicDiscussionService } from '../public-discussion/public-discussion.service';
+
+function fakeConsent(granted = true) {
+  return { requireConsent: async () => { if (!granted) throw new ForbiddenException('Consent required'); } } as any;
+}
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 function createFakePrisma() {
@@ -130,24 +134,32 @@ async function run() {
   test('enableSharing() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     await assertThrowsAsync(() => svc.enableSharing(USER_ID, PROJECT_ID), NotFoundException, 'enableSharing() на чужой проект');
   });
 
   test('enableSharing() генерирует непредсказуемый непустой токен', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const updated = await svc.enableSharing(USER_ID, PROJECT_ID);
     assertEqual(typeof updated.publicShareToken, 'string', 'токен — строка');
-    assertEqual(updated.publicShareToken.length > 20, true, 'токен достаточно длинный, не тривиально угадываемый');
+    assertEqual(updated.publicShareToken!.length > 20, true, 'токен достаточно длинный, не тривиально угадываемый');
+  });
+
+  test('РЕГРЕСІЯ (аудит БД 2026-08-30): enableSharing() без згоди PUBLIC_SHARING — ForbiddenException, токен не видається', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent(false));
+
+    await assertThrowsAsync(() => svc.enableSharing(USER_ID, PROJECT_ID), ForbiddenException, 'enableSharing() без згоди має відмовляти, а не мовчки публікувати проект');
   });
 
   test('disableSharing() сбрасывает токен в null', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const updated = await svc.disableSharing(USER_ID, PROJECT_ID);
     assertEqual(updated.publicShareToken, null, 'токен сброшен');
@@ -155,7 +167,7 @@ async function run() {
 
   test('publicView() бросает NotFoundException для недействительного токена', async () => {
     const prisma = createFakePrisma();
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     await assertThrowsAsync(() => svc.publicView('nonexistent-token'), NotFoundException, 'publicView() с несуществующим токеном');
   });
 
@@ -165,7 +177,7 @@ async function run() {
     prisma._seedArgument({ id: 'a1', projectId: PROJECT_ID, text: 'Общий аргумент за', stance: 'PRO', targetPersonId: null });
     prisma._seedArgument({ id: 'a2', projectId: PROJECT_ID, text: 'Адресный аргумент под стейкхолдера', stance: 'PRO', targetPersonId: 'person-1' });
     prisma._seedArgument({ id: 'a3', projectId: PROJECT_ID, text: 'Религиозный аргумент примирения', stance: 'RECONCILIATION', targetPersonId: null });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const view = await svc.publicView(TOKEN);
     assertEqual(view.arguments.length, 1, 'только один аргумент виден публично');
@@ -178,7 +190,7 @@ async function run() {
     // Намеренно НЕ мокаем personFact/factSource в фейке — если сервис
     // попытается их запросить, тест упадёт с "personFact is undefined",
     // что само по себе доказывает: сервис их не трогает.
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     await svc.publicView(TOKEN); // не должно упасть
   });
 
@@ -187,7 +199,7 @@ async function run() {
   test('publicView() возвращает protocol=null и closingMessage=null, если ничего не сгенерировано', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const view = await svc.publicView(TOKEN);
     assertEqual(view.protocol, null, 'честно null, не пустая строка/объект-заглушка');
@@ -198,7 +210,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
     prisma._seedProtocol({ projectId: PROJECT_ID, summaryText: 'Стороны договорились о разделе 50/50' });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const view = await svc.publicView(TOKEN);
     assertEqual(view.protocol?.summaryText, 'Стороны договорились о разделе 50/50', 'текст протокола виден внешнему участнику');
@@ -211,7 +223,7 @@ async function run() {
     const newer = new Date('2026-06-01');
     prisma._seedProtocol({ projectId: PROJECT_ID, summaryText: 'Старая версия', createdAt: older });
     prisma._seedProtocol({ projectId: PROJECT_ID, summaryText: 'Новая версия', createdAt: newer });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const view = await svc.publicView(TOKEN);
     assertEqual(view.protocol?.summaryText, 'Новая версия', 'показана самая свежая версия, не первая созданная');
@@ -226,7 +238,7 @@ async function run() {
       quoteText: 'Радуйтесь с радующимися',
       quoteSourceReference: 'Рим. 12:15',
     });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const view = await svc.publicView(TOKEN);
     assertEqual(view.closingMessage?.summaryText, 'Цель достигнута', 'итог виден');
@@ -239,14 +251,14 @@ async function run() {
     // Намеренно НЕ мокаем compromiseSheet/conversationSignal/schedulerAdvice
     // в фейке — если сервис попытается их запросить, тест упадёт,
     // что доказывает: расширение осталось в согласованных границах.
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     await svc.publicView(TOKEN); // не должно упасть
   });
 
   test('joinAsParticipant() поддерживает анонимное участие (displayName не передан)', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const participant = await svc.joinAsParticipant(TOKEN);
     assertEqual(participant.displayName, null, 'анонимный участник');
@@ -255,7 +267,7 @@ async function run() {
   test('joinAsParticipant() сохраняет displayName, если передан', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const participant = await svc.joinAsParticipant(TOKEN, 'Сосед снизу');
     assertEqual(participant.displayName, 'Сосед снизу', 'имя сохранено');
@@ -264,7 +276,7 @@ async function run() {
   test('submitArgument() бросает BadRequestException для пустого текста', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     await assertThrowsAsync(() => svc.submitArgument(TOKEN, '   ', 'PRO'), BadRequestException, 'submitArgument() с пустым текстом');
   });
 
@@ -272,7 +284,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
     prisma._seedProject({ id: 'other-proj', ownerId: 'other-user', publicShareToken: 'other-token' });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     const foreignParticipant = await svc.joinAsParticipant('other-token', 'Чужой участник');
 
     await assertThrowsAsync(
@@ -285,7 +297,7 @@ async function run() {
   test('submitArgument() создаёт заявку со статусом PENDING, не сразу Argument', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const submission = await svc.submitArgument(TOKEN, 'Новый аргумент от соседа', 'CON');
     assertEqual(submission.status, 'PENDING', 'заявка не принята автоматически');
@@ -297,7 +309,7 @@ async function run() {
     seedProject(prisma, TOKEN);
     prisma._seedSubmission({ projectId: PROJECT_ID, text: 'x', stance: 'PRO' });
     const [submission] = prisma._getSubmissions();
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const upvoted = await svc.vote(TOKEN, submission.id, 'up');
     assertEqual(upvoted.upvotes, 1, 'upvotes увеличен');
@@ -308,7 +320,7 @@ async function run() {
   test('addComment() создаёт комментарий, привязанный к проекту', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, TOKEN);
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     await svc.addComment(TOKEN, 'Согласен с этим аргументом');
     const view = await svc.publicView(TOKEN);
@@ -318,7 +330,7 @@ async function run() {
   test('listSubmissionsForModeration() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
     await assertThrowsAsync(() => svc.listSubmissionsForModeration(USER_ID, PROJECT_ID), NotFoundException, 'listSubmissionsForModeration() на чужой проект');
   });
 
@@ -327,7 +339,7 @@ async function run() {
     seedProject(prisma, TOKEN);
     prisma._seedSubmission({ projectId: PROJECT_ID, text: 'Хороший аргумент от соседа', stance: 'PRO' });
     const [submission] = prisma._getSubmissions();
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const updated = await svc.moderate(USER_ID, PROJECT_ID, submission.id, 'ACCEPT');
     assertEqual(updated.status, 'ACCEPTED', 'статус изменён');
@@ -340,7 +352,7 @@ async function run() {
     seedProject(prisma, TOKEN);
     prisma._seedSubmission({ projectId: PROJECT_ID, text: 'Спорный аргумент', stance: 'CON' });
     const [submission] = prisma._getSubmissions();
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     const updated = await svc.moderate(USER_ID, PROJECT_ID, submission.id, 'REJECT');
     assertEqual(updated.status, 'REJECTED', 'статус изменён');
@@ -352,7 +364,7 @@ async function run() {
     seedProject(prisma, TOKEN);
     prisma._seedSubmission({ projectId: PROJECT_ID, text: 'x', stance: 'PRO', status: 'ACCEPTED' });
     const [submission] = prisma._getSubmissions();
-    const svc = new PublicDiscussionService(prisma as any);
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
 
     await assertThrowsAsync(() => svc.moderate(USER_ID, PROJECT_ID, submission.id, 'REJECT'), BadRequestException, 'moderate() на уже обработанную заявку');
   });

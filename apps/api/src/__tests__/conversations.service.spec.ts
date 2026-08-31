@@ -13,6 +13,7 @@ function createFakePrisma() {
   const segments: any[] = [];
   const aiProviders = new Map<string, any>();
   const aiModelVersions = new Map<string, any>();
+  const consentRecords: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
@@ -21,6 +22,14 @@ function createFakePrisma() {
     _seedUser(u: any) { users.set(u.id, u); },
     _seedProvider(p: any) { aiProviders.set(p.id, p); },
     _seedModelVersion(v: any) { aiModelVersions.set(v.id, v); },
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30: раньше сюда передавался фейковый
+    // ConsentService с пустым requireConsent() — то есть проверялось,
+    // что сервис ЗОВЁТ согласия, но не то, что они реально работают.
+    // Теперь спеки используют настоящий ConsentService поверх этого
+    // фейкового prisma, поэтому нужен и consentRecord.
+    _seedConsent(c: any) {
+      consentRecords.push({ granted: true, revokedAt: null, projectId: null, createdAt: new Date(), ...c });
+    },
     _getConversation(id: string) { return conversations.get(id); },
     _getSegments() { return segments; },
     _getParticipants() { return [...participants.values()]; },
@@ -37,6 +46,28 @@ function createFakePrisma() {
         const u = users.get(where.id);
         if (!u) throw new Error('user not found');
         return u;
+      },
+    },
+    consentRecord: {
+      findFirst: async ({ where }: any) => {
+        // Буквальный разбор фильтра, включая семантику Prisma «условие
+        // без определённых полей не ограничивает ничего» — иначе тест
+        // проверял бы задуманное поведение вместо фактического.
+        const matchesCond = (r: any, cond: any) => {
+          const defined = Object.entries(cond).filter(([, v]) => v !== undefined);
+          if (defined.length === 0) return true;
+          return defined.every(([k, v]) => r[k] === v);
+        };
+        const matches = consentRecords.filter((r) => {
+          if (r.userId !== where.userId) return false;
+          if (r.consentType !== where.consentType) return false;
+          if (where.granted !== undefined && r.granted !== where.granted) return false;
+          if (where.revokedAt === null && r.revokedAt !== null) return false;
+          if ('projectId' in where && where.projectId === null && r.projectId !== null) return false;
+          if (where.OR && !where.OR.some((c: any) => matchesCond(r, c))) return false;
+          return true;
+        });
+        return matches[matches.length - 1] ?? null;
       },
     },
     conversation: {
@@ -84,11 +115,34 @@ function createFakePrisma() {
         transcripts.set(t.id, t);
         return t;
       },
+      // Повторный аудит 2026-08-30: обработчик вебхука перешёл на
+      // upsert (повторная доставка от AssemblyAI — штатное поведение,
+      // а Transcript.conversationId объявлен @unique).
+      upsert: async ({ where, update, create }: any) => {
+        const existing = [...transcripts.values()].find((t) => t.conversationId === where.conversationId);
+        if (existing) {
+          Object.assign(existing, update);
+          return existing;
+        }
+        const t = { id: nextId(), createdAt: new Date(), ...create };
+        transcripts.set(t.id, t);
+        return t;
+      },
     },
     transcriptSegment: {
       createMany: async ({ data }: any) => {
         segments.push(...data);
         return { count: data.length };
+      },
+      deleteMany: async ({ where }: any) => {
+        let count = 0;
+        for (let i = segments.length - 1; i >= 0; i--) {
+          if (segments[i].transcriptId === where.transcriptId) {
+            segments.splice(i, 1);
+            count++;
+          }
+        }
+        return { count };
       },
     },
     aIProvider: {
@@ -132,16 +186,28 @@ const PROJECT_ID = 'proj-1';
 
 // Fake TranscriptionService — не делает реальных HTTP-вызовов (сеть
 // отключена в среде разработки), возвращает предсказуемый результат.
+// Финальный аудит 2026-08-30 — реальный вебхук несёт только
+// transcript_id/status; getTranscriptResult() имитирует отдельный GET за
+// полным результатом. transcriptResultByJobId настраивается в каждом
+// сценарии, где это нужно — по умолчанию используется дефолт ниже.
 class FakeTranscriptionService {
   submitCalls: any[] = [];
+  getResultCalls: string[] = [];
+  transcriptResultByJobId: Record<string, any> = {};
   async submitJob(_apiKey: string, params: any) {
     this.submitCalls.push(params);
     return { externalJobId: 'ext-job-1' };
   }
-  parseWebhookPayload(payload: any) {
-    return new TranscriptionService().parseWebhookPayload(payload);
+  async getTranscriptResult(_apiKey: string, transcriptId: string) {
+    this.getResultCalls.push(transcriptId);
+    return this.transcriptResultByJobId[transcriptId] ?? { status: 'completed', id: transcriptId };
   }
+  parseTranscriptResult(result: any) {
+    return new TranscriptionService({ resolve: async () => 'whsec-test' } as any).parseTranscriptResult(result);
+  }
+  uploadCalls = 0;
   async streamUpload() {
+    this.uploadCalls += 1;
     return 'https://cdn.assemblyai.com/upload/fake';
   }
 }
@@ -198,7 +264,7 @@ async function run() {
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
     });
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, new FakeTranscriptionService() as any,
+      prisma as any, {} as SecretsService, new ConsentService(prisma as any), new FakeTranscriptionService() as any,
     );
     await assertThrowsAsync(
       () => svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' }),
@@ -214,8 +280,9 @@ async function run() {
     const conv = await prisma.conversation.create({
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING', occurredAt: new Date() },
     });
-    const consent = { requireConsent: async () => {} } as any;
-    const svc = new ConversationsService(prisma as any, {} as SecretsService, consent, new FakeTranscriptionService() as any);
+    const svc = new ConversationsService(
+      prisma as any, {} as SecretsService, new ConsentService(prisma as any), new FakeTranscriptionService() as any,
+    );
     await assertThrowsAsync(
       () => svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' }),
       ForbiddenException,
@@ -233,15 +300,29 @@ async function run() {
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
     });
 
-    const requestedTypes: string[] = [];
-    const consent = {
-      requireConsent: async (_u: string, type: string) => { requestedTypes.push(type); },
-    } as any;
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, consent, new FakeTranscriptionService() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any);
 
-    await svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' });
-    assertEqual(requestedTypes, ['RECORDING', 'EPHEMERAL_SERVER'], 'порядок и состав запрошенных согласий');
+    // Ни одного согласия — отказ.
+    await assertThrowsAsync(
+      () => svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' }),
+      ForbiddenException,
+      'requestTranscription() без согласий',
+    );
+
+    // Только RECORDING — всё ещё отказ: EPHEMERAL_SERVER это отдельное
+    // согласие на передачу внешнему провайдеру, а не следствие первого.
+    prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
+    await assertThrowsAsync(
+      () => svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' }),
+      ForbiddenException,
+      'requestTranscription() только с RECORDING',
+    );
+
+    // Оба — проходит.
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
+    const ok = await svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' });
+    assertEqual(ok.status, 'TRANSCRIBING', 'статус при обоих выданных согласиях');
   });
 
   test('requestTranscription() успешно переводит статус в TRANSCRIBING и сохраняет job id', async () => {
@@ -253,13 +334,76 @@ async function run() {
     const conv = await prisma.conversation.create({
       data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
     });
-    const consent = { requireConsent: async () => {} } as any;
+    prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
     const secrets = { resolve: async () => 'fake-key' } as any;
-    const svc = new ConversationsService(prisma as any, secrets, consent, new FakeTranscriptionService() as any);
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any);
 
     const updated = await svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' });
     assertEqual(updated.status, 'TRANSCRIBING', 'статус после запроса транскрибации');
     assertEqual(updated.externalTranscriptionJobId, 'ext-job-1', 'сохранённый externalTranscriptionJobId');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (повторный аудит 2026-08-30): streamUploadAudio() НЕ отправляет файл без согласий — дыра «upload без transcribe»', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedUser({ id: USER_ID, privacyProcessingMode: 'BALANCED' });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const conv = await prisma.conversation.create({
+      data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
+    });
+    const transcription = new FakeTranscriptionService();
+    const secrets = { resolve: async () => 'fake-key' } as any;
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any);
+
+    // Раньше здесь проверялось только владение разговором — файл уходил
+    // AssemblyAI, а согласия спрашивались на следующем шаге, когда байты
+    // уже были у провайдера.
+    await assertThrowsAsync(
+      () => svc.streamUploadAudio(USER_ID, conv.id, null as any),
+      ForbiddenException,
+      'streamUploadAudio() без согласий',
+    );
+    assertEqual(transcription.uploadCalls, 0, 'ни одного вызова streamUpload при отсутствии согласий');
+  });
+
+  test('streamUploadAudio() запрещён в режиме MAXIMUM_PRIVACY, даже если согласия выданы', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedUser({ id: USER_ID, privacyProcessingMode: 'MAXIMUM_PRIVACY' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
+    const conv = await prisma.conversation.create({
+      data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
+    });
+    const transcription = new FakeTranscriptionService();
+    const svc = new ConversationsService(prisma as any, {} as SecretsService, new ConsentService(prisma as any), transcription as any);
+
+    await assertThrowsAsync(
+      () => svc.streamUploadAudio(USER_ID, conv.id, null as any),
+      ForbiddenException,
+      'streamUploadAudio() при MAXIMUM_PRIVACY',
+    );
+    assertEqual(transcription.uploadCalls, 0, 'режим приватности сильнее выданных согласий');
+  });
+
+  test('streamUploadAudio() работает при выданных согласиях и BALANCED', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedUser({ id: USER_ID, privacyProcessingMode: 'BALANCED' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const conv = await prisma.conversation.create({
+      data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
+    });
+    const transcription = new FakeTranscriptionService();
+    const secrets = { resolve: async () => 'fake-key' } as any;
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any);
+
+    const { audioUrl } = await svc.streamUploadAudio(USER_ID, conv.id, null as any);
+    assertEqual(audioUrl, 'https://cdn.assemblyai.com/upload/fake', 'audioUrl после успешной загрузки');
+    assertEqual(transcription.uploadCalls, 1, 'ровно одна загрузка');
   });
 
   test('handleTranscriptionWebhook() создаёт Transcript+TranscriptSegment+ConversationParticipant', async () => {
@@ -271,25 +415,61 @@ async function run() {
         occurredAt: new Date(), externalTranscriptionJobId: 'ext-job-1',
       },
     });
-    const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, new FakeTranscriptionService() as any,
-    );
-
-    await svc.handleTranscriptionWebhook({
-      id: 'ext-job-1',
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const fakeTranscription = new FakeTranscriptionService();
+    fakeTranscription.transcriptResultByJobId['ext-job-1'] = {
       status: 'completed',
+      id: 'ext-job-1',
       language_code: 'ru',
       utterances: [
         { speaker: 'A', text: 'Привет', start: 0, end: 1000, confidence: 0.95 },
         { speaker: 'B', text: 'Здравствуйте', start: 1000, end: 2500, confidence: 0.9 },
         { speaker: 'A', text: 'Как дела?', start: 2500, end: 3500, confidence: 0.92 },
       ],
-    });
+    };
+    const secrets = { resolve: async () => 'fake-key' } as any;
+    const svc = new ConversationsService(
+      prisma as any, secrets, {} as ConsentService, fakeTranscription as any,
+    );
+
+    // Финальный аудит 2026-08-30: реальный вебхук несёт только transcript_id/status.
+    await svc.handleTranscriptionWebhook({ transcript_id: 'ext-job-1', status: 'completed' } as any);
+    assertEqual(fakeTranscription.getResultCalls, ['ext-job-1'], 'полный результат запрошен отдельным GET по transcript_id из вебхука');
 
     const updated = prisma._getConversation(conv.id);
     assertEqual(updated.status, 'TRANSCRIBED', 'статус после успешного webhook');
     assertEqual(prisma._getSegments().length, 3, 'количество сохранённых сегментов');
     assertEqual(prisma._getParticipants().length, 2, 'количество уникальных участников (A, B)');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (повторный аудит 2026-08-30): повторная доставка вебхука не удваивает транскрипт и не падает на @unique', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const conv = await prisma.conversation.create({
+      data: {
+        projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING',
+        occurredAt: new Date(), externalTranscriptionJobId: 'job-repeat',
+      },
+    });
+    const transcription = new FakeTranscriptionService();
+    transcription.transcriptResultByJobId['job-repeat'] = {
+      status: 'completed', id: 'job-repeat', language_code: 'ru',
+      utterances: [
+        { speaker: 'A', text: 'первая реплика', start: 0, end: 1000, confidence: 0.9 },
+        { speaker: 'B', text: 'вторая реплика', start: 1000, end: 2000, confidence: 0.9 },
+      ],
+    };
+    const secrets = { resolve: async () => 'fake-key' } as any;
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), transcription as any);
+
+    // AssemblyAI ретраит вебхук на любой не-2xx — повторная доставка это
+    // штатное поведение провайдера, а не экзотика.
+    await svc.handleTranscriptionWebhook({ transcript_id: 'job-repeat', status: 'completed' } as any);
+    await svc.handleTranscriptionWebhook({ transcript_id: 'job-repeat', status: 'completed' } as any);
+
+    assertEqual(prisma._getSegments().length, 2, 'сегментов после двух доставок — столько же, сколько после одной');
+    assertEqual(prisma._getConversation(conv.id).status, 'TRANSCRIBED', 'статус после повторной доставки');
   });
 
   test('handleTranscriptionWebhook() переводит статус в FAILED при ошибке провайдера', async () => {
@@ -301,20 +481,59 @@ async function run() {
         occurredAt: new Date(), externalTranscriptionJobId: 'ext-job-2',
       },
     });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const fakeTranscription = new FakeTranscriptionService();
+    fakeTranscription.transcriptResultByJobId['ext-job-2'] = { status: 'error', id: 'ext-job-2', error: 'audio too short' };
+    const secrets = { resolve: async () => 'fake-key' } as any;
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, new FakeTranscriptionService() as any,
+      prisma as any, secrets, {} as ConsentService, fakeTranscription as any,
     );
-    await svc.handleTranscriptionWebhook({ id: 'ext-job-2', status: 'error', error: 'audio too short' });
+    // Финальный аудит 2026-08-30: текст ошибки в реальном AssemblyAI API тоже
+    // приходит не в вебхуке, а только в результате GET — тут это transcriptResultByJobId.
+    await svc.handleTranscriptionWebhook({ transcript_id: 'ext-job-2', status: 'error' } as any);
     assertEqual(prisma._getConversation(conv.id).status, 'FAILED', 'статус после ошибки провайдера');
   });
 
   test('handleTranscriptionWebhook() не падает на неизвестный job id — просто не совпадает', async () => {
     const prisma = createFakePrisma();
+    const fakeTranscription = new FakeTranscriptionService();
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, new FakeTranscriptionService() as any,
+      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any,
     );
-    const result = await svc.handleTranscriptionWebhook({ id: 'unknown-job', status: 'completed', utterances: [] });
+    const result = await svc.handleTranscriptionWebhook({ transcript_id: 'unknown-job', status: 'completed' } as any);
     assertEqual(result, { acknowledged: true, matched: false }, 'ответ на webhook с неизвестным job id');
+    assertEqual(fakeTranscription.getResultCalls, [], 'для несуществующего разговора GET к AssemblyAI не делается вообще — экономия и отсутствие лишнего внешнего вызова');
+  });
+
+  test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): handleTranscriptionWebhook() без transcript_id — не падає, findFirst НЕ викликається з undefined', async () => {
+    const prisma = createFakePrisma();
+    const fakeTranscription = new FakeTranscriptionService();
+    const svc = new ConversationsService(
+      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any,
+    );
+    const result = await svc.handleTranscriptionWebhook({ status: 'completed' } as any);
+    assertEqual(result, { acknowledged: true, matched: false }, 'порожній transcript_id — чесна відмова, не пошук «першого-ліпшого» запису');
+    assertEqual(fakeTranscription.getResultCalls, [], 'GET не викликається без transcript_id');
+  });
+
+  test('РЕГРЕСІЯ, докази реальності ризику (фінальний аудит 2026-08-30): якби guard НЕ перевіряв transcript_id, findFirst({where:{externalTranscriptionJobId: undefined}}) у СПРАВЖНЬОМУ Prisma повернув би ПЕРШИЙ-ЛІПШИЙ запис, а не null', async () => {
+    // Фейк вище (рядок з .find((c) => c.externalTranscriptionJobId === where.externalTranscriptionJobId))
+    // навмисно СУВОРИЙ — undefined === undefined ніколи не збігається з реальним
+    // job id, тому попередній тест сам по собі НЕ довів би, що guard рятує від
+    // чогось реального. Тут — мінімальна імітація справжньої семантики Prisma
+    // (undefined-поле в where трактується як «умови немає»), щоб довести: без
+    // guard'а в handleTranscriptionWebhook() чужий транскрипт міг би піти в
+    // абсолютно довільну розмову.
+    const conversations = [
+      { id: 'conv-of-attacker-target', externalTranscriptionJobId: 'real-job-id' },
+      { id: 'conv-belongs-to-someone-else', externalTranscriptionJobId: 'other-job-id' },
+    ];
+    const prismaLikeRealPrisma = {
+      findFirst: async ({ where }: { where: { externalTranscriptionJobId?: string } }) =>
+        conversations.find((c) => where.externalTranscriptionJobId === undefined || c.externalTranscriptionJobId === where.externalTranscriptionJobId) ?? null,
+    };
+    const withoutGuard = await prismaLikeRealPrisma.findFirst({ where: { externalTranscriptionJobId: undefined } });
+    assertEqual(withoutGuard?.id, 'conv-of-attacker-target', 'доведено: undefined у where справжнього Prisma повертає перший запис у таблиці, не null — саме тому guard у сервісі перевіряє transcript_id ДО звернення до Prisma, а не покладається на findFirst()');
   });
 
   for (const [name, fn] of scenarios) {

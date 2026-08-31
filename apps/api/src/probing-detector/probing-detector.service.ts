@@ -21,6 +21,7 @@
 // возвращает ТОЛЬКО темы, реально достигшие порога в этом вызове.
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ProbingTopic } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -105,7 +106,7 @@ export class ProbingDetectorService {
     const rawSignals: RawProbingSignal[] = JSON.parse(result.text);
     const trackedById = new Map(trackedTopics.map((t: { id: string }) => [t.id, t]));
 
-    const crossedThreshold = [];
+    const crossedThreshold: ProbingTopic[] = [];
     for (const signal of rawSignals) {
       let record;
       if (signal.matchedTopicId && trackedById.has(signal.matchedTopicId)) {

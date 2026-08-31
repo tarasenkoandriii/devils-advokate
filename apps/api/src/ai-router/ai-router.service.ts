@@ -127,6 +127,10 @@ export class AIRouterService {
         inputHash,
         modelVersionId: modelVersion.id,
         promptVersionId: sanitizedRequest.promptVersionId,
+        // Пункт [telemetry]: без этого поля агрегация телеметрии
+        // возможна только по AI-модели, не по фиче — см.
+        // devils-advocate-telemetry-tz.md §3.
+        taskType: sanitizedRequest.taskType,
         status: AIJobStatus.QUEUED,
         retryPolicy: `${maxRetries} attempts, then fallback if configured`,
       },

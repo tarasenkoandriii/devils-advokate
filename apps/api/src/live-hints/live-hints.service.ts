@@ -21,6 +21,30 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentLifecycleStatus, ArgumentStance, LiveHintType } from '@prisma/client';
 
 const TASK_TYPE = 'live-hint';
+const INTERVIEW_TASK_TYPE = 'live-hint-interview';
+
+// Пункт [interview-pool] §4.2 ТЗ.
+interface RawInterviewHint {
+  hintText: string;
+  suggestedQuestionIndex?: number;
+}
+
+function isValidInterviewHintPayload(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed === null) return true;
+    return typeof parsed.hintText === 'string' && parsed.hintText.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+const INTERVIEW_SYSTEM_PROMPT =
+  'Тебе дан ПОСЛЕДНИЙ фрагмент транскрипта живого собеседования и список пунктов анкеты вакансии, ещё не подсказанных в этой сессии. ' +
+  'Реши, стоит ли дать ОДНУ тихую подсказку прямо сейчас — какой из вопросов анкеты уместно поднять следующим, ' +
+  'учитывая, что кандидат МОГ УЖЕ фактически раскрыть какой-то из этих вопросов своим ответом, даже если рекрутер не задавал его явно текстом анкеты — ' +
+  'если так, НЕ предлагай этот вопрос повторно, выбери другой ещё не раскрытый. Если ни один вопрос сейчас явно не уместен — верни JSON null. ' +
+  'Ответь СТРОГО валидным JSON: либо null, либо объектом {"hintText": string, "suggestedQuestionIndex": number}. Без пояснений вне JSON.';
 
 interface RawHint {
   hintType: 'ARGUMENT_SUGGESTION' | 'TOPIC_REPETITION';
@@ -131,6 +155,82 @@ export class LiveHintsService {
         hintType: raw.hintType === 'TOPIC_REPETITION' ? LiveHintType.TOPIC_REPETITION : LiveHintType.ARGUMENT_SUGGESTION,
         hintText: raw.hintText,
         suggestedArgumentId,
+        generatedByInferenceId: result.aiInferenceId,
+      },
+    });
+  }
+
+  /** Пункт [interview-pool] (devils-advocate-interview-pool-tz.md §4.2)
+   * — той самий конвеєр (30-секундний цикл, максимум одна підказка,
+   * не повторювати вже підказане), джерело кандидатів —
+   * QuestionnaireItem[] пулу замість Argument[] проекту. Фільтр "не
+   * повторювати" рахує ТАКОЖ питання, що вже фактично прозвучали в
+   * транскрипті цієї співбесіди (семантичне зіставлення, не точний
+   * збіг рядка) — за це відповідає сам system prompt нижче, той самий
+   * принцип, що вже застосований у DiscrepancyAnalysisService: AI
+   * порівнює зміст, не система рядків. */
+  async analyzeForInterview(userId: string, projectId: string, transcriptWindow: string, engineId?: string) {
+    if (!transcriptWindow.trim()) {
+      throw new BadRequestException('transcriptWindow не может быть пустым');
+    }
+    await assertProjectOwnership(this.prisma, userId, projectId);
+
+    const config = await this.prisma.interviewPoolConfig.findUnique({ where: { projectId } });
+    if (!config) {
+      throw new BadRequestException(`InterviewPoolConfig for project ${projectId} not found`);
+    }
+
+    const [candidateQuestions, alreadySuggestedIds] = await Promise.all([
+      this.prisma.questionnaireItem.findMany({ where: { configId: config.id }, orderBy: [{ isRequired: 'desc' }, { orderIndex: 'asc' }] }),
+      this.prisma.liveHintEvent
+        .findMany({ where: { projectId, suggestedQuestionnaireItemId: { not: null } }, select: { suggestedQuestionnaireItemId: true } })
+        .then((rows: { suggestedQuestionnaireItemId: string | null }[]) => new Set(rows.map((r) => r.suggestedQuestionnaireItemId))),
+    ]);
+
+    const freshCandidates = candidateQuestions.filter((q: { id: string }) => !alreadySuggestedIds.has(q.id));
+    const candidatesText = freshCandidates.map((q: { text: string }, i: number) => `[${i}] ${q.text}`).join('\n');
+
+    const userPrompt = [
+      `Фрагмент транскрипта співбесіди:\n${transcriptWindow}`,
+      candidatesText ? `Питання анкети, ще не підказані в цій сесії:\n${candidatesText}` : 'Усі питання анкети вже підказані в цій сесії.',
+    ].join('\n\n');
+
+    let result;
+    try {
+      result = await this.aiRouter.execute({
+        userId,
+        projectId,
+        taskType: INTERVIEW_TASK_TYPE,
+        systemPrompt: INTERVIEW_SYSTEM_PROMPT,
+        userPrompt,
+        jsonMode: true,
+        maxTokens: 300,
+        validateOutput: isValidInterviewHintPayload,
+        preferredModelVersionId: engineId,
+      });
+    } catch (err) {
+      if (err instanceof ForbiddenException) throw err;
+      if (err instanceof AIRouterContentBlockedError) {
+        throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
+      }
+      throw new BadGatewayException('Не удалось получить подсказку — AI-провайдер недоступен или вернул некорректный ответ.');
+    }
+
+    const raw: RawInterviewHint | null = JSON.parse(result.text);
+    if (!raw) return null;
+
+    let suggestedQuestionnaireItemId: string | null = null;
+    if (typeof raw.suggestedQuestionIndex === 'number') {
+      const matched = freshCandidates[raw.suggestedQuestionIndex];
+      suggestedQuestionnaireItemId = matched?.id ?? null;
+    }
+
+    return this.prisma.liveHintEvent.create({
+      data: {
+        projectId,
+        hintType: LiveHintType.UNASKED_QUESTION,
+        hintText: raw.hintText,
+        suggestedQuestionnaireItemId,
         generatedByInferenceId: result.aiInferenceId,
       },
     });

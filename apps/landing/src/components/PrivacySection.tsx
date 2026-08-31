@@ -16,7 +16,13 @@ export function PrivacySection({ dict }: { dict: Dictionary }) {
           ))}
         </div>
 
-        <a href="/privacy-policy" className="privacy__policy-link">
+        {/* ПОВТОРНЫЙ АУДИТ 2026-08-30: было href="/privacy-policy" —
+            такого маршрута в apps/landing нет (в app/ только [lang]/page,
+            robots, sitemap), а middleware ещё и дописывал локаль, так что
+            ссылка вела в 404. Политика приватности — секция на этой же
+            странице (PrivacyPolicyIllustrated, id="privacy-policy"),
+            поэтому ссылка теперь якорная. */}
+        <a href="#privacy-policy" className="privacy__policy-link">
           {dict.privacy.policyLink} →
         </a>
       </div>

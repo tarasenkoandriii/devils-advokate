@@ -43,7 +43,7 @@ export async function sendTelegramMessage(botToken: string, chatId: string, text
     throw new TelegramSendError(`Telegram Bot API вернул ${response.status} ${response.statusText}: ${body}`);
   }
 
-  const data = await response.json();
+  const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
   if (data.ok !== true) {
     throw new TelegramSendError(`Telegram Bot API: ${data.description ?? 'неизвестная ошибка'}`);
   }

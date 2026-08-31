@@ -1,0 +1,284 @@
+# Devil's Advocate — ПОЛНЫЙ локальный стенд в Docker: Postgres + Adminer
+# + apps/api + apps/tma + apps/admin + apps/landing, с дев-входами
+# (см. DOCKER.md — там пошаговая инструкция и что открывать в браузере).
+#
+# Отдельный файл, а НЕ правка docker-compose.yml. Причина: базовый
+# docker-compose.yml — это инфраструктура для тех, кто запускает
+# приложения на хосте (npm run start:dev), и он остаётся рабочим ровно
+# в том виде, в каком был. Кому нужен «всё в контейнерах» — берёт этот
+# файл. Слить их в один с профилями можно, но тогда `docker compose up`
+# без аргументов начинает означать разное в зависимости от профиля —
+# ровно тот способ, которым человек случайно поднимает два Postgres на
+# одном порту.
+#
+#   docker compose --env-file .env.docker -f docker-compose.dev.yml up -d --build
+#
+# Три флага в каждой команде — ровно поэтому есть Makefile (`make up`):
+# забытый --env-file не ломается громко, стенд поднимется, но все ключи
+# внешних API окажутся пустыми, и разбираться придётся по симптомам.
+#
+# ВАЖНО ПРО ПОРТЫ: этот файл публикует Postgres на 5432, как и базовый
+# docker-compose.yml. Два файла одновременно поднимать нельзя — второй
+# упадёт с "port is already allocated". Это осознанно: один и тот же
+# порт означает, что переменные DATABASE_URL из apps/api/.env.example
+# работают и там, и там без правок.
+
+name: devils-advocate-dev
+
+# ─────────────────────────────────────────────────────────────────────
+# Общий кусок окружения для api и api-init: у них ОБЯЗАН быть один и
+# тот же DATABASE_URL — иначе init накатит схему в одну базу, а api
+# пойдёт в другую и упадёт на первом запросе. YAML-якорь делает это
+# структурно невозможным, в отличие от двух скопированных блоков.
+# ─────────────────────────────────────────────────────────────────────
+x-api-env: &api-env
+  DATABASE_URL: postgresql://devils_advocate:devils_advocate@postgres:5432/devils_advocate
+  # DIRECT_URL нужен Prisma для DDL-операций (db push/migrate). Локально
+  # он совпадает с DATABASE_URL — пулера (pgbouncer) в стенде нет, в
+  # отличие от прода на Supabase, где значения РАЗНЫЕ (см. VERCEL.md).
+  DIRECT_URL: postgresql://devils_advocate:devils_advocate@postgres:5432/devils_advocate
+  NODE_ENV: development
+  PORT: '3000'
+  # Дев-вход. ALLOW_DEV_AUTH=true включает и заголовок X-Dev-User-Id для
+  # TMA-эндпоинтов, и POST /admin/auth/dev-login для админки. Второй
+  # предохранитель — NODE_ENV!==production (см. admin-auth/dev-login.ts),
+  # поэтому одной этой переменной в проде недостаточно, чтобы открыть
+  # админку.
+  ALLOW_DEV_AUTH: 'true'
+  DEV_USER_ID: ${DEV_USER_ID:-123}
+  SEED_DEV_CONSENTS: ${SEED_DEV_CONSENTS:-false}
+  SECRET_PROVIDER_TYPE: env
+  # CORS_ORIGIN задан ЯВНО пустым, а не опущен. Разница принципиальная:
+  # bind-mount кладёт хостовый apps/api/.env внутрь контейнера, а
+  # ConfigModule читает его по умолчанию — то есть незаданная здесь
+  # переменная подхватилась бы из личного .env разработчика (например
+  # с продовым доменом), и localhost:3001/3002 молча блокировался бы
+  # CORS'ом. Пустая строка = поведение dev по умолчанию: в
+  # NODE_ENV!==production create-app.ts отражает любой Origin, и список
+  # из трёх портов не нужно поддерживать руками. В проде переменная
+  # обязательна — это различие сознательное.
+  CORS_ORIGIN: ${CORS_ORIGIN:-}
+  #
+  # Ключи внешних API — из .env.docker (см. .env.docker.example).
+  # Пустая строка — валидное значение: сервис, которому ключ не задан,
+  # честно откажет на своём эндпоинте, а не уронит запуск всего API.
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  XAI_API_KEY: ${XAI_API_KEY:-}
+  ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY:-}
+  ASSEMBLYAI_WEBHOOK_SECRET: ${ASSEMBLYAI_WEBHOOK_SECRET:-}
+  API_PUBLIC_BASE_URL: ${API_PUBLIC_BASE_URL:-}
+  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+  FACT_CHECK_TOOLS_API_KEY: ${FACT_CHECK_TOOLS_API_KEY:-}
+  ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+  GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+  GOOGLE_VISION_API_KEY: ${GOOGLE_VISION_API_KEY:-}
+  SERPAPI_KEY: ${SERPAPI_KEY:-}
+  VERCEL_BLOB_READ_WRITE_TOKEN: ${VERCEL_BLOB_READ_WRITE_TOKEN:-}
+  WINDY_API_KEY: ${WINDY_API_KEY:-}
+  SCHEDULER_DISPATCH_SECRET: ${SCHEDULER_DISPATCH_SECRET:-dev-dispatch-secret}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: devils-advocate-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: devils_advocate
+      POSTGRES_PASSWORD: devils_advocate
+      POSTGRES_DB: devils_advocate
+    ports:
+      - '5432:5432'
+    volumes:
+      - devils_advocate_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U devils_advocate -d devils_advocate']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:latest
+    container_name: devils-advocate-dev-adminer
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Одноразовый контейнер: схема + сиды. Тот же образ, что и api —
+  # значит тот же сгенерированный Prisma-клиент, схема не может
+  # разъехаться между тем, кто её накатывает, и тем, кто её использует.
+  api-init:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: devils-advocate-api:dev
+    container_name: devils-advocate-dev-api-init
+    environment:
+      <<: *api-env
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: devils_advocate
+    entrypoint: ['/usr/local/bin/entrypoint-api.sh']
+    volumes:
+      # Те же мапинги, что у api: правка сидов применяется перезапуском
+      # стенда, без пересборки образа — иначе init работал бы с версией,
+      # вмороженной в слой COPY.
+      #
+      # ВАЖНОЕ ИСКЛЮЧЕНИЕ — schema.prisma: сама схема отсюда подхватится
+      # (db push увидит новый файл), но Prisma Client генерируется на
+      # этапе сборки образа в /app/node_modules, а entrypoint зовёт push
+      # с --skip-generate. То есть после правки схемы БД уедет вперёд, а
+      # клиент останется старым, и падать будет уже в рантайме невнятной
+      # ошибкой Prisma. Правильная команда после правки schema.prisma —
+      # `make up` (пересобирает) или `make reset`, НЕ `make restart`.
+      - ./apps/api:/app/apps/api
+      - ./scripts:/app/scripts
+      - /app/apps/api/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: devils-advocate-api:dev
+    container_name: devils-advocate-dev-api
+    environment: *api-env
+    ports:
+      - '3000:3000'
+    volumes:
+      # Исходники с хоста — nest start --watch перезапускает процесс на
+      # правке файла, пересборка образа не нужна.
+      - ./apps/api:/app/apps/api
+      - ./scripts:/app/scripts
+      # Анонимный том поверх смонтированной папки: npm workspaces
+      # поднимают почти всё в корневой node_modules, но НЕ всё —
+      # @nestjs/cli и typescript по локу лежат именно в
+      # apps/api/node_modules, и bind-mount хостовой папки затёр бы их
+      # (то есть `nest` внутри контейнера просто не нашёлся бы).
+      #
+      # ДЛЯ dist/ ТАКОГО ТОМА НЕТ, И ЭТО ВАЖНО: `nest start --watch` при
+      # deleteOutDir=true (apps/api/nest-cli.json) первым делом делает
+      # rm -rf dist. Удалить точку монтирования тома нельзя — ядро
+      # возвращает EBUSY; Nest CLI при этом печатает одну строку и
+      # выходит с кодом 0, из-за чего restart-политика уводит контейнер
+      # в бесконечный цикл «стартовал → успешно вышел → перезапуск», и
+      # выглядит это не как падение, а как вечный Restarting. Поэтому
+      # dist живёт в примонтированной папке хоста как обычный каталог.
+      - /app/apps/api/node_modules
+    depends_on:
+      api-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # TCP-проверка, а не HTTP: неаутентифицированного /health-эндпоинта
+      # у API нет (маршрут /health — это доменный контроллер про
+      # медицинские решения, под TelegramAuthGuard), а заводить публичный
+      # ради healthcheck — расширять поверхность атаки ради удобства
+      # compose. Открытый порт = процесс поднялся, этого достаточно.
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  tma:
+    build:
+      context: .
+      dockerfile: docker/next.Dockerfile
+      args:
+        APP_DIR: tma
+    image: devils-advocate-tma:dev
+    container_name: devils-advocate-dev-tma
+    environment:
+      NODE_ENV: development
+      PORT: '3001'
+      # Браузер пользователя, а не контейнер, ходит на этот адрес —
+      # поэтому localhost, а не имя сервиса api. NEXT_PUBLIC_* попадают
+      # в клиентский бандл, у которого нет docker-сети.
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3000
+      NEXT_PUBLIC_DEV_USER_ID: ${DEV_USER_ID:-123}
+    ports:
+      - '3001:3001'
+    volumes:
+      - ./apps/tma:/app/apps/tma
+      - /app/apps/tma/node_modules
+      - /app/apps/tma/.next
+    depends_on:
+      # service_healthy, а не короткая форма [api]: короткая ждёт только
+      # «контейнер создан», то есть фронтенд открылся бы раньше, чем API
+      # начал слушать порт, и первый же запрос упал бы сетевой ошибкой —
+      # ровно тот симптом, который потом ищут не там.
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: .
+      dockerfile: docker/next.Dockerfile
+      args:
+        APP_DIR: admin
+    image: devils-advocate-admin:dev
+    container_name: devils-advocate-dev-admin
+    environment:
+      NODE_ENV: development
+      # 3002 дублирует `next dev -p 3002` из apps/admin/package.json.
+      # Конфликта нет: Next разбирает аргументы commander'ом, и повтор
+      # -p/--port просто перезаписывает значение — побеждает последний,
+      # то есть этот. Держим значения одинаковыми, чтобы публикуемый
+      # порт совпадал с тем, что печатает next в логе.
+      PORT: '3002'
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3000
+      # Показывает кнопку «Войти как dev-…» на /login. Сам вход всё равно
+      # разрешает бэкенд (404 при ALLOW_DEV_AUTH!=true) — этот флаг
+      # только про видимость кнопки.
+      NEXT_PUBLIC_ALLOW_DEV_AUTH: 'true'
+      NEXT_PUBLIC_DEV_USER_ID: ${DEV_USER_ID:-123}
+      NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+    ports:
+      - '3002:3002'
+    volumes:
+      - ./apps/admin:/app/apps/admin
+      - /app/apps/admin/node_modules
+      - /app/apps/admin/.next
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  landing:
+    build:
+      context: .
+      dockerfile: docker/next.Dockerfile
+      args:
+        APP_DIR: landing
+    image: devils-advocate-landing:dev
+    container_name: devils-advocate-dev-landing
+    environment:
+      NODE_ENV: development
+      PORT: '3003'
+      NEXT_PUBLIC_SITE_URL: http://localhost:3003
+      NEXT_PUBLIC_TELEGRAM_BOT_URL: ${NEXT_PUBLIC_TELEGRAM_BOT_URL:-https://t.me/your_bot_username/app}
+    ports:
+      - '3003:3003'
+    volumes:
+      - ./apps/landing:/app/apps/landing
+      - /app/apps/landing/node_modules
+      - /app/apps/landing/.next
+    restart: unless-stopped
+
+volumes:
+  # Имя тома отличается от базового docker-compose.yml (там
+  # devils_advocate_postgres_data в проекте devils-advocate-project) за
+  # счёт разного `name:` стека — данные двух стендов не перемешиваются.
+  devils_advocate_postgres_data:

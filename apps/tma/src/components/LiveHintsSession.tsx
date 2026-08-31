@@ -17,12 +17,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { startLiveAudioCapture, LiveAudioCaptureHandle, CaptureState } from '../lib/live-audio-capture';
 import { connectLiveTranscription, LiveTranscriptionHandle, TranscriptUpdate } from '../lib/live-transcription';
-import { mintTranscriptionToken, analyzeLiveHint, dismissLiveHintEvent } from '../lib/features';
+import { mintTranscriptionToken, analyzeLiveHint, analyzeLiveHintForInterview, dismissLiveHintEvent } from '../lib/features';
+import { checkThirdPartyAudioConsent, ThirdPartyAudioConsentPrompt } from './ThirdPartyAudioConsentPrompt';
 import { LiveHintEvent } from '../lib/types';
 import { haptic } from '../lib/telegram';
 
 interface LiveHintsSessionProps {
   projectId: string;
+  /** 'interview' — режим собеседования (следующий вопрос опросника), см. analyzeLiveHintForInterview */
+  mode?: 'conversation' | 'interview';
 }
 
 const ANALYSIS_CYCLE_MS = 30_000; // до 30 секунд — согласованный, не мгновенный цикл
@@ -33,11 +36,12 @@ interface TranscriptSegment {
   timestamp: number;
 }
 
-export function LiveHintsSession({ projectId }: LiveHintsSessionProps) {
+export function LiveHintsSession({ projectId, mode = 'conversation' }: LiveHintsSessionProps) {
   const [expanded, setExpanded] = useState(false);
   const [captureState, setCaptureState] = useState<CaptureState>('idle');
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [hint, setHint] = useState<LiveHintEvent | null>(null);
+  const [needsAudioConsent, setNeedsAudioConsent] = useState(false);
 
   const captureHandleRef = useRef<LiveAudioCaptureHandle | null>(null);
   const transcriptionHandleRef = useRef<LiveTranscriptionHandle | null>(null);
@@ -58,6 +62,7 @@ export function LiveHintsSession({ projectId }: LiveHintsSessionProps) {
   }
 
   async function handleStart() {
+    if (!(await checkThirdPartyAudioConsent())) { setNeedsAudioConsent(true); return; }
     const captureHandle = await startLiveAudioCapture((state, errorMessage) => {
       setCaptureState(state);
       setCaptureError(errorMessage);
@@ -107,7 +112,7 @@ export function LiveHintsSession({ projectId }: LiveHintsSessionProps) {
       if (!transcriptWindow.trim()) return;
 
       try {
-        const result = await analyzeLiveHint(projectId, transcriptWindow);
+        const result = mode === 'interview' ? await analyzeLiveHintForInterview(projectId, transcriptWindow) : await analyzeLiveHint(projectId, transcriptWindow);
         if (result) {
           setHint(result);
           haptic('light');
@@ -159,7 +164,10 @@ export function LiveHintsSession({ projectId }: LiveHintsSessionProps) {
         </div>
       )}
 
-      {captureState === 'idle' && (
+      {needsAudioConsent && (
+        <ThirdPartyAudioConsentPrompt source="live-hints-session" onGranted={() => { setNeedsAudioConsent(false); handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
+      )}
+      {!needsAudioConsent && captureState === 'idle' && (
         <button type="button" onClick={handleStart}>
           Начать
         </button>

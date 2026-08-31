@@ -1,12 +1,12 @@
 // ═══════════════════════════════════════════════════════════════
 // Devil's Advocate — Prisma Schema
-// Чекпоинт 1: пункты 1-7 (факт-система, AIInference, Observation,
+// Чекпоинт 1: пункты 1-7 (факт-система, AIInference, [Observation — удалена аудитом БД 2026-08-30],
 // ConversationSignal, AI Router, реестр моделей, Prompt Registry + AI
 // Evaluation Gate) — вся AI-инфраструктурная часть чекпоинта закрыта.
 // Компаньон: devils-advocate-tz.md §4.2/4.2a/4.2b/4.2c/§3.15/§7.1,
 // implementation-ready §1.2/§2.10/§6
 //
-// Пункт 1: Person → PersonFact → FactSource → FactAssertion с FactScope,
+// Пункт 1: Person → PersonFact → FactSource с FactScope (FactAssertion удалена аудитом БД 2026-08-30 — не использовалась),
 // плюс минимальный контекст (User, Project, ProjectPerson со статусом
 // персона/фигурант — §3.38).
 //
@@ -32,7 +32,7 @@
 // не отдельной таблицей. User.privacyProcessingMode (§4.6) добавлен
 // как инфраструктурное поле для AI Router.
 //
-// Пункт 9: ProjectLogEntry (UX-слой) отдельно от AuditLogEntry
+// Пункт 9: ProjectLogEntry (UX-слой) — таблица удалена аудитом БД 2026-08-30: лог считается derived в ProjectLogService; AuditLogEntry
 // (append-only security-след) — единственное разделение вместо
 // унификации в этом чекпоинте, так как природа моделей разная.
 //
@@ -96,6 +96,7 @@ model User {
   id         String   @id @default(cuid())
   telegramId String   @unique
   createdAt  DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   // §4.6 — влияет на то, допустим ли EPHEMERAL_SERVER без явного
   // per-operation согласия (MAXIMUM_PRIVACY запрещает его вовсе).
@@ -128,6 +129,17 @@ model User {
   religion String?
   city     String?
   country  String?
+  // Полный аудит 2026-08-30 — ISO-3166-1 alpha-2 ("UA"), отдельно от
+  // отображаемого названия в country ("Україна"): resolveJurisdictionBucket()
+  // ждал код, а получал название → все пользователи попадали в OTHER и
+  // юр. дисклеймер всегда был null. Заполняется из Nominatim country_code
+  // при гео-подсказке; при ручном вводе — распознаётся по названию.
+  countryCode String? @db.VarChar(2)
+  // Страна по IP из заголовка Vercel x-vercel-ip-country (ISO-2), обновляется
+  // TelegramAuthGuard при каждом запросе. Только fallback для юрисдикции,
+  // когда пользователь не указал страну сам: VPN и поездки делают IP
+  // ненадёжным, явный выбор всегда приоритетнее. Грубее города не хранится.
+  ipCountryCode String? @db.VarChar(2)
 
   // Пункт 64 (§3.25 ТЗ) — "дополнение к 3.24: то, что раньше было
   // разовыми кнопками в карточке проекта, дублируется как
@@ -164,6 +176,39 @@ model User {
   // "минимальный флаг, не RBAC", что и у isLibraryModerator.
   isVenueModerator Boolean @default(false)
 
+  // Пункт [admin-panel] (devils-advocate-admin-panel-tz.md, §4.1) —
+  // доступ к операционным вкладкам админки (промпты, evaluation,
+  // телеметрия, управление пользователями), ОТДЕЛЬНЫЙ от isLibraryModerator/
+  // isVenueModerator — тот же принцип "разные домены ответственности,
+  // разное суждение". Введён на этом проходе (реализация Prompt
+  // Framework) раньше, чем сама админка с AdminSessionGuard — до её
+  // появления проверяется тем же способом, что и два флага выше
+  // (TelegramAuthGuard + проверка внутри сервиса), меняется на
+  // AdminSessionGuard одной правкой, когда дойдёт очередь до самой
+  // админ-панели (см. ТЗ).
+  isOperator Boolean @default(false)
+
+  // Пункт [admin-panel] (devils-advocate-admin-panel-tz.md §4.3,
+  // §8 юридического чек-листа п.11): "модерация вправе ограничить
+  // аккаунт при аномальном паттерне". isRestricted — частичное
+  // ограничение (девять конкретных write-эндпоинтов, см.
+  // NotRestrictedGuard), не блокирует чтение и обычную работу.
+  // restrictedNote видна только операторам, не самому пользователю.
+  isRestricted   Boolean   @default(false)
+  restrictedAt   DateTime?
+  restrictedNote String?
+
+  // Пункт [full-block] — ВТОРАЯ, более жёсткая степень, НЕЗАВИСИМАЯ
+  // от isRestricted (тот же принцип "разные флаги для разных
+  // степеней", что уже применён к isLibraryModerator/isVenueModerator/
+  // isOperator выше). isBlocked проверяется в TelegramAuthGuard ДО
+  // выдачи userId — отклоняет запрос целиком (401), не даёт даже
+  // читать данные, в отличие от isRestricted. blockedNote видна
+  // только операторам.
+  isBlocked   Boolean   @default(false)
+  blockedAt   DateTime?
+  blockedNote String?
+
   projects       Project[]
   createdPeople  Person[]
   consentRecords ConsentRecord[]
@@ -173,17 +218,84 @@ model User {
   venueBookingConfirmations VenueBookingConfirmation[]
   // Пункт 87: голосовой отпечаток (один на пользователя)
   voiceEmbedding VoiceEmbedding?
+  // Пункт [admin-panel]: сессии админ-панели — ОТДЕЛЬНЫЕ от TMA-сессий
+  // (у тех нет состояния на сервере вообще, initData проверяется на
+  // каждый запрос заново); см. AdminSession ниже.
+  adminSessions AdminSession[]
+  // Пункт [media-review]
+  mediaReviewQueues MediaReviewQueue[]
+  intakeSessions    IntakeSession[]
+  // Пункт [interview-pool]
+  recruitingTeamMemberships RecruitingTeamMember[]
+  investmentGroupMemberships InvestmentGroupMember[]
+  ownedCandidateProfiles    CandidateProfile[]
+  sentCandidateShares       CandidateShare[]
+  youtubeSearchLogs YouTubeSearchLog[]
 
   @@map("users")
 }
 
+// Пункт [major-purchase] (devils-advocate-major-purchase-tz.md §4).
+// АУДИТ ПЕРЕД РЕАЛІЗАЦІЄЮ: ТЗ стверджувало "ProjectMode вже існує з
+// Пункту [interview-pool]" — це виявилось неправдою, перевірено прямо
+// в схемі перед написанням цього enum. Пункт [interview-pool] був
+// лише документом (docs/devils-advocate-interview-pool-tz.md),
+// ніколи не реалізованим у коді — жодної моделі з того ТЗ в схемі
+// не було. Тому тут НЕМАЄ значення INTERVIEW_POOL — додавання
+// enum-значення під нереалізовану фічу було б оманливим мертвим
+// кодом, не підготовкою на майбутнє.
+enum ProjectMode {
+  STANDARD
+  MAJOR_PURCHASE
+  INTERVIEW_POOL
+  INVESTMENT
+  HEALTH
+  FAMILY_LAW
+  DTP
+}
+
 model Project {
-  id      String @id @default(cuid())
+  id      String      @id @default(cuid())
   ownerId String
-  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner   User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  mode    ProjectMode @default(STANDARD)
+
+  majorPurchaseConfig MajorPurchaseConfig?
+  // Пункт [interview-pool]
+  interviewPoolConfig InterviewPoolConfig?
+  recruitingTeamId    String?
+  recruitingTeam      RecruitingTeam? @relation(fields: [recruitingTeamId], references: [id], onDelete: SetNull)
+  candidatePipelineStatuses CandidatePipelineStatus[]
+  poolRelevanceSnapshots    PoolRelevanceSnapshot[]
+  clientReports             ClientReport[]
+  // Пункт [investment] — investmentGroupId на Project напряму (АУДИТ:
+  // ТЗ §4 клав це поле на InvestmentConfig, але §6 API contract вимагає
+  // групу вже при POST /investment/projects, до того, як
+  // InvestmentConfig взагалі існує — той самий chicken-egg, що вже
+  // двічі знайдений раніше. Виправлено за патерном
+  // Project.recruitingTeamId).
+  investmentConfig  InvestmentConfig?
+  investmentGroupId String?
+  investmentGroup   InvestmentGroup? @relation(fields: [investmentGroupId], references: [id], onDelete: SetNull)
+  // Пункт [health] — без групи (§3.4 ТЗ, не запитано), просте 1:1
+  healthConfig HealthConfig?
+  // Пункт [family-law] — contractType на Project напряму (розділ 0/4
+  // ТЗ, аудит перед реалізацією вже знайшов і виправив chicken-egg:
+  // обов'язковий одразу при створенні проєкту, до того, як
+  // FamilyLawConfig взагалі існує).
+  contractType    FamilyLawContractType?
+  familyLawConfig FamilyLawConfig?
+  dtpConfig       DtpConfig?
 
   question String
   goal     String?
+
+  // ТЗ domain-ui-and-voice-intake §1.4 — заморозка проекта оператором
+  // (юр. чек-лист §8). Принуждение — ProjectFrozenGuard на мутирующих
+  // роутах доменных контроллеров, не флаг «для галочки».
+  frozenAt   DateTime?
+  frozenNote String?
+  frozenById String?
 
   // Пункт 56 (§4.5 ТЗ) — null = не вынесен на публичное обсуждение.
   // Случайный непредсказуемый токен, не полноценная аутентификация
@@ -197,7 +309,6 @@ model Project {
   people         ProjectPerson[]
   facts          PersonFact[] // только для scope=PROJECT — см. PersonFact.scope
   consentRecords ConsentRecord[]
-  logEntries     ProjectLogEntry[]
   arguments      Argument[]
   objective      DecisionObjective?
   boundaries     NegotiationBoundaries?
@@ -256,6 +367,9 @@ model Project {
   escalationCategoryEvents EscalationCategoryEvent[]
   // Пункт 86: отслеживаемые темы прощупывания (§3.37 ТЗ)
   probingTopics ProbingTopic[]
+  @@index([ownerId])
+  @@index([recruitingTeamId])
+  @@index([investmentGroupId])
 
   @@map("projects")
 }
@@ -430,6 +544,9 @@ model Argument {
   liveArgumentTrackingStatus LiveArgumentTrackingStatus?
 
   @@index([projectId, stance])
+  @@index([targetPersonId])
+  @@index([derivedFromPersonFactId])
+  @@index([derivedFromInferenceId])
   @@map("arguments")
 }
 
@@ -457,7 +574,6 @@ model Person {
 
   facts        PersonFact[]
   projectLinks ProjectPerson[]
-  logEntryLinks ProjectLogEntryPerson[]
   steelmanCases SteelmanCase[]
   // Пункт 39: Person Communication Profile
   communicationTraits PersonCommunicationTrait[]
@@ -525,6 +641,7 @@ model ProjectPerson {
   statusConfirmedByUser Boolean @default(false)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@unique([projectId, personId])
   @@index([personId])
@@ -586,17 +703,15 @@ model PersonFact {
   sources    FactSource[]
   // Пункт 48: результаты реверс-поиска фото для этого факта
   photoVerifications PhotoVerification[]
-  assertions FactAssertion[]
-  aiInferenceLinks AIInferenceSource[]
   signalEvidence ConversationSignalEvidence[]
   derivedArguments Argument[]
-  steelmanLinks SteelmanSupportingFact[]
   // Пункт 21: Source Conflict Resolver — этот факт может участвовать
   // в конфликте как факт A ИЛИ как факт B, обе обратные связи нужны
   // (иначе Prisma не сможет резолвить две именованные связи на одну
   // и ту же модель без явного разделения на две стороны).
   conflictsAsFactA SourceConflict[] @relation("SourceConflictFactA")
   conflictsAsFactB SourceConflict[] @relation("SourceConflictFactB")
+  steelmanLinks SteelmanSupportingFact[]
 
   @@index([personId, scope])
   @@index([projectId])
@@ -636,19 +751,6 @@ model FactSource {
   @@map("fact_sources")
 }
 
-model FactAssertion {
-  id           String     @id @default(cuid())
-  personFactId String
-  personFact   PersonFact @relation(fields: [personFactId], references: [id], onDelete: Cascade)
-
-  assertedText String
-  assertedAt   DateTime @default(now())
-  disputed     Boolean  @default(false)
-
-  @@index([personFactId])
-  @@map("fact_assertions")
-}
-
 // ───────────────────────────────────────────────────────────
 // Observation (§4.2b) — сырое наблюдение до того, как оно
 // становится PersonFact или AIInference. Используется как
@@ -658,35 +760,6 @@ model FactAssertion {
 // последующих пунктах, поэтому sourceId/sourceType здесь —
 // свободные поля, не FK (см. README "Технический долг").
 // ───────────────────────────────────────────────────────────
-
-enum ObservationSourceType {
-  TRANSCRIPT_SEGMENT
-  OCR_DOCUMENT
-  IMPORTED_CHAT
-  BEHAVIORAL_SIGNAL
-}
-
-model Observation {
-  id String @id @default(cuid())
-
-  sourceId   String
-  sourceType ObservationSourceType
-
-  subject String? // например personId, если наблюдение о конкретном человеке
-  content String
-
-  timestamp DateTime?
-  speakerId String?
-  confidence Float?
-
-  createdAt DateTime @default(now())
-
-  inferenceLinks AIInferenceSource[]
-  signalEvidence ConversationSignalEvidence[]
-
-  @@index([sourceType, sourceId])
-  @@map("observations")
-}
 
 // ───────────────────────────────────────────────────────────
 // AIInference (§4.2a) — единый слой происхождения AI-вывода.
@@ -722,7 +795,6 @@ model AIInference {
 
   createdAt DateTime @default(now())
 
-  sourceLinks AIInferenceSource[]
   signalEvidence ConversationSignalEvidence[]
   derivedArguments Argument[]
   steelmanCases SteelmanCase[]
@@ -763,28 +835,9 @@ model AIInference {
 
   @@index([inferenceType])
   @@index([aiJobId])
+  @@index([modelVersionId])
+  @@index([promptVersionId])
   @@map("ai_inferences")
-}
-
-// Связка AIInference с его источниками (PersonFact и/или Observation).
-// Полиморфная ссылка через два nullable FK — инвариант "ровно одно из
-// двух заполнено" проверяется в service-слое (см. README), Prisma/Postgres
-// не поддерживают декларативный XOR-констрейнт без raw SQL.
-model AIInferenceSource {
-  id            String      @id @default(cuid())
-  aiInferenceId String
-  aiInference   AIInference @relation(fields: [aiInferenceId], references: [id], onDelete: Cascade)
-
-  personFactId String?
-  personFact   PersonFact? @relation(fields: [personFactId], references: [id], onDelete: Cascade)
-
-  observationId String?
-  observation   Observation? @relation(fields: [observationId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-
-  @@index([aiInferenceId])
-  @@map("ai_inference_sources")
 }
 
 // ───────────────────────────────────────────────────────────
@@ -854,6 +907,7 @@ model ConversationSignal {
 
   disputed  Boolean  @default(false)
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   evidence ConversationSignalEvidence[]
 
@@ -876,14 +930,33 @@ model ConversationSignalEvidence {
 
   personFactId  String?
   personFact    PersonFact?  @relation(fields: [personFactId], references: [id], onDelete: Cascade)
-  observationId String?
-  observation   Observation? @relation(fields: [observationId], references: [id], onDelete: Cascade)
   aiInferenceId String?
   aiInference   AIInference? @relation(fields: [aiInferenceId], references: [id], onDelete: Cascade)
+  // Пункт [media-review] (devils-advocate-media-review-tz.md §4/§3):
+  // id конкретного claim з відповіді Google Fact Check Tools API —
+  // четвёртый тип ссылки поруч із трьома вже наявними. Не FK на
+  // окрему таблицю (claim'и не зберігаються локально, тільки id +
+  // текстовий опис у самому сигналі) — той самий принцип "джерело
+  // описується текстом/зовнішнім ідентифікатором, не структурною
+  // копією", що вже застосований до aiInferenceId-подібних посилань.
+  factCheckClaimId String?
+  // Пункт [fact-check-source-closure] (найдено при аудите
+  // exportFactsToVerify() — реальный баг, не гипотетический): без
+  // этого поля resolveSignalDetails() пропускал evidence без
+  // aiInference (checkAgainstFactCheckAPI никогда не вызывает AI),
+  // sourceDescription оставалось null, и сигнал ложно попадал в
+  // категорию "ещё требует проверки" в exportFactsToVerify() — хотя
+  // уже был проверен через Fact Check Tools API. Человекочитаемое
+  // описание источника записывается СРАЗУ при создании evidence в
+  // checkAgainstFactCheckAPI, не восстанавливается постфактум через
+  // повторный lookup кэша (FactCheckApiCache может истечь по TTL).
+  factCheckSourceDescription String?
 
   createdAt DateTime @default(now())
 
   @@index([conversationSignalId])
+  @@index([personFactId])
+  @@index([aiInferenceId])
   @@map("conversation_signal_evidence")
 }
 
@@ -1000,10 +1073,25 @@ model Conversation {
   // запланирован заранее (не обязателен — большинство разговоров не
   // планируются через календарь).
   scheduledFrom ScheduledConversation?
+  // Пункт [media-review] — обратная сторона MediaReviewQueueItem.conversationId
+  mediaReviewQueueItems MediaReviewQueueItem[]
+  // Пункт [major-purchase]
+  purchaseMeetings PurchaseMeeting[]
+  // Пункт [interview-pool] — три іменовані relation, бо всі три FK
+  // (CandidateStageProgress/ComplianceFlag/CandidateFollowUpRequest)
+  // вказують на Conversation з різним семантичним призначенням.
+  stageProgressLinks    CandidateStageProgress[]   @relation("StageProgressConversation")
+  investmentMeetings InvestmentMeeting[]
+  healthConsultations HealthConsultation[]
+  familyLawConsultations FamilyLawConsultation[]
+  dtpConsultations DtpConsultation[]
+  complianceFlagLinks   ComplianceFlag[]           @relation("ComplianceFlagConversation")
+  followUpRequestLinks  CandidateFollowUpRequest[] @relation("FollowUpConversation")
 
   @@index([projectId])
   @@index([projectId, occurredAt])
   @@index([externalTranscriptionJobId])
+  @@index([transcriptionProviderVersionId])
   @@map("conversations")
 }
 
@@ -1025,6 +1113,7 @@ model ConversationParticipant {
   isSelf   Boolean @default(false) // сам пользователь — отдельная Person-запись на себя не заводится
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   segments TranscriptSegment[]
   signals  ConversationSignal[]
@@ -1092,6 +1181,7 @@ model ConversationAgenda {
   updatedAt DateTime @updatedAt
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("conversation_agendas")
 }
 
@@ -1163,7 +1253,7 @@ model AIModel {
   providerId String
   provider   AIProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
-  name String // "gpt-4.1" | "claude-sonnet-5" | "grok-4" | ...
+  name String // "gpt-4.1" | "claude-sonnet-5" | "grok-4.3" | ...
 
   createdAt DateTime @default(now())
 
@@ -1268,6 +1358,17 @@ model AIJob {
   // перейти в RUNNING (проверка — service-слой, см. README).
   inputScanStatus InputScanStatus @default(PENDING)
 
+  // Пункт [telemetry] (devils-advocate-telemetry-tz.md §3): факт того,
+  // каким taskType был вызван конкретный job — без этого поля
+  // агрегация телеметрии возможна только по AI-модели (3-4 значения
+  // на весь проект), не по фиче (85+ значений taskType по всему
+  // проекту). Совпадает по смыслу с AIModelCapability.taskType (уже
+  // есть в схеме), но это ОТДЕЛЬНОЕ поле — то описывает, что модель
+  // УМЕЕТ, это — что было вызвано в этот раз. Nullable намеренно:
+  // существующие записи AIJob (созданные до этой ревизии) не имеют
+  // значения и не должны становиться невалидными задним числом.
+  taskType String?
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   completedAt DateTime?
@@ -1277,6 +1378,8 @@ model AIJob {
 
   @@index([status])
   @@index([inputHash])
+  @@index([taskType, createdAt]) // Пункт [telemetry]: агрегация по фиче за период на растущей таблице
+  @@index([promptVersionId])
   @@map("ai_jobs")
 }
 
@@ -1343,10 +1446,47 @@ model EvaluationDataset {
 
   createdAt DateTime @default(now())
 
-  runs EvaluationRun[]
+  runs  EvaluationRun[]
+  // Пункт [prompt-framework]: без кейсов датасет нечего прогонять —
+  // см. devils-advocate-prompt-framework-tz.md, раздел 3.1.
+  cases EvaluationCase[]
 
   @@unique([name, version])
   @@map("evaluation_datasets")
+}
+
+// Пункт [prompt-framework] (devils-advocate-prompt-framework-tz.md,
+// раздел 3.1) — один кейс, один тестовый пример. Без этой модели
+// EvaluationRun физически нечего прогонять — раньше EvaluationDataset
+// был только именем и версией, без единого поля для самих кейсов.
+model EvaluationCase {
+  id                  String            @id @default(cuid())
+  evaluationDatasetId String
+  evaluationDataset   EvaluationDataset @relation(fields: [evaluationDatasetId], references: [id], onDelete: Cascade)
+
+  // Вход — то, что реально уйдёт в AI-вызов при прогоне (тот же shape,
+  // что userPrompt конкретного сервиса-потребителя). Свободный текст,
+  // не типизируем структуру заранее — она разная для каждого promptId.
+  input String
+
+  // Ожидаемый результат — ЕДИНОГО формата для всех типов оценки НЕТ
+  // (три gate работают по-разному, см. ТЗ раздел 4). Свободный JSON,
+  // конкретную форму задаёт caseType.
+  expectedOutput Json?
+
+  // "classification" — expectedOutput это {label: string}, сравнивается
+  //   с фактическим выводом AI напрямую (§4.1 ТЗ).
+  // "structural" — expectedOutput не используется, проверяется свойство
+  //   самого вывода (например, наличие поля), не сравнение с образцом
+  //   (§4.2 ТЗ).
+  caseType String
+
+  createdAt DateTime @default(now())
+
+  results EvaluationCaseResult[]
+
+  @@index([evaluationDatasetId])
+  @@map("evaluation_cases")
 }
 
 enum EvaluationSubjectType {
@@ -1381,10 +1521,41 @@ model EvaluationRun {
   completedAt DateTime?
 
   results     EvaluationResult[]
+  // Пункт [prompt-framework]: детальный уровень — какие ИМЕННО кейсы
+  // провалились, не только агрегат (implementation-ready.md раздел 6
+  // требует "отчёт с деталями провала", не общее число).
+  caseResults EvaluationCaseResult[]
   releaseGate ReleaseGate?
 
   @@index([subjectType])
+  @@index([promptVersionId])
+  @@index([modelVersionId])
+  @@index([evaluationDatasetId])
   @@map("evaluation_runs")
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+// Пункт [prompt-framework] (devils-advocate-prompt-framework-tz.md,
+// раздел 3.2) — EvaluationResult хранит АГРЕГИРОВАННУЮ метрику по
+// всему прогону (accuracy = 0.87), недостаточно для отладки. Эта
+// модель — результат ОДНОГО конкретного кейса.
+model EvaluationCaseResult {
+  id               String         @id @default(cuid())
+  evaluationRunId  String
+  evaluationRun    EvaluationRun  @relation(fields: [evaluationRunId], references: [id], onDelete: Cascade)
+  evaluationCaseId String
+  evaluationCase   EvaluationCase @relation(fields: [evaluationCaseId], references: [id], onDelete: Cascade)
+
+  actualOutput String  // реальный вывод AI на этом кейсе
+  passed       Boolean // прошёл ли именно этот кейс (не агрегат)
+  note         String? // например, для structural-кейсов — какое поле отсутствовало
+
+  createdAt DateTime @default(now())
+
+  @@unique([evaluationRunId, evaluationCaseId])
+  @@index([evaluationRunId])
+  @@index([evaluationCaseId])
+  @@map("evaluation_case_results")
 }
 
 model EvaluationMetric {
@@ -1395,6 +1566,7 @@ model EvaluationMetric {
   results EvaluationResult[]
 
   @@map("evaluation_metrics")
+  createdAt DateTime @default(now())
 }
 
 model EvaluationResult {
@@ -1412,6 +1584,7 @@ model EvaluationResult {
   createdAt DateTime @default(now())
 
   @@index([evaluationRunId])
+  @@index([evaluationMetricId])
   @@map("evaluation_results")
 }
 
@@ -1473,6 +1646,18 @@ enum ConsentType {
   // это значит вводить пользователя в заблуждение относительно того, на
   // что он реально соглашается.
   PUBLIC_IMAGE_SEARCH
+  // Пункт [health] (§3.5 ТЗ) — окремий тип, не тихе перевикористання
+  // RECORDING/EPHEMERAL_SERVER (ті покривають інший клас ризику: сам
+  // факт запису/передачі зовнішньому AI, не чутливість ЗМІСТУ).
+  // GDPR Article 9 special category — вимагає explicit consent, той
+  // самий клас вимоги, що вже застосований до RELIGIOUS_CONTENT, тут
+  // суворіше (PHI-суміжна інформація, не персональні уподобання).
+  HEALTH_DATA
+  // Пункт [dtp] (§3.2 ТЗ) — окремий від RECORDING (той описує запис
+  // ВЛАСНИХ розмов користувача з розкриттям) і від EXTERNAL_AI (куди
+  // дані передаються потім) — тут проблема геть інша: юридичний
+  // статус самого факту запису чужого голосу без його обізнаності.
+  THIRD_PARTY_AUDIO_RECORDING
 }
 
 model ConsentRecord {
@@ -1504,8 +1689,10 @@ model ConsentRecord {
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([userId, consentType])
+  @@index([projectId])
   @@map("consent_records")
 }
 
@@ -1520,55 +1707,6 @@ model ConsentRecord {
 // а не по существу — здесь разная семантика (UX vs security), не
 // дублирующая структура, так что разделение остаётся как в документе.
 // ───────────────────────────────────────────────────────────
-
-enum ProjectLogEventType {
-  STATUS_CHANGE
-  ESCALATION_THRESHOLD
-  SIGNAL_RAISED
-  SIGNAL_RESOLVED
-}
-
-enum LogColorTone {
-  GREEN
-  RED
-}
-
-model ProjectLogEntry {
-  id        String  @id @default(cuid())
-  projectId String
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  eventType ProjectLogEventType
-
-  // §3.39: обязателен при наличии colorTone — не проверяется схемой,
-  // см. README "Пункт 9", инвариант про обязательность involvedPersons.
-  colorTone LogColorTone?
-
-  description String
-  // Свободная ссылка на источник события (ID ConversationSignal,
-  // ProjectPerson-переход и т.п.) — не FK, потому что источники разные
-  // по типу (не вводим ещё одну полиморфную join-таблицу ради поля,
-  // которое используется только для "показать откуда взялась запись").
-  sourceRef String?
-
-  involvedPersons ProjectLogEntryPerson[]
-
-  createdAt DateTime @default(now())
-
-  @@index([projectId])
-  @@map("project_log_entries")
-}
-
-model ProjectLogEntryPerson {
-  id                String          @id @default(cuid())
-  projectLogEntryId String
-  projectLogEntry   ProjectLogEntry @relation(fields: [projectLogEntryId], references: [id], onDelete: Cascade)
-  personId          String
-  person            Person          @relation(fields: [personId], references: [id], onDelete: Cascade)
-
-  @@unique([projectLogEntryId, personId])
-  @@map("project_log_entry_people")
-}
 
 // Append-only по конвенции приложения, не по констрейнту БД (Postgres
 // не запрещает UPDATE/DELETE декларативно без триггеров — если нужна
@@ -1651,6 +1789,7 @@ model ContentScanResult {
   @@index([targetType])
   @@index([aiJobId])
   @@map("content_scan_results")
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 enum ScanDetectionType {
@@ -1715,10 +1854,12 @@ model SteelmanCase {
   derivedFromInference   AIInference? @relation(fields: [derivedFromInferenceId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
-
   supportingFacts SteelmanSupportingFact[]
 
+
   @@index([projectId, personId])
+  @@index([personId])
+  @@index([derivedFromInferenceId])
   @@map("steelman_cases")
 }
 
@@ -1733,8 +1874,11 @@ model SteelmanSupportingFact {
   steelmanCase   SteelmanCase @relation(fields: [steelmanCaseId], references: [id], onDelete: Cascade)
   personFactId   String
   personFact     PersonFact   @relation(fields: [personFactId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
 
   @@unique([steelmanCaseId, personFactId])
+  @@index([personFactId])
   @@map("steelman_supporting_facts")
 }
 
@@ -1773,6 +1917,8 @@ model ConversationScript {
   createdAt DateTime @default(now())
 
   @@index([projectId, type])
+  @@index([personId])
+  @@index([derivedFromInferenceId])
   @@map("conversation_scripts")
 }
 
@@ -1816,8 +1962,10 @@ model SafeShareAction {
   detectedItemsCount Int @default(0)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([userId])
+  @@index([projectId])
   @@map("safe_share_actions")
 }
 
@@ -1937,6 +2085,8 @@ model Commitment {
 
   @@index([projectId])
   @@index([personId, status])
+  @@index([extractedFromConversationId])
+  @@index([extractedFromSegmentId])
   @@map("commitments")
 }
 
@@ -1973,6 +2123,7 @@ model MissingInformationCheck {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("missing_information_checks")
 }
 
@@ -2027,6 +2178,7 @@ model BestNextMoveRecommendation {
   createdAt DateTime @default(now())
 
   @@index([conversationId])
+  @@index([generatedByInferenceId])
   @@map("best_next_move_recommendations")
 }
 
@@ -2080,8 +2232,10 @@ model SourceConflict {
   generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([personId])
+  @@index([generatedByInferenceId])
   @@map("source_conflicts")
 }
 
@@ -2128,6 +2282,7 @@ model ArgumentLifecycleEvent {
   createdAt DateTime @default(now())
 
   @@index([argumentId])
+  @@index([conversationId])
   @@map("argument_lifecycle_events")
 }
 
@@ -2180,8 +2335,10 @@ model Prediction {
   generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("predictions")
 }
 
@@ -2266,6 +2423,8 @@ model ArchetypePerspective {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([targetPersonId])
+  @@index([generatedByInferenceId])
   @@map("archetype_perspectives")
 }
 
@@ -2333,6 +2492,7 @@ model PersonCommunicationTrait {
 
   @@unique([personId, traitType])
   @@index([personId])
+  @@index([generatedByInferenceId])
   @@map("person_communication_traits")
 }
 
@@ -2461,6 +2621,7 @@ model BehaviorPrecedent {
   createdAt DateTime @default(now())
 
   @@index([personId])
+  @@index([generatedByInferenceId])
   @@map("behavior_precedents")
 }
 
@@ -2516,12 +2677,43 @@ model OutcomeScenario {
 
   confidence ScenarioConfidence
 
+  // Пункт [prompt-framework], §4.3 ТЗ (devils-advocate-prompt-framework-tz.md)
+  // — при реализации калибровочного gate обнаружено: это поле было
+  // задокументировано в исходном ТЗ (devils-advocate-tz.md, строка 1065,
+  // "по итогам финального аудита" — "числовая calibratedProbability
+  // появляется только после того, как накоплено достаточно исходов для
+  // калибровки"), тот же инвариант отражён в implementation-ready.md
+  // ("calibratedProbability: nullable"), но при фактической постройке
+  // OutcomeScenario (Пункт 47) поле не было добавлено вообще — только
+  // категориальный confidence выше. Добавлено сейчас, задним числом,
+  // честно зафиксировано здесь, не молча.
+  //
+  // NULL до накопления достаточной выборки — не "низкая вероятность",
+  // а буквально "ещё не откалибровано" (см. CalibrationService).
+  // Заполняется НЕ на уровне отдельного сценария напрямую предсказанием
+  // AI, а ретроспективно: эмпирическая точность confidence-корзины
+  // (LOW/MEDIUM/HIGH), в которую попал этот сценарий, посчитанная по
+  // уже подтверждённым исходам (outcomeConfirmed) в этой же корзине.
+  calibratedProbability Float?
+
+  // Пункт [prompt-framework]: без этого поля калибровать нечего —
+  // ни исходная схема, ни implementation-ready.md не предусматривали
+  // способа зафиксировать, сбылся ли конкретный сценарий на самом
+  // деле. NULL = исход ещё не известен/не подтверждён пользователем;
+  // true/false — подтверждено постфактум (тот же принцип честной
+  // деградации, что и у calibratedProbability выше — отсутствие
+  // значения не приравнивается к отрицательному исходу).
+  outcomeConfirmed Boolean?
+  outcomeConfirmedAt DateTime?
+
   generatedByInferenceId String?
   generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("outcome_scenarios")
 }
 
@@ -2655,9 +2847,11 @@ model ScheduledConversation {
   linkedConversation   Conversation? @relation(fields: [linkedConversationId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([projectId])
   @@index([scheduledAt])
+  @@index([personId])
   @@map("scheduled_conversations")
 }
 
@@ -2718,6 +2912,7 @@ model DecisionOutcome {
   recordedAt DateTime @default(now())
 
   @@map("decision_outcomes")
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 // ───────────────────────────────────────────────────────────
@@ -2777,12 +2972,14 @@ model SparringSession {
   endedAt DateTime?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   messages SparringMessage[]
   voiceReplyJobs SparringVoiceReplyJob[]
   compromiseSheets CompromiseSheet[]
 
   @@index([projectId])
+  @@index([targetPersonId])
   @@map("sparring_sessions")
 }
 
@@ -2809,6 +3006,7 @@ model SparringMessage {
   createdAt DateTime @default(now())
 
   @@index([sessionId, createdAt])
+  @@index([generatedByInferenceId])
   @@map("sparring_messages")
 }
 
@@ -2894,8 +3092,10 @@ model PublicArgumentSubmission {
   promotedToArgument   Argument? @relation(fields: [promotedToArgumentId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([projectId, status])
+  @@index([participantId])
   @@map("public_argument_submissions")
 }
 
@@ -2912,6 +3112,7 @@ model PublicComment {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([participantId])
   @@map("public_comments")
 }
 
@@ -2967,12 +3168,14 @@ model LibraryEntry {
   downvotes Int @default(0)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   arguments   LibraryArgument[]
   experiences LibraryExperience[]
 
   @@index([status])
   @@index([category])
+  @@index([submittedByUserId])
   @@map("library_entries")
 }
 
@@ -2986,6 +3189,7 @@ model LibraryArgument {
 
   @@index([libraryEntryId])
   @@map("library_arguments")
+  createdAt DateTime @default(now())
 }
 
 model LibraryExperience {
@@ -3044,6 +3248,21 @@ model MotiveHypothesis {
   // "Возможное объяснение", НИКОГДА не "его мотив"/"его цель" как
   // утверждение — формулировка проверяется в промпте, не только в UI.
   explanation             String
+
+  // Пункт [prompt-framework], §4.2 ТЗ (devils-advocate-prompt-framework-tz.md)
+  // — при реализации структурного evaluation gate обнаружено:
+  // implementation-ready.md, раздел 6, требует "каждая гипотеза...
+  // обязана иметь alternativeExplanation, иначе gate не пройден", но
+  // при фактической постройке MotiveHypothesis это поле не было
+  // добавлено — только основной explanation выше. Добавлено сейчас,
+  // задним числом, честно зафиксировано, не молча. Nullable — честно
+  // отражает реальность: генерация motive-analysis.service.ts пока НЕ
+  // заполняет это поле (отдельная задача поверх этой ревизии, не
+  // входит в неё — см. итоговое резюме реализации), gate для реальных
+  // (не тестовых) гипотез до этой доработки не может пройти по
+  // объективной причине, не по ошибке.
+  alternativeExplanation String?
+
   supportingFactsSummary  String // ссылка на конкретные факты, на основании которых строится гипотеза
   confidence              MotiveConfidenceLevel
 
@@ -3075,6 +3294,8 @@ model MotiveHypothesis {
 
   @@index([personId, projectId])
   @@index([createdByUserId, createdAt])
+  @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("motive_hypotheses")
 }
 
@@ -3148,6 +3369,7 @@ model MaterialVersion {
 
   @@unique([workingMaterialId, versionNumber])
   @@index([workingMaterialId])
+  @@index([generatedByInferenceId])
   @@map("material_versions")
 }
 
@@ -3186,6 +3408,7 @@ model Protocol {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("protocols")
 }
 
@@ -3290,6 +3513,7 @@ model SituationalQuote {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("situational_quotes")
 }
 
@@ -3306,6 +3530,7 @@ model SituationalAnecdote {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("situational_anecdotes")
 }
 
@@ -3359,6 +3584,7 @@ model VenueRecommendation {
   createdAt DateTime @default(now())
 
   @@index([scheduledConversationId])
+  @@index([generatedByInferenceId])
   @@map("venue_recommendations")
 }
 
@@ -3422,10 +3648,12 @@ model VenueApplication {
   moderatedAt DateTime?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   approvedVenue ApprovedVenue?
 
   @@index([status])
+  @@index([submittedByUserId])
   @@map("venue_applications")
 }
 
@@ -3462,7 +3690,7 @@ model ApprovedVenue {
   // уже применялось к SafeShareAction (шеринг) и другим местам
   // проекта, где показывается намерение/факт использования, не
   // фактическое движение денег.
-  referralFeeAmount Float? // сумма реферальной платы за одну бронь, согласованная с заведением при одобрении/позже — null = комиссия не согласована
+  referralFeeAmount Decimal? @db.Decimal(14, 2) // сумма реферальной платы за одну бронь, согласованная с заведением при одобрении/позже — null = комиссия не согласована
 
   // "Приоритетное размещение... промаркировано как реклама, не
   // смешивается с органической рекомендацией" — buкально ТЗ. Просто
@@ -3474,6 +3702,7 @@ model ApprovedVenue {
   // ───────────────────────────────────────────────────────────
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@map("approved_venues")
 }
@@ -3494,11 +3723,12 @@ model VenueBookingConfirmation {
   // Снапшот суммы на момент подтверждения — не пересчитывается
   // задним числом, если referralFeeAmount заведения поменяется позже
   // (тот же принцип снапшота, что у остальных полей ApprovedVenue).
-  referralFeeOwed Float?
+  referralFeeOwed Decimal? @db.Decimal(14, 2)
 
   createdAt DateTime @default(now())
 
   @@index([approvedVenueId])
+  @@index([confirmedByUserId])
   @@map("venue_booking_confirmations")
 }
 
@@ -3546,6 +3776,7 @@ model SparringVoiceReplyJob {
   errorMessage      String?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([sparringSessionId])
   @@map("sparring_voice_reply_jobs")
@@ -3637,8 +3868,10 @@ model CompromiseSheet {
   generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([sparringSessionId])
+  @@index([generatedByInferenceId])
   @@map("compromise_sheets")
 }
 
@@ -3654,6 +3887,7 @@ model CompromiseSheetItem {
   createdAt DateTime @default(now())
 
   @@index([compromiseSheetId])
+  @@index([argumentId])
   @@map("compromise_sheet_items")
 }
 
@@ -3702,6 +3936,7 @@ model ClosingMessage {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("closing_messages")
 }
 
@@ -3762,6 +3997,7 @@ model WeatherForecast {
   createdAt DateTime @default(now())
 
   @@index([scheduledConversationId])
+  @@index([generatedByInferenceId])
   @@map("weather_forecasts")
 }
 
@@ -3799,6 +4035,7 @@ model SchedulerAdvice {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("scheduler_advice")
 }
 
@@ -3839,6 +4076,7 @@ model CooldownNudgeEvent {
   dismissed Boolean @default(false) // "легко проигнорировать" — buкально ТЗ, честно фиксируется, не скрывается
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([projectId])
   @@map("cooldown_nudge_events")
@@ -3874,6 +4112,8 @@ model CooldownNudgeEvent {
 enum LiveHintType {
   ARGUMENT_SUGGESTION
   TOPIC_REPETITION
+  // Пункт [interview-pool] §4.2 ТЗ
+  UNASKED_QUESTION
 }
 
 model LiveHintEvent {
@@ -3889,6 +4129,11 @@ model LiveHintEvent {
   // же самого аргумента в следующих циклах.
   suggestedArgumentId String?
   suggestedArgument   Argument? @relation(fields: [suggestedArgumentId], references: [id], onDelete: SetNull)
+  // Пункт [interview-pool] §4.2 ТЗ — тільки для UNASKED_QUESTION,
+  // паралельне поле до suggestedArgumentId (той самий принцип "не
+  // повторювати вже підказане", джерело кандидатів інше).
+  suggestedQuestionnaireItemId String?
+  suggestedQuestionnaireItem   QuestionnaireItem? @relation(fields: [suggestedQuestionnaireItemId], references: [id], onDelete: SetNull)
 
   dismissed Boolean @default(false)
 
@@ -3896,8 +4141,12 @@ model LiveHintEvent {
   generatedByInference   AIInference? @relation(fields: [generatedByInferenceId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([projectId])
+  @@index([suggestedArgumentId])
+  @@index([suggestedQuestionnaireItemId])
+  @@index([generatedByInferenceId])
   @@map("live_hint_events")
 }
 
@@ -3941,6 +4190,7 @@ model LiveManipulationFlag {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("live_manipulation_flags")
 }
 
@@ -3983,6 +4233,7 @@ model BreakingQuestionSet {
   createdAt DateTime @default(now())
 
   @@index([projectId])
+  @@index([generatedByInferenceId])
   @@map("breaking_question_sets")
 }
 
@@ -4005,6 +4256,7 @@ model LiveArgumentTrackingStatus {
 
   @@index([projectId])
   @@map("live_argument_tracking_statuses")
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 // ───────────────────────────────────────────────────────────
@@ -4113,6 +4365,7 @@ model ProbingTopic {
 
   @@index([projectId])
   @@map("probing_topics")
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 // ───────────────────────────────────────────────────────────
@@ -4202,6 +4455,7 @@ model MaterialChatSession {
   refinedEditPrompt String?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   messages      MaterialChatMessage[]
   voiceReplyJobs MaterialChatVoiceReplyJob[]
@@ -4229,6 +4483,7 @@ model MaterialChatMessage {
   createdAt DateTime @default(now())
 
   @@index([sessionId, createdAt])
+  @@index([generatedByInferenceId])
   @@map("material_chat_messages")
 }
 
@@ -4246,7 +4501,1589 @@ model MaterialChatVoiceReplyJob {
   errorMessage       String?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([materialChatSessionId])
   @@map("material_chat_voice_reply_jobs")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [admin-panel] (devils-advocate-admin-panel-tz.md §4.1):
+// сессия админ-панели — ОТДЕЛЬНАЯ от TMA-сессий (у тех нет состояния
+// на сервере вообще, X-Telegram-Init-Data проверяется на каждый
+// запрос заново через HMAC). Админ-панели удобнее held session (не
+// показывать Telegram Login Widget на каждый клик) — компромисс в
+// другую сторону, чем TMA, осознанно, не по инерции.
+model AdminSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token     String   @unique // случайная строка, отдаётся клиенту как httpOnly cookie
+  expiresAt DateTime // 7 дней от создания — компромисс между удобством и риском кражи cookie
+
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([userId])
+  @@map("admin_sessions")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [media-review] (devils-advocate-media-review-tz.md §4):
+// Public Media Review — режим тестування вже наявного аналітичного
+// конвеєра на публічному YouTube-контенті. НЕ зберігає відео/аудіо
+// контент (§2.2 ТЗ — серверне завантаження свідомо виключено з
+// юридичних причин, активний позов 2:26-cv-00754) — тільки метадані
+// й статус зв'язку з реальною Conversation, яку користувач завантажує
+// сам через уже наявний UPLOADED_VIDEO флоу.
+model MediaReviewQueue {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title  String // назва черги, задає користувач ("Дебати про клімат — жовтень")
+
+  items MediaReviewQueueItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("media_review_queues")
+}
+
+model MediaReviewQueueItem {
+  id      String           @id @default(cuid())
+  queueId String
+  queue   MediaReviewQueue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+
+  youtubeVideoId  String
+  title           String
+  channelName     String
+  thumbnailUrl    String
+  durationSeconds Int?
+  publishedAt     DateTime?
+
+  status MediaReviewItemStatus @default(AWAITING_UPLOAD)
+
+  // Заповнюється, коли користувач завантажив файл і зв'язав його —
+  // звідси й далі вся аналітика йде через уже наявний конвеєр
+  // Conversation/ConversationParticipant/ConversationSignal, нових
+  // полів під аналіз тут немає.
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  orderIndex Int // порядок у черзі для послідовного режиму перегляду
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([queueId, orderIndex])
+  @@index([conversationId])
+  @@map("media_review_queue_items")
+}
+
+enum MediaReviewItemStatus {
+  AWAITING_UPLOAD // відео вибрано з пошуку, файл ще не завантажений користувачем
+  READY           // файл завантажено й зв'язано, готовий до аналізу
+  PROCESSING      // Conversation.status у процесі (STT/аналіз)
+  DONE
+}
+
+// Пункт [media-review] §5 ТЗ ("Rate-limit на рівні сервісу") — та сама
+// техніка, що вже застосована в PhotoVerificationService.assertUnderRateLimit():
+// лічильник по власних записах за останні 24 години, не in-memory
+// (Vercel serverless — інстанс не переживає між викликами, in-memory
+// лічильник був би недостовірним).
+model YouTubeSearchLog {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("youtube_search_logs")
+}
+
+// Пункт [media-review] (продолжение, по прямому запросу) — кэш
+// ответов Google Fact Check Tools API по хэшу нормализованного
+// claimText. Тот же паттерн, что уже применён в TtsCache
+// (text-to-speech.service.ts): ключ — sha256 запроса, не userId —
+// одинаковое утверждение от РАЗНЫХ пользователей переиспользует один
+// и тот же результат, не дублирует внешний вызов.
+//
+// В ОТЛИЧИЕ ОТ TtsCache — есть expiresAt (TTL), не вечный кэш. Аудио
+// для текста+голоса физически не может измениться, но фактчек для
+// одного и того же утверждения МОЖЕТ появиться позже (claim, который
+// сегодня не нашёлся ни у одного фактчекера, завтра может быть
+// проверен и опубликован) — вечный кэш "нет результатов" был бы
+// нечестным заморожённым срезом, не отражающим реальное состояние
+// внешнего источника.
+model FactCheckApiCache {
+  id String @id @default(cuid())
+
+  // sha256(normalized claimText) — нормализация (trim + collapse
+  // whitespace + lowercase) увеличивает частоту попаданий в кэш для
+  // семантически одинаковых, но по-разному напечатанных запросов
+  // ("Vaccines cause autism" / "vaccines  cause autism " — один хэш).
+  queryHash String @unique
+
+  claimText  String // оригинальный (не нормализованный) текст запроса — для аудита/дебага, не сам ключ поиска
+  resultJson Json   // сырой claims[] от Google Fact Check Tools API, уже в разобранном виде FactCheckClaim[] — повторное чтение из кэша не дублирует логику парсинга
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  expiresAt DateTime // TTL по умолчанию 24 часа (см. FACT_CHECK_CACHE_TTL_MS в сервисе) — тот же горизонт, что уже используется в проекте для rate-limit окон
+
+  @@index([expiresAt])
+  @@map("fact_check_api_cache")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [major-purchase] (devils-advocate-major-purchase-tz.md §4):
+// Major Purchase Assistant — коштовна покупка (нерухомість/авто).
+// Один об'єкт пошуку (проект), кілька переглянутих ВАРІАНТІВ, кожен
+// з гео-прив'язкою (ринок локальний) та власними зустрічами.
+model MajorPurchaseConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  category PurchaseCategory
+
+  budgetMin       Decimal? @db.Decimal(14, 2)
+  budgetMax       Decimal? @db.Decimal(14, 2)
+  currency        String? // "UAH"/"USD"/"EUR" — вільний рядок, не enum
+  financingMethod String? // "готівка"/"іпотека"/"кредит"/"trade-in" — вільний текст
+  timeline        String? // "протягом місяця"/"не поспішаю" — вільний текст
+
+  // Розширений опис цілі — той самий принцип, що
+  // InterviewPoolConfig.extendedDescription (документ, не реалізація)
+  // мав би: вільний текст, не форма з фіксованими секціями.
+  goalDescription String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  criteria QuizCriterion[]
+  variants PurchaseVariant[]
+
+  @@map("major_purchase_configs")
+}
+
+enum PurchaseCategory {
+  REAL_ESTATE
+  VEHICLE
+}
+
+model QuizCriterion {
+  id       String              @id @default(cuid())
+  configId String
+  config   MajorPurchaseConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String // "не менше 2 спалень" / "автомат, не механіка" / "рік випуску не старше 2020"
+  isRequired Boolean @default(true) // "критично" vs "бажано"
+  orderIndex Int
+
+  createdAt DateTime @default(now())
+
+  @@index([configId, orderIndex])
+  @@map("quiz_criteria")
+}
+
+// Один переглянутий ВАРІАНТ покупки — центральна сутність, довкола
+// якої організовані зустрічі/гео/висновки.
+model PurchaseVariant {
+  id       String              @id @default(cuid())
+  configId String
+  config   MajorPurchaseConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  label       String // ярлик користувача, "3-к квартира на Печерську" / "Toyota Camry в салоні на Столичному шосе"
+  askingPrice Decimal? @db.Decimal(14, 2)
+  currency    String?
+
+  // ── Гео (§2.1/2.2/3 ТЗ) — персистується навмисно, на відміну від
+  // WeatherForecastService, який навмисно НЕ зберігає координати. ──
+  placeId      String?
+  placeName    String?
+  placeAddress String?
+  latitude     Float?
+  longitude    Float?
+
+  meetings    PurchaseMeeting[]
+  comparisons MarketComparison[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  @@index([configId])
+
+  @@map("purchase_variants")
+}
+
+model PurchaseMeeting {
+  id        String          @id @default(cuid())
+  variantId String
+  variant   PurchaseVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime // може відрізнятись від Conversation.occurredAt, якщо запис додано заднім числом
+
+  // Висновок після ЦІЄЇ конкретної зустрічі (§5.5 ТЗ) — AI формує
+  // ЧЕРНЕТКУ (draftedAt), обов'язковий рев'ю перед тим, як вважається
+  // остаточним (reviewedAt) — технічний гейт, не тільки процесна
+  // домовленість (той самий принцип, що вже застосований у
+  // ClientReport.reviewedAt в документі Пункту [interview-pool]).
+  conclusionDraft String?
+  draftedAt       DateTime?
+  conclusionFinal String?
+  reviewedAt      DateTime?
+
+  // Пункт [major-purchase] (аудит): §5.6 ТЗ вимагає "структурований
+  // розбір по критеріях" у порівняльній таблиці — раніше
+  // getComparisonTable() повертав criteria[] і variants[] ОКРЕМО, без
+  // жодного зв'язку між ними (реальний гап, знайдений аудитом, не
+  // просто відсутня деталь). Заповнюється тим самим AI-викликом, що й
+  // conclusionDraft (не окремий виклик заради економії) — { criterionId,
+  // covered: "yes"|"partial"|"no"|"unknown", note }[]. "unknown", не
+  // примусово "no" — чесна деградація, коли розмова просто не торкнулась
+  // цього критерію, не обов'язково означає невідповідність.
+  criteriaBreakdown Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  @@index([variantId])
+  @@index([conversationId])
+
+  @@map("purchase_meetings")
+}
+
+// Порівняння з АНАЛОГІЧНИМ лістингом, який користувач сам вказав
+// посиланням (§2.3/5.4 ТЗ) — НЕ автоматичний скрапінг маркетплейсів
+// (юридична причина — активний клас судового ризику, той самий, що
+// вже задокументований для YouTube в Пункті [media-review]).
+model MarketComparison {
+  id        String          @id @default(cuid())
+  variantId String
+  variant   PurchaseVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  sourceUrl      String // посилання, яке користувач сам вказав
+  sourceText     String // витяг тексту сторінки (fetchUrlText), НЕ повний HTML
+  extractedPrice Decimal? @db.Decimal(14, 2) // якщо AI зміг впевнено виділити ціну — nullable, чесна деградація
+
+  createdAt DateTime @default(now())
+  @@index([variantId])
+
+  @@map("market_comparisons")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [interview-pool] (devils-advocate-interview-pool-tz.md):
+// пул співбесід — один job opening, кілька кандидатів, командний
+// доступ, обмін через Telegram, звіти для замовника.
+
+// ── Команда/агенція (§4.5 ТЗ) ──
+
+model RecruitingTeam {
+  id   String @id @default(cuid())
+  name String
+
+  createdAt DateTime @default(now())
+
+  members    RecruitingTeamMember[]
+  projects   Project[]
+  candidates CandidateProfile[]
+  invites    RecruitingTeamInvite[]
+
+  @@map("recruiting_teams")
+}
+
+model RecruitingTeamMember {
+  id     String         @id @default(cuid())
+  teamId String
+  team   RecruitingTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId String
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role RecruitingTeamRole @default(MEMBER)
+
+  joinedAt DateTime @default(now())
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("recruiting_team_members")
+}
+
+// Запрошення в команду (§4.5 ТЗ) — окрема легка модель, не поле на
+// самій команді, щоб можна було мати кілька активних запрошень з
+// різним expiresAt одночасно. Той самий принцип токена, що
+// publicShareToken (Пункт 56) — непередбачуваний, URL-safe.
+model RecruitingTeamInvite {
+  id     String         @id @default(cuid())
+  teamId String
+  team   RecruitingTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  token     String   @unique
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+  @@index([teamId])
+
+  @@map("recruiting_team_invites")
+}
+
+enum RecruitingTeamRole {
+  OWNER
+  MEMBER
+}
+
+// ── Кандидат (§3.0 ТЗ) — НЕ Person/ProjectPerson навмисно, ті
+// однокористувацькі за дизайном; тут видимість кільком рекрутерам —
+// вимога фічі. ──
+
+model CandidateProfile {
+  id String @id @default(cuid())
+
+  ownerUserId      String?
+  ownerUser        User?           @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  recruitingTeamId String?
+  recruitingTeam   RecruitingTeam? @relation(fields: [recruitingTeamId], references: [id], onDelete: Cascade)
+
+  displayName String
+  contactInfo String?
+  resumeText  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pipelineStatuses CandidatePipelineStatus[]
+  relevanceEntries PoolRelevanceEntry[]
+  clientReports    ClientReport[]
+  sentShares       CandidateShare[]
+  @@index([ownerUserId])
+  @@index([recruitingTeamId])
+
+  @@map("candidate_profiles")
+}
+
+model InterviewPoolConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  jobTitle            String
+  extendedDescription String
+
+  salaryRange      String?
+  employmentLoad   EmploymentLoad?
+  workArrangement  WorkArrangement?
+  officeLocation   String?
+  employmentFormat String?
+  perks            String[]
+
+  // §2.6 ТЗ — дефолт NOT_IMPORTANT, поля ізольовані від
+  // PoolRelevanceEntry/ClientReport (перевірено тестом).
+  genderRequirement GenderRequirement @default(NOT_IMPORTANT)
+  ageRequirement    AgeRequirement    @default(NOT_IMPORTANT)
+  minAge            Int?
+  maxAge            Int?
+  isPhysicallyDemanding Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  questions       QuestionnaireItem[]
+  interviewStages InterviewStageDefinition[]
+  complianceFlags ComplianceFlag[]
+
+  @@map("interview_pool_configs")
+}
+
+enum EmploymentLoad {
+  FULL_TIME
+  PART_TIME
+}
+
+enum WorkArrangement {
+  OFFICE
+  REMOTE
+  HYBRID
+}
+
+enum GenderRequirement {
+  NOT_IMPORTANT
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum AgeRequirement {
+  NOT_IMPORTANT
+  RANGE
+}
+
+model InterviewStageDefinition {
+  id       String              @id @default(cuid())
+  configId String
+  config   InterviewPoolConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  name             String
+  orderIndex       Int
+  isTestAssignment Boolean @default(false)
+  interviewerRole  String?
+
+  createdAt DateTime @default(now())
+
+  progress CandidateStageProgress[]
+
+  @@index([configId, orderIndex])
+  @@map("interview_stage_definitions")
+}
+
+model CandidateStageProgress {
+  id       String                  @id @default(cuid())
+  statusId String
+  status   CandidatePipelineStatus @relation(fields: [statusId], references: [id], onDelete: Cascade)
+
+  stageDefinitionId String
+  stageDefinition   InterviewStageDefinition @relation(fields: [stageDefinitionId], references: [id], onDelete: Cascade)
+
+  completedAt    DateTime?
+  conversationId String?
+  conversation   Conversation? @relation("StageProgressConversation", fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@unique([statusId, stageDefinitionId])
+  @@index([stageDefinitionId])
+  @@map("candidate_stage_progress")
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+// §2.6a ТЗ — решта захищених ознак (не стать/вік — ті мають бізнес-
+// кейс "фізична спроможність", ці — ні). Фіксується чесно, без
+// впливу на відбір, ніколи в ClientReport.
+model ComplianceFlag {
+  id       String              @id @default(cuid())
+  configId String
+  config   InterviewPoolConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  category       String
+  quotedText     String
+  conversationId String?
+  conversation   Conversation? @relation("ComplianceFlagConversation", fields: [conversationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+
+  @@map("compliance_flags")
+}
+
+model QuestionnaireItem {
+  id       String              @id @default(cuid())
+  configId String
+  config   InterviewPoolConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String
+  category   String?
+  orderIndex Int
+  isRequired Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  suggestedInHints LiveHintEvent[]
+
+  @@index([configId, orderIndex])
+  @@map("questionnaire_items")
+}
+
+model CandidatePipelineStatus {
+  id                 String           @id @default(cuid())
+  projectId          String
+  candidateProfileId String
+  project            Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+
+  stage CandidateStage @default(SCHEDULED)
+
+  // §4.7 ТЗ — чекбокс "врахувати результати попередньої співбесіди",
+  // зафіксований при addCandidate(). АУДИТ: раніше передавався в
+  // addCandidate() тільки транзитно (для historyDisclaimer), ніде не
+  // зберігався — getAgenda() фізично не міг знати пізніше, чи
+  // користувач це відмічав.
+  reuseHistory Boolean @default(false)
+
+  followUpRequests CandidateFollowUpRequest[]
+  stageProgress    CandidateStageProgress[]
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, candidateProfileId])
+  @@index([candidateProfileId])
+  @@map("candidate_pipeline_statuses")
+}
+
+// §2.3 ТЗ, п.2 — НЕМАЄ ACCEPTED/REJECTED навмисно, структурна
+// неможливість системі самій "вирішити" найм.
+enum CandidateStage {
+  SCHEDULED
+  INTERVIEWED
+  AWAITING_FOLLOWUP
+  UNDER_REVIEW
+}
+
+model CandidateFollowUpRequest {
+  id       String                  @id @default(cuid())
+  statusId String
+  status   CandidatePipelineStatus @relation(fields: [statusId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation("FollowUpConversation", fields: [conversationId], references: [id], onDelete: SetNull)
+
+  requestText String
+  fulfilled   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  @@index([statusId])
+
+  @@map("candidate_follow_up_requests")
+}
+
+model PoolRelevanceSnapshot {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  triggerConversationId String?
+
+  entries PoolRelevanceEntry[]
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@map("pool_relevance_snapshots")
+}
+
+model PoolRelevanceEntry {
+  id         String                 @id @default(cuid())
+  snapshotId String
+  snapshot   PoolRelevanceSnapshot  @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  candidateProfileId String
+  candidateProfile   CandidateProfile @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
+
+  // §2.3 ТЗ, п.1 — НЕ єдиний агрегований бал, структурований розбір.
+  criteriaBreakdown Json
+  attentionPoints   String[]
+  followUpRequestsDraft String[] // §4.4 ТЗ — сирий текст із того самого AI-виклику, перетворюється на CandidateFollowUpRequest[] сервісом, не зберігається тут подвійно
+  @@index([snapshotId])
+  @@index([candidateProfileId])
+
+  @@map("pool_relevance_entries")
+  createdAt DateTime @default(now())
+}
+
+// ── Обмін кандидатами через Telegram (§4.6 ТЗ) ──
+//
+// АУДИТ ПЕРЕД РЕАЛІЗАЦІЄЮ: перша версія ТЗ описувала пакетний шеринг
+// як "той самий CandidateShare, масив sourceCandidateId замість
+// одного" — математично неможливо в самій же схемі документа
+// (sourceCandidateId — скалярне поле, shareToken — @unique, один
+// unique-токен не може належати кільком рядкам). Виправлено:
+// shareToken (одиночний шеринг) і batchToken (пакетний) — окремі
+// поля, для пакету створюється N рядків CandidateShare з ОДНАКОВИМ
+// batchToken (не unique саме тому) і РІЗНИМ shareToken=null —
+// одне посилання веде до списку, кожен рядок зберігає свою власну
+// candidateConsentConfirmed окремо (§2.5 ТЗ: не можна "погодити всіх
+// одним чекбоксом" за них).
+model CandidateShare {
+  id String @id @default(cuid())
+
+  sourceCandidateId String
+  sourceCandidate   CandidateProfile @relation(fields: [sourceCandidateId], references: [id], onDelete: Cascade)
+
+  sharedByUserId String
+  sharedByUser   User   @relation(fields: [sharedByUserId], references: [id], onDelete: Cascade)
+
+  shareToken String? @unique
+  batchToken String?
+  expiresAt  DateTime
+
+  candidateConsentConfirmed Boolean @default(false)
+
+  acceptedByUserId          String?
+  acceptedAt                DateTime?
+  createdCandidateProfileId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([batchToken])
+  @@index([sourceCandidateId])
+  @@index([sharedByUserId])
+  @@map("candidate_shares")
+}
+
+// ── Звіти для замовника (§4.9 ТЗ) ──
+
+model ClientReport {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  type ClientReportType
+
+  candidateProfileId String?
+  candidateProfile   CandidateProfile? @relation(fields: [candidateProfileId], references: [id], onDelete: SetNull)
+
+  content Json
+
+  draftedAt        DateTime  @default(now())
+  reviewedAt        DateTime?
+  reviewedByUserId  String?
+
+  sentAt       DateTime?
+  sentViaShare String?
+  @@index([projectId])
+  @@index([candidateProfileId])
+
+  @@map("client_reports")
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+enum ClientReportType {
+  PER_CANDIDATE
+  SUMMARY
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [investment] (devils-advocate-investment-tz.md): коштовна
+// інвестиція — координація намірів групи, НЕ спільний рахунок і НЕ
+// платіжна система (§2.3/3.4 ТЗ). НІЯКОГО скорингу/сортування
+// варіантів між собою — MiFID II "personal recommendation" (§2.2/3.2
+// ТЗ) — структурна відсутність полів score/covered, не програмна
+// заборона.
+
+model InvestmentConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  goalDescription String
+  targetBudget    Decimal? @db.Decimal(14, 2)
+  currency        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  criteria      InvestmentQuizCriterion[]
+  opportunities InvestmentOpportunity[]
+
+  @@map("investment_configs")
+}
+
+// §2.5 ТЗ — три категорії з прямого запиту, структуровані явно (не
+// вільний текст category, як у QuestionnaireItem interview-pool) —
+// саме ці три мають підвищену юридичну вагу.
+enum InvestmentCriterionCategory {
+  RETURN_GUARANTEE
+  FEES_AND_LOSSES
+  TAXATION
+  OTHER
+}
+
+// Власна модель, не переюз QuizCriterion/QuestionnaireItem — рішення
+// прийняте окремим документом (спільний сервісний рушій свідомо
+// відхилений після аналізу двох попередніх модулів).
+model InvestmentQuizCriterion {
+  id       String           @id @default(cuid())
+  configId String
+  config   InvestmentConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String
+  category   InvestmentCriterionCategory
+  isRequired Boolean @default(true)
+  orderIndex Int
+
+  createdAt DateTime @default(now())
+
+  @@index([configId, orderIndex])
+  @@map("investment_quiz_criteria")
+}
+
+model InvestmentOpportunity {
+  id       String           @id @default(cuid())
+  configId String
+  config   InvestmentConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  label          String
+  advisorName    String?
+  advisorCompany String?
+
+  createdAt DateTime @default(now())
+
+  meetings    InvestmentMeeting[]
+  comparisons InvestmentSourceComparison[]
+  @@index([configId])
+
+  @@map("investment_opportunities")
+}
+
+model InvestmentMeeting {
+  id            String                @id @default(cuid())
+  opportunityId String
+  opportunity   InvestmentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime
+
+  // §3.2/3.3 ТЗ — розбір БЕЗ агрегованого балу, тільки нейтральний
+  // виклад per-critерій. НЕМАЄ поля "covered"/"score" НАВМИСНО —
+  // структурна, не програмна заборона на імпліцитну рекомендацію
+  // (MiFID II, §2.2 ТЗ).
+  criteriaBreakdown Json? // { criterionId, whatWasSaid, sourceSegmentId? }[]
+  draftedAt         DateTime?
+  reviewedAt        DateTime?
+  reviewNotes       String? // вільний текст САМОГО користувача після рев'ю, не AI-висновок
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  @@index([opportunityId])
+  @@index([conversationId])
+
+  @@map("investment_meetings")
+}
+
+// Той самий принцип, що MarketComparison (major-purchase) — user-
+// supplied URL, НЕ автоматичний пошук/скрапінг фінансових майданчиків.
+model InvestmentSourceComparison {
+  id            String                @id @default(cuid())
+  opportunityId String
+  opportunity   InvestmentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  sourceUrl  String
+  sourceText String
+  // НЕМАЄ extractedPrice/extractedScore навмисно (§3.2 ТЗ) — тільки
+  // сирий витяг тексту для власного прочитання користувачем.
+
+  createdAt DateTime @default(now())
+  @@index([opportunityId])
+
+  @@map("investment_source_comparisons")
+}
+
+// ── Група (§2.3/2.4/3.4 ТЗ) — self-directed investment club (SEC
+// guidance), НЕ класичний club зі спільним рахунком. ──
+
+model InvestmentGroup {
+  id   String @id @default(cuid())
+  name String
+
+  createdAt DateTime @default(now())
+
+  members  InvestmentGroupMember[]
+  invites  InvestmentGroupInvite[]
+  projects Project[]
+
+  @@map("investment_groups")
+}
+
+model InvestmentGroupMember {
+  id      String          @id @default(cuid())
+  groupId String
+  group   InvestmentGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId  String
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // §3.4 ТЗ — ЗАЯВЛЕНИЙ намір, не проведена транзакція. Немає поля
+  // "actuallyContributed" — продукт структурно не претендує знати,
+  // чи гроші реально передані (немає платіжної інфраструктури взагалі).
+  pledgedAmount Decimal? @db.Decimal(14, 2)
+
+  role InvestmentGroupRole @default(MEMBER)
+
+  joinedAt DateTime @default(now())
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("investment_group_members")
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+enum InvestmentGroupRole {
+  OWNER
+  MEMBER
+}
+
+// Той самий паттерн, що RecruitingTeamInvite — закритий deep-link,
+// не публічне приєднання (§2.4 ТЗ).
+model InvestmentGroupInvite {
+  id      String          @id @default(cuid())
+  groupId String
+  group   InvestmentGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  token     String   @unique
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+  @@index([groupId])
+
+  @@map("investment_group_invites")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [health] (devils-advocate-health-tz.md): серйозне медичне
+// рішення — НАЙЖОРСТКІШЕ звуження з чотирьох подібних модулів. FDA
+// non-device CDS виняток структурно недоступний (пацієнт-орієнтований
+// продукт) — жодного скорингу/оцінки/сортування взагалі, ніде, без
+// винятку (§2.1/2.4 ТЗ). Жодного аналізу медичних файлів/зображень
+// системою (§2.1 критерій 2/§3.3 ТЗ).
+
+model HealthConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  goalDescription String
+  targetBudget    Decimal? @db.Decimal(14, 2)
+  currency        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  criteria  HealthQuizCriterion[]
+  providers HealthProvider[]
+  labDocumentDrafts HealthLabDocumentDraft[]
+  budgetLineItems HealthBudgetLineItem[]
+
+  @@map("health_configs")
+}
+
+// §1 ТЗ, буквально три категорії з прямого запиту.
+enum HealthCriterionCategory {
+  PROCEDURE_NECESSITY
+  RISKS_AND_ALTERNATIVES
+  COST
+  OTHER
+}
+
+model HealthQuizCriterion {
+  id       String       @id @default(cuid())
+  configId String
+  config   HealthConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String
+  category   HealthCriterionCategory
+  isRequired Boolean @default(true)
+  orderIndex Int
+
+  createdAt DateTime @default(now())
+
+  @@index([configId, orderIndex])
+  @@map("health_quiz_criteria")
+}
+
+// "Джерело медичної думки" — лікар/клініка/спеціаліст, НЕ "варіант
+// лікування" (§2.4 ТЗ: продукт не порівнює методи лікування між
+// собою, тільки фіксує, ХТО що сказав).
+model HealthProvider {
+  id       String       @id @default(cuid())
+  configId String
+  config   HealthConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  label        String
+  providerName String?
+  specialty    String?
+
+  createdAt DateTime @default(now())
+
+  consultations HealthConsultation[]
+  sourceReferences HealthSourceReference[]
+  @@index([configId])
+
+  @@map("health_providers")
+}
+
+// ЗНАЙДЕНО ПРИ РЕАЛІЗАЦІЇ: §3.3 ТЗ обіцяв можливість прикріпити URL
+// публічного джерела ("той самий fetchUrlText, що в major-purchase/
+// investment"), але §6 API contract не мав відповідного ендпоінта
+// взагалі — реальний розрив між розділами документа. Додано за тим
+// самим принципом user-supplied URL, що InvestmentSourceComparison —
+// БЕЗ жодної AI-екстракції ціни/оцінки (тут навіть менше сенсу, ніж
+// у investment, — сирий текст для власного прочитання користувачем).
+model HealthSourceReference {
+  id         String         @id @default(cuid())
+  providerId String
+  provider   HealthProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  sourceUrl  String
+  sourceText String
+
+  createdAt DateTime @default(now())
+  @@index([providerId])
+
+  @@map("health_source_references")
+}
+
+model HealthConsultation {
+  id         String         @id @default(cuid())
+  providerId String
+  provider   HealthProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime
+
+  // §3.2 ТЗ — ЛИШЕ criterionId/whatWasSaid/sourceSegmentId, НІЯКОГО
+  // covered/score/recommended полів — структурна, не програмна
+  // заборона на медичну оцінку (§2.1/2.4 ТЗ).
+  criteriaBreakdown Json?
+  draftedAt         DateTime?
+  reviewedAt        DateTime?
+  reviewNotes       String?
+
+  estimatedCost Decimal? @db.Decimal(14, 2) // те, що ЦЕЙ провайдер назвав орієнтовною вартістю — не підсумкове поле з обчисленнями
+  currency      String? // (повний аудит проєкту) — та сама прогалина, що вже двічі
+                          // виправлена в DtpConsultation/FamilyLawConsultation.currency, тут
+                          // пропущена й знайдена окремим проходом.
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  budgetLineItems HealthBudgetLineItem[]
+  @@index([providerId])
+  @@index([conversationId])
+
+  @@map("health_consultations")
+}
+
+// Пункт [health-lab-ocr] — за прямим запитом, ПІСЛЯ явного обговорення
+// архітектурного ризику (див. діалог перед цим пунктом): OCR-чернетка
+// тексту з фото/файлу результату аналізу. НІКОЛИ не вважається фактом
+// — `verified` за замовчуванням false, вимагає явного підтвердження
+// користувача. НІКОЛИ не потрапляє в criteriaBreakdown/AI-виклик
+// generateBreakdown() — структурно ізольована модель, жодного зв'язку
+// з HealthConsultation взагалі, тільки з HealthConfig (лабораторний
+// результат стосується всього медичного рішення, не конкретного
+// лікаря). Сам файл/зображення НІКОЛИ не персистується — тільки
+// видобутий текст (той самий принцип мінімізації, що
+// PhotoVerificationService, тут суворіший: навіть без публічного
+// blob, base64 передається напряму в OCR-провайдер і одразу
+// відкидається).
+model HealthLabDocumentDraft {
+  id       String       @id @default(cuid())
+  configId String
+  config   HealthConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  ocrText String // сирий видобутий текст — ЧЕРНЕТКА, не факт
+
+  verified   Boolean   @default(false)
+  verifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  @@index([configId])
+
+  @@map("health_lab_document_drafts")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [family-law] (devils-advocate-family-law-tz.md): шлюбний
+// договір + розлучення/розділ майна — ОДНА схема з дискримінатором
+// contractType (§1.1/3.1 ТЗ), не дві паралельні. Найсуворіше "радник,
+// не суддя" з п'яти подібних модулів — жодного UPL-формулювання
+// ("вам належить", "суд вирішить"), той самий принцип, що заборона
+// на covered/score в criteriaBreakdown.
+
+enum FamilyLawContractType {
+  PRENUP
+  DIVORCE_SETTLEMENT
+}
+
+model FamilyLawConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  goalDescription String
+  targetBudget    Decimal? @db.Decimal(14, 2)
+  currency        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  criteria FamilyLawCriterion[]
+  advisors FamilyLawAdvisor[]
+
+  parties              FamilyLawParty[]
+  assets               FamilyLawAsset[]
+  statusDeterminations FamilyLawStatusDetermination[]
+  budgetLineItems      FamilyLawBudgetLineItem[]
+  goalRevisions        FamilyLawGoalRevision[]
+
+  @@map("family_law_configs")
+}
+
+// §1 ТЗ — три категорії, спільні для обох contractType.
+enum FamilyLawCriterionCategory {
+  ASSET_DIVISION
+  FINANCIAL_SUPPORT
+  PROCESS_AND_COST
+  OTHER
+}
+
+model FamilyLawCriterion {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String
+  category   FamilyLawCriterionCategory
+  isRequired Boolean @default(true)
+  orderIndex Int
+
+  createdAt DateTime @default(now())
+
+  @@index([configId, orderIndex])
+  @@map("family_law_criteria")
+}
+
+// "Джерело юридичної думки" — сімейний юрист/медіатор, НЕ "сторона
+// спору" (§3.4 ТЗ — подружжя НІКОЛИ не є FamilyLawAdvisor, структурна
+// неможливість, не політика UI).
+model FamilyLawAdvisor {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  label       String
+  advisorName String?
+  role        String?
+
+  createdAt DateTime @default(now())
+
+  consultations FamilyLawConsultation[]
+  @@index([configId])
+
+  @@map("family_law_advisors")
+}
+
+model FamilyLawConsultation {
+  id        String           @id @default(cuid())
+  advisorId String
+  advisor   FamilyLawAdvisor @relation(fields: [advisorId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime
+
+  // §2.2/3.3 ТЗ — окремий прапорець, що вмикає явне попередження про
+  // конфіденційність медіації. НЕ блокує запис — рішення належить
+  // користувачу й правилам самої медіації.
+  isMediationSession Boolean @default(false)
+
+  // §3.2 ТЗ — ЛИШЕ criterionId/whatWasSaid/sourceSegmentId, НІЯКОГО
+  // covered/score/recommended полів — структурна заборона на
+  // UPL-формулювання (§2.1/2.5 ТЗ).
+  criteriaBreakdown Json?
+  draftedAt         DateTime?
+  reviewedAt        DateTime?
+  reviewNotes       String?
+
+  estimatedCost Decimal? @db.Decimal(14, 2)
+  currency      String? // НОВЕ поле (devils-advocate-family-law-v2-tz.md §0) — той самий
+                          // принцип, що DtpConsultation.currency
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  budgetLineItems FamilyLawBudgetLineItem[]
+  @@index([advisorId])
+  @@index([conversationId])
+
+  @@map("family_law_consultations")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [dtp] (devils-advocate-dtp-tz.md): дорожньо-транспортна
+// пригода — та сама схема критерії/консультант/нейтральний розбір,
+// ПЛЮС принципово нова сутність DtpEvidenceItem (доказова фіксація з
+// камери телефону, video-only за замовчуванням, §3.1 ТЗ). Жодного
+// AI-аналізу доказів системою, жодного визначення винуватця —
+// найсуворіше обмеження з шести подібних модулів разом із
+// family-law.
+
+model DtpConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  goalDescription String
+  targetBudget    Decimal? @db.Decimal(14, 2)
+  currency        String?
+  occurredAt      DateTime? // час самої ДТП, не створення проєкту
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  criteria DtpCriterion[]
+  advisors DtpAdvisor[]
+  evidence DtpEvidenceItem[]
+
+  participants        DtpParticipant[]
+  faultDeterminations DtpFaultDetermination[]
+  budgetLineItems     DtpBudgetLineItem[]
+
+  @@map("dtp_configs")
+}
+
+// §1 ТЗ — три категорії, специфічні для ДТП.
+enum DtpCriterionCategory {
+  FAULT_DETERMINATION
+  DAMAGE_AND_REPAIR
+  INSURANCE_COVERAGE
+  OTHER
+}
+
+model DtpCriterion {
+  id       String    @id @default(cuid())
+  configId String
+  config   DtpConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String
+  category   DtpCriterionCategory
+  isRequired Boolean @default(true)
+  orderIndex Int
+
+  createdAt DateTime @default(now())
+
+  @@index([configId, orderIndex])
+  @@map("dtp_criteria")
+}
+
+// "Джерело фахової думки" — страховий агент/юрист/незалежний
+// експерт-оцінювач, той самий принцип, що FamilyLawAdvisor/HealthProvider.
+model DtpAdvisor {
+  id       String    @id @default(cuid())
+  configId String
+  config   DtpConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  label       String
+  advisorName String?
+  role        String?
+
+  createdAt DateTime @default(now())
+
+  consultations DtpConsultation[]
+  @@index([configId])
+
+  @@map("dtp_advisors")
+}
+
+model DtpConsultation {
+  id        String     @id @default(cuid())
+  advisorId String
+  advisor   DtpAdvisor @relation(fields: [advisorId], references: [id], onDelete: Cascade)
+
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime
+
+  // §3.3 ТЗ — ЛИШЕ criterionId/whatWasSaid/sourceSegmentId, той самий
+  // формат, що вже чотири рази застосований, тут без винятку.
+  criteriaBreakdown Json?
+  draftedAt         DateTime?
+  reviewedAt        DateTime?
+  reviewNotes       String?
+
+  estimatedCost Decimal? @db.Decimal(14, 2)
+  currency      String? // НОВЕ поле (devils-advocate-dtp-v2-tz.md §0, знахідка 3) —
+                          // власна валюта витрати, раніше мовчки покладалась на DtpConfig.currency
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  budgetLineItems DtpBudgetLineItem[]
+  @@index([advisorId])
+  @@index([conversationId])
+
+  @@map("dtp_consultations")
+}
+
+enum DtpEvidenceMediaType {
+  PHOTO
+  VIDEO
+}
+
+// §3.1/3.3/3.4 ТЗ — чисте зберігання з метаданими, НІКОЛИ жодного
+// AI-виклику. hasAudio за замовчуванням false — центральне рішення
+// документа, примусово false для PHOTO на рівні сервісу (аудит §0 ТЗ).
+model DtpEvidenceItem {
+  id       String    @id @default(cuid())
+  configId String
+  config   DtpConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  mediaType DtpEvidenceMediaType
+  hasAudio  Boolean  @default(false)
+  blobUrl   String   // приватне сховище (putPrivateBlob(), нова інфраструктура §3.4 ТЗ)
+  fileHash  String   // SHA-256, обчислений при завантаженні — цілісність доказу
+
+  capturedAt DateTime // час фіксації на пристрої, не час завантаження на сервер
+  latitude   Float?   // тільки за ConsentType.LOCATION, той самий принцип, що решта продукту
+  longitude  Float?
+
+  createdAt DateTime @default(now())
+
+  accessLogs DtpEvidenceAccessLog[]
+  @@index([configId])
+
+  @@map("dtp_evidence_items")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [dtp-v2] (devils-advocate-dtp-v2-tz.md): учасники, вина,
+// страхування, деталізований бюджет, чернетка протоколу, журнал
+// цілісності доказів. cross-consultation-check ВИНЕСЕНИЙ у спільний
+// CriteriaComparisonService (амендмент, devils-advocate-family-law-v2-tz.md
+// §3.5) — тут немає окремої DTP-моделі під нього, тільки виклик спільного сервісу.
+
+enum DtpParticipantRole {
+  SELF
+  OTHER_PARTY
+  THIRD_PARTY
+}
+
+model DtpParticipant {
+  id       String    @id @default(cuid())
+  configId String
+  config   DtpConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  role         DtpParticipantRole
+  displayName  String?
+  hasFledScene Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  insurance       DtpParticipantInsurance?
+  budgetLineItems DtpBudgetLineItem[]
+  @@index([configId])
+
+  @@map("dtp_participants")
+}
+
+model DtpParticipantInsurance {
+  id            String         @id @default(cuid())
+  participantId String         @unique
+  participant   DtpParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  hasInsurance   Boolean @default(false)
+  insurerName    String?
+  policyType     String?
+  coverageAmount Decimal? @db.Decimal(14, 2)
+  currency       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@map("dtp_participant_insurance")
+}
+
+enum DtpFaultSource {
+  POLICE
+  INSURANCE_COMPANY
+  COURT
+  MUTUAL_AGREEMENT
+  UNDETERMINED
+}
+
+// §3.2 ТЗ — СПИСОК, заповнюється КОРИСТУВАЧЕМ, ніколи AI.
+model DtpFaultDetermination {
+  id       String    @id @default(cuid())
+  configId String
+  config   DtpConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  source       DtpFaultSource
+  statusText   String
+  determinedAt DateTime
+
+  isOfficial              Boolean @default(false)
+  referenceDocumentNumber String?
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+
+  @@map("dtp_fault_determinations")
+}
+
+enum DtpBudgetCategory {
+  REPAIR
+  LEGAL_FEES
+  INSURANCE_DEDUCTIBLE
+  MEDICAL
+  OTHER
+}
+
+enum DtpBudgetDirection {
+  EXPENSE
+  COVERAGE
+}
+
+model DtpBudgetLineItem {
+  id       String    @id @default(cuid())
+  configId String
+  config   DtpConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  category    DtpBudgetCategory
+  direction   DtpBudgetDirection
+  amount      Decimal @db.Decimal(14, 2)
+  currency    String?
+  description String?
+
+  participantId String?
+  participant   DtpParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  consultationId String?
+  consultation   DtpConsultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+  @@index([participantId])
+  @@index([consultationId])
+
+  @@map("dtp_budget_line_items")
+}
+
+enum DtpEvidenceAccessAction {
+  VIEWED_METADATA
+  DOWNLOADED
+}
+
+// Append-only — жодного UPDATE/DELETE в сервісі.
+model DtpEvidenceAccessLog {
+  id         String          @id @default(cuid())
+  evidenceId String
+  evidence   DtpEvidenceItem @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+
+  userId     String
+  action     DtpEvidenceAccessAction
+  occurredAt DateTime @default(now())
+  @@index([evidenceId])
+
+  @@map("dtp_evidence_access_logs")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [family-law-v2] (devils-advocate-family-law-v2-tz.md): сторони,
+// реєстр активів, статус процесу, деталізований бюджет, історія
+// повістки питання. cross-consultation-check — спільний
+// CriteriaComparisonService, той самий, що DTP.
+
+enum FamilyLawPartyRole {
+  SELF
+  SPOUSE
+}
+
+model FamilyLawParty {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  role        FamilyLawPartyRole
+  displayName String?
+
+  createdAt DateTime @default(now())
+
+  assets          FamilyLawAsset[]
+  budgetLineItems FamilyLawBudgetLineItem[]
+  @@index([configId])
+
+  @@map("family_law_parties")
+}
+
+// §2.2/3.3 ТЗ — власна модель, НЕ той самий факт, що DtpParticipantInsurance.
+model FamilyLawAsset {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  assetType   String
+  description String?
+
+  ownerId String?
+  owner   FamilyLawParty? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  isMaritalProperty Boolean @default(true)
+
+  estimatedValue Decimal? @db.Decimal(14, 2)
+  currency       String?
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+  @@index([ownerId])
+
+  @@map("family_law_assets")
+}
+
+enum FamilyLawStatusSource {
+  COURT_FILING
+  MEDIATION_AGREEMENT
+  INFORMAL_AGREEMENT
+  UNDETERMINED
+}
+
+// §3.2 ТЗ — ВЛАСНИЙ enum джерела (НЕ спільний з DtpFaultSource — ревізія
+// власного плану, задокументована в самому документі §0). Заповнюється
+// КОРИСТУВАЧЕМ, ніколи AI.
+model FamilyLawStatusDetermination {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  source       FamilyLawStatusSource
+  statusText   String
+  determinedAt DateTime
+
+  isOfficial              Boolean @default(false)
+  referenceDocumentNumber String?
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+
+  @@map("family_law_status_determinations")
+}
+
+enum FamilyLawBudgetCategory {
+  ASSET_TRANSFER
+  LEGAL_FEES
+  SUPPORT_PAYMENT
+  OTHER
+}
+
+enum FamilyLawBudgetDirection {
+  EXPENSE
+  COVERAGE
+}
+
+model FamilyLawBudgetLineItem {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  category    FamilyLawBudgetCategory
+  direction   FamilyLawBudgetDirection
+  amount      Decimal @db.Decimal(14, 2)
+  currency    String?
+  description String?
+
+  partyId String?
+  party   FamilyLawParty? @relation(fields: [partyId], references: [id], onDelete: SetNull)
+
+  consultationId String?
+  consultation   FamilyLawConsultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+  @@index([partyId])
+  @@index([consultationId])
+
+  @@map("family_law_budget_line_items")
+}
+
+// §3.7 ТЗ — історія повістки питання, немає аналога в ДТП (нова знахідка).
+model FamilyLawGoalRevision {
+  id       String          @id @default(cuid())
+  configId String
+  config   FamilyLawConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  goalDescription String
+  changedAt       DateTime @default(now())
+  @@index([configId])
+
+  @@map("family_law_goal_revisions")
+}
+
+// ───────────────────────────────────────────────────────────
+// Пункт [health-budget] — повна структуризація бюджету, за зразком
+// devils-advocate-dtp-v2-tz.md §3.4/devils-advocate-family-law-v2-tz.md
+// §3.4. Немає учасників/статусу процесу — не запитано, той самий
+// принцип "не додавати про запас", що вже застосований по всьому
+// продукту. Тільки бюджет: byCurrency (групування, не наївна сума —
+// той самий фікс, що ДТП v2/family-law v2, тут одразу з першого
+// проходу) і hasLegacyEstimatedCosts (видимість ризику подвійного
+// обліку з HealthConsultation.estimatedCost).
+
+enum HealthBudgetCategory {
+  PROCEDURE_COST
+  MEDICATION
+  INSURANCE_COVERAGE
+  OTHER
+}
+
+enum HealthBudgetDirection {
+  EXPENSE
+  COVERAGE
+}
+
+model HealthBudgetLineItem {
+  id       String      @id @default(cuid())
+  configId String
+  config   HealthConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  category    HealthBudgetCategory
+  direction   HealthBudgetDirection
+  amount      Decimal @db.Decimal(14, 2)
+  currency    String?
+  description String?
+
+  consultationId String?
+  consultation   HealthConsultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  @@index([configId])
+  @@index([consultationId])
+
+  @@map("health_budget_line_items")
+}
+
+// ── Intake — универсальный голосовой квиз на входе ──
+// ТЗ devils-advocate-domain-ui-and-voice-intake-tz.md §2.3. Только текст
+// ответов — аудио не персистится нигде. suggestedScenario и chosenScenario
+// хранятся ОБА: расхождение «предложил/выбрал» — калибровочный сигнал.
+
+enum IntakeStatus {
+  IN_PROGRESS
+  DISPATCHED
+  ABANDONED
+}
+
+model IntakeSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status IntakeStatus @default(IN_PROGRESS)
+  // [{ question: string|null, text: string, at: ISO }]
+  answers Json @default("[]")
+
+  suggestedScenario   String? // DomainId | 'UNIVERSAL'
+  confidence          Float?
+  followUpQuestion    String?
+  // извлечённое AI на последнем шаге: { question, goal?, facts[], contractType? }
+  extracted           Json?
+  chosenScenario      String?
+  dispatchedProjectId String?
+  dispatchedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([status, updatedAt])
+  @@map("intake_sessions")
 }

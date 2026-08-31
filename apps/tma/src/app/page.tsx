@@ -101,7 +101,7 @@ export default function HomePage() {
       <h1>Devil&apos;s Advocate</h1>
       <ReligiousReminderBanner />
       <p>
-        <Link href="/projects">Мои разговоры →</Link> · <Link href="/privacy">Приватность →</Link> · <Link href="/calibration">Калибровка решений →</Link> · <Link href="/library">Библиотека →</Link> · <Link href="/settings">Настройки →</Link> · <Link href="/venues">Заведения →</Link>
+        <Link href="/intake">🎤 Не знаете, с чего начать? →</Link> · <Link href="/domains">Сценарии →</Link> · <Link href="/projects">Мои разговоры →</Link> · <Link href="/privacy">Приватность →</Link> · <Link href="/calibration">Калибровка решений →</Link> · <Link href="/library">Библиотека →</Link> · <Link href="/settings">Настройки →</Link> · <Link href="/venues">Заведения →</Link>
       </p>
 
       {!externalAiGranted && (

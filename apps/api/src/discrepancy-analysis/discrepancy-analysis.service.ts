@@ -7,12 +7,19 @@
 // разговора, (4) публично доступные факты. Реализованы (1)-(3) —
 // используют уже существующую инфраструктуру (Argument, история
 // разговоров через participant.personId, транскрипт текущего
-// разговора). (4) НЕ реализовано — требует внешнего поиска
-// (веб-поиск/OSINT), которого в развёрнутом приложении нет вообще
-// (у меня как у Claude есть web_search, но это НЕ то же самое, что
-// возможность деплойнутого AIRouterService — тот умеет только вызывать
-// LLM-провайдеров, не поисковые системы). Честно исключено, не
-// притворяется реализованным через AI-догадку без реального источника.
+// разговора). (4) на момент Пункта 37 было честно исключено — требовало
+// внешнего поиска, которого в развёрнутом приложении не было вообще.
+//
+// ОБНОВЛЕНО Пунктом [fact-check-source-closure] (по прямому запросу,
+// devils-advocate-fact-check-source-closure-tz.md): (4) теперь ЧАСТИЧНО
+// закрыто — checkAgainstFactCheckAPI() ниже (изначально построен для
+// Пункта [media-review], но НЕ привязан к media-review контексту —
+// работает на любой Conversation любого пользователя) закрывает узкий
+// класс широких фактических утверждений через Google Fact Check Tools
+// API. НЕ закрыто и не планируется: полный автономный веб-поиск,
+// проверка цен/оценок стоимости, поиск ПО ЧЕЛОВЕКУ как объекту (Fact
+// Check Tools API структурно не имеет такого параметра — см. границы
+// в самом методе ниже и в devils-advocate-media-review-tz.md §3).
 //
 // НОВАЯ Prisma-модель НЕ заводилась — та же логика, что уже
 // применялась к Turning Points/Manipulation Detector: ConversationSignal
@@ -43,10 +50,68 @@
 // ЖЕ другими репликами, не путать говорящих между собой.
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { ConversationProcessingStatus, ConversationSignalType, SignalSeverity } from '@prisma/client';
+import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SignalSeverity } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
+import { SecretsService } from '../secrets/secrets.service';
+
+// Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
+// Google Fact Check Tools API — четвёртый источник сверки §3.16 ТЗ
+// implementation-ready, отдельный от checkAgainstUserSource() выше.
+// Ключевое отличие: не AI сравнивает утверждение с текстом источника
+// (как в checkAgainstUserSource) — сам Fact Check Tools API УЖЕ
+// возвращает структурированный рейтинг (textualRating) от
+// аккредитованного фактчекера, AI-вызов здесь вообще не нужен.
+const FACT_CHECK_API_KEY_REF = 'FACT_CHECK_TOOLS_API_KEY';
+const FACT_CHECK_API_URL = 'https://factchecktools.googleapis.com/v1alpha1/claims:search';
+// Кэш ответов (продолжение Пункта [media-review], по прямому запросу)
+// — 24 часа, тот же горизонт, что уже используется в проекте для
+// rate-limit окон (PhotoVerificationService/YouTubeSearchService).
+// Достаточно короткий, чтобы не замораживать надолго состояние
+// внешнего источника, достаточно длинный, чтобы реально экономить
+// повторные вызовы в пределах одной сессии тестирования.
+const FACT_CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/** Расширение на будущее (2026-08-30, по прямому запросу) — раньше
+ * pageSize не задавался (дефолт API — 10), результат смотрел только
+ * первую страницу. Теперь запрашиваем по 20 за раз и следуем
+ * nextPageToken до FACT_CHECK_PAGE_LIMIT страниц. Потолок ограничивает
+ * СУММАРНОЕ число обращений к внешнему API за один вызов —
+ * без него одна проверка одной реплики могла бы утянуть неограниченно
+ * много страниц у API с исторически невысокой квотой; 3 страницы × 20 =
+ * до 60 claims на вызов — с запасом для точечной проверки одной
+ * реплики, не исследовательского батч-запроса. */
+const FACT_CHECK_PAGE_SIZE = 20;
+const FACT_CHECK_PAGE_LIMIT = 3;
+
+export interface FactCheckClaim {
+  claimId: string; // Fact Check Tools API не возвращает собственный id claim — синтезируется здесь (см. buildClaimId), для стабильной ссылки factCheckClaimId
+  text: string;
+  claimant?: string;
+  claimDate?: string;
+  publisher: string;
+  textualRating: string;
+  reviewUrl: string;
+  /** Расширение на будущее (2026-08-30, по прямому запросу) —
+   * ClaimReview.title из официальной схемы: заголовок статьи-разбора
+   * у фактчекера, если он его указал. Не всегда присутствует. */
+  title?: string;
+  /** ClaimReview.reviewDate — дата ПУБЛИКАЦИИ разбора у фактчекера,
+   * не дата исходного утверждения (это claimDate выше). Для оценки
+   * свежести вердикта релевантнее claimDate: реплика могла прозвучать
+   * годы назад, а разбор мог выйти вчера или наоборот. */
+  reviewDate?: string;
+}
+
+function buildClaimId(reviewUrl: string, publisher: string): string {
+  // Стабильный синтетический id — Fact Check Tools API отдаёт claim
+  // без собственного идентификатора, только массив claimReview[]. URL
+  // самой фактчек-статьи уникален и стабилен между вызовами того же
+  // claim, используется как основа id, не случайный uuid (который был
+  // бы разным при повторном поиске того же самого claim).
+  return Buffer.from(`${publisher}:${reviewUrl}`).toString('base64url').slice(0, 40);
+}
 
 const TASK_TYPE = 'discrepancy-analysis';
 const PRIOR_CONVERSATIONS_LIMIT = 5; // тот же лимит и то же обоснование, что ConversationAgendaService — не раздувать промпт бесконечно на давних фигурантах
@@ -128,6 +193,7 @@ export class DiscrepancyAnalysisService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly secrets: SecretsService,
   ) {}
 
   async detect(userId: string, conversationId: string) {
@@ -200,7 +266,7 @@ export class DiscrepancyAnalysisService {
       segments.map((s: (typeof segments)[number]): [string, (typeof segments)[number]] => [s.id, s]),
     );
 
-    const created = [];
+    const created: Array<ConversationSignal & { segment: (typeof segments)[number]; sourceDescription: string }> = [];
     for (const point of rawPoints) {
       const segment = segmentById.get(point.segmentId);
       if (!segment) continue; // AI сослался на несуществующий id реплики — пропускаем, не падаем на всём батче
@@ -328,7 +394,7 @@ export class DiscrepancyAnalysisService {
     // Сигнал создаётся ТОЛЬКО при реальном противоречии — "источник
     // подтверждает" или "источника недостаточно" не создают запись в
     // ConversationSignal, только информационный ответ пользователю.
-    let signal = null;
+    let signal: ConversationSignal | null = null;
     if (parsed.outcome === 'CONTRADICTED') {
       signal = await this.prisma.conversationSignal.create({
         data: {
@@ -349,6 +415,204 @@ export class DiscrepancyAnalysisService {
       sourceUrl: url,
       signal: signal ? { ...signal, sourceDescription: `Источник по ссылке, указанной пользователем: ${url} — ${parsed.explanation}` } : null,
     };
+  }
+
+  /** Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
+   * четвёртый источник сверки, ВТОРАЯ реализация после
+   * checkAgainstUserSource() — тот же принцип границы ответственности
+   * (Пункт 40): пользователь сам формулирует claimText (не сырой
+   * текст сегмента автоматически, см. acceptance-тест §6 ТЗ), выбор
+   * "что проверять" остаётся за аналитиком, не за системой.
+   *
+   * ЕДИНИЦА ПОИСКА — ТВЕРДЖЕННЯ, НЕ ЛЮДИНА (§3 ТЗ, п.1) — Fact Check
+   * Tools API физически не имеет параметра "найти всё про человека X",
+   * только query по тексту claim — структурная, не договорная защита
+   * от превращения в инструмент профилирования конкретного человека
+   * (тот же риск, что уже был явно отклонён в Пункте 40).
+   *
+   * НЕ вызывает AIRouterService вообще — в отличие от
+   * checkAgainstUserSource(), здесь не нужен AI-вызов для сравнения:
+   * сам Fact Check Tools API уже возвращает готовый textualRating от
+   * аккредитованного фактчекера, AI ничего не оценивает заново. */
+  async checkAgainstFactCheckAPI(userId: string, conversationId: string, segmentId: string, claimText: string) {
+    const conversation = await this.findOwnedConversationWithTranscript(userId, conversationId);
+    const segment = (conversation.transcript?.segments ?? []).find((s: { id: string }) => s.id === segmentId);
+    if (!segment) {
+      throw new NotFoundException(`TranscriptSegment ${segmentId} not found in conversation ${conversationId}`);
+    }
+    if (!claimText || claimText.trim().length === 0) {
+      throw new BadRequestException('claimText must not be empty — сформулируйте конкретное твердение для проверки');
+    }
+
+    const claims = await this.fetchFactCheckClaims(claimText);
+
+    // Честная деградация (§3.16 ТЗ, тот же принцип, что уже применён
+    // к checkAgainstUserSource): создаём сигнал ТОЛЬКО если найден
+    // хотя бы один claim с рейтингом, явно указывающим на
+    // недостоверность — textualRating не контролируемый словарь
+    // (разные фактчекеры пишут "False"/"Pants on Fire"/"4 Pinocchios"
+    // по-разному), поэтому НЕ пытаемся автоматически мапить его на
+    // конкретный SignalSeverity через угадывание — фиксируем на
+    // самом низком уровне INACCURACY ("требует проверки", буквально
+    // §3.16), финальную оценку серьёзности делает аналитик вручную
+    // (та же confirmIntentionalFalsehood()-механика, что уже есть).
+    const NEGATIVE_RATING_PATTERN = /false|fake|misleading|pants on fire|incorrect|unproven|missing context/i;
+    const hasNegativeRating = claims.some((c) => NEGATIVE_RATING_PATTERN.test(c.textualRating));
+
+    let signal: ConversationSignal | null = null;
+    if (hasNegativeRating) {
+      signal = await this.prisma.conversationSignal.create({
+        data: {
+          signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
+          transcriptSegmentId: segment.id,
+          participantId: segment.participantId,
+          severity: SignalSeverity.INACCURACY,
+        },
+      });
+      const negativeClaim = claims.find((c) => NEGATIVE_RATING_PATTERN.test(c.textualRating))!;
+      await this.prisma.conversationSignalEvidence.create({
+        data: {
+          conversationSignalId: signal.id,
+          factCheckClaimId: negativeClaim.claimId,
+          // Пункт [fact-check-source-closure]: тот же детектируемый
+          // маркер "Источник — ...", что уже проверяется в
+          // exportFactsToVerify() (wasFactCheckVerified ниже) — без
+          // этого записанное здесь описание не распозналось бы как
+          // "уже проверено", несмотря на реальную проверку.
+          // Расширение на будущее (2026-08-30, по прямому запросу) —
+          // title теперь доступен (см. FactCheckClaim.title), включаем
+          // в описание доказательства, если фактчекер его указал —
+          // не выдумываем заголовок, если поле пустое.
+          factCheckSourceDescription: `Источник — Google Fact Check Tools API: ${negativeClaim.publisher} оценил утверждение как "${negativeClaim.textualRating}"${negativeClaim.title ? ` («${negativeClaim.title}»)` : ''} (${negativeClaim.reviewUrl})`,
+        },
+      });
+    }
+
+    return { claims, signal };
+  }
+
+  /** Пункт [media-review] (продолжение, по прямому запросу) — кэш
+   * ответов Google Fact Check Tools API по хэшу нормализованного
+   * claimText, тот же паттерн, что уже применён в TtsCache
+   * (text-to-speech.service.ts): ключ — sha256 запроса, не userId,
+   * одинаковое утверждение от разных пользователей переиспользует
+   * один и тот же результат.
+   *
+   * TTL 24 часа, В ОТЛИЧИЕ ОТ TtsCache (вечный кэш) — фактчек для
+   * утверждения, которое сегодня ничего не нашло, может появиться
+   * завтра у аккредитованного издания; вечное кэширование "пустого"
+   * результата было бы нечестной заморозкой состояния внешнего
+   * источника, не экономией. */
+  private async fetchOnePage(
+    claimText: string,
+    apiKey: string,
+    pageToken?: string,
+  ): Promise<{ claims: FactCheckClaim[]; nextPageToken?: string }> {
+    const url = new URL(FACT_CHECK_API_URL);
+    url.searchParams.set('query', claimText);
+    url.searchParams.set('key', apiKey);
+    url.searchParams.set('pageSize', String(FACT_CHECK_PAGE_SIZE));
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+    let response: Response;
+    try {
+      response = await fetch(url.toString());
+    } catch {
+      throw new BadGatewayException('Google Fact Check Tools API недоступен — попробуйте позже');
+    }
+    if (!response.ok) {
+      // Полный аудит Fact Check Tools API 2026-08-30 — тело ответа
+      // раньше отбрасывалось, хотя Google обычно возвращает
+      // {"error":{"code","message","status"}} с точной причиной
+      // (PERMISSION_DENIED — API не включён в Google Cloud Console,
+      // RESOURCE_EXHAUSTED — квота, INVALID_ARGUMENT — плохой ключ) —
+      // без тела все три неотличимы друг от друга по одному статус-коду.
+      // Тот же фикс, что применён сегодня к AssemblyAI/ElevenLabs.
+      const body = await response.text().catch(() => '<unreadable>');
+      throw new BadGatewayException(`Google Fact Check Tools API вернул ошибку (${response.status}): ${body.slice(0, 300)}`);
+    }
+
+    const data = (await response.json()) as {
+      claims?: Array<{
+        text?: string;
+        claimant?: string;
+        claimDate?: string;
+        claimReview?: Array<{
+          publisher?: { name?: string };
+          textualRating?: string;
+          url?: string;
+          title?: string;
+          reviewDate?: string;
+        }>;
+      }>;
+      nextPageToken?: string;
+    };
+
+    // Разворачиваем claims[].claimReview[] в плоский список — один
+    // claim может иметь несколько claimReview от разных публикаторов,
+    // каждый — отдельная строка результата, со своим reviewUrl.
+    const claims: FactCheckClaim[] = (data.claims ?? []).flatMap((c) =>
+      (c.claimReview ?? [])
+        .filter((r) => r.url && r.publisher?.name)
+        .map((r) => ({
+          claimId: buildClaimId(r.url!, r.publisher!.name!),
+          text: c.text ?? claimText,
+          claimant: c.claimant,
+          claimDate: c.claimDate,
+          publisher: r.publisher!.name!,
+          textualRating: r.textualRating ?? 'не указан',
+          reviewUrl: r.url!,
+          title: r.title,
+          reviewDate: r.reviewDate,
+        })),
+    );
+
+    return { claims, nextPageToken: data.nextPageToken };
+  }
+
+  /** Постраничный обход claims:search до FACT_CHECK_PAGE_LIMIT страниц
+   * (расширение на будущее, 2026-08-30, по прямому запросу — раньше
+   * смотрели только первую страницу, до 10 claims максимум). Останов
+   * раньше потолка, если Google не вернул nextPageToken — честно, не
+   * запрашивает страницы, которых заведомо не будет. */
+  private async fetchAllPages(claimText: string, apiKey: string): Promise<FactCheckClaim[]> {
+    const allClaims: FactCheckClaim[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < FACT_CHECK_PAGE_LIMIT; page++) {
+      const { claims, nextPageToken } = await this.fetchOnePage(claimText, apiKey, pageToken);
+      allClaims.push(...claims);
+      if (!nextPageToken) break;
+      pageToken = nextPageToken;
+    }
+    return allClaims;
+  }
+
+  private async fetchFactCheckClaims(claimText: string): Promise<FactCheckClaim[]> {
+    const normalized = claimText.trim().toLowerCase().replace(/\s+/g, ' ');
+    const queryHash = createHash('sha256').update(normalized).digest('hex');
+
+    const cached = await this.prisma.factCheckApiCache.findUnique({ where: { queryHash } });
+    if (cached && cached.expiresAt > new Date()) {
+      return cached.resultJson as unknown as FactCheckClaim[];
+    }
+
+    const apiKey = await this.secrets.resolve(FACT_CHECK_API_KEY_REF);
+    const claims = await this.fetchAllPages(claimText, apiKey);
+
+    const expiresAt = new Date(Date.now() + FACT_CHECK_CACHE_TTL_MS);
+    // Гонка двух одновременных запросов с одинаковым claimText — тот
+    // же паттерн, что уже применён в TextToSpeechService.synthesize():
+    // upsert вместо create+catch, идемпотентно перезаписывает при
+    // повторном создании (второй параллельный вызов победит последним,
+    // не критично — оба вызова вернули бы тот же самый внешний
+    // результат в рамках одного окна кэша).
+    await this.prisma.factCheckApiCache.upsert({
+      where: { queryHash },
+      create: { queryHash, claimText, resultJson: claims as any, expiresAt },
+      update: { resultJson: claims as any, expiresAt },
+    });
+
+    return claims;
   }
 
   /** Пункт 41 — по прямому запросу, альтернатива автономному поиску:
@@ -411,11 +675,12 @@ export class DiscrepancyAnalysisService {
       STRONG_DISCREPANCY: 'СИЛЬНОЕ РАСХОЖДЕНИЕ',
     };
 
-    // "Проверено вручную" — это ТОЛЬКО checkAgainstUserSource() с
-    // реальной ссылкой (текст содержит "Источник по ссылке,
-    // указанной пользователем" — тот же литерал, что записывается
-    // при создании такого сигнала). Не путать с текстом из detect() —
-    // тот описывает, ГДЕ AI РЕКОМЕНДУЕТ искать, не факт проверки.
+    // "Проверено вручную" — checkAgainstUserSource() ИЛИ
+    // checkAgainstFactCheckAPI() с реальным результатом (текст содержит
+    // один из двух детектируемых литералов, записываемых при создании
+    // такого сигнала — см. resolveSignalDetails()/checkAgainstFactCheckAPI
+    // выше). Не путать с текстом из detect() — тот описывает, ГДЕ AI
+    // РЕКОМЕНДУЕТ искать, не факт проверки.
     const lines: string[] = [];
     let toVerifyCount = 0;
     sorted.forEach((signal: any, i: number) => {
@@ -424,7 +689,9 @@ export class DiscrepancyAnalysisService {
         ?? 'Говорящий';
       const statement = signal.transcriptSegment?.text ?? '(текст реплики недоступен)';
       const severityLabel = SEVERITY_LABELS[signal.severity as string] ?? signal.severity;
-      const wasManuallyChecked = signal.sourceDescription?.includes('Источник по ссылке, указанной пользователем');
+      const wasManuallyChecked =
+        signal.sourceDescription?.includes('Источник по ссылке, указанной пользователем') ||
+        signal.sourceDescription?.includes('Источник — Google Fact Check Tools API');
       const impactText = signal.potentialImpact ?? 'влияние не оценено AI при обнаружении';
 
       // Требуемый порядок в строке: важность → факт → влияние в скобках.
@@ -512,8 +779,18 @@ export class DiscrepancyAnalysisService {
    * вручную" от "AI-догадка о направлении поиска". */
   private resolveSignalDetails(signal: {
     transcriptSegmentId: string | null;
-    evidence: Array<{ aiInference: { output: string } | null }>;
+    evidence: Array<{ aiInference: { output: string } | null; factCheckSourceDescription?: string | null }>;
   }): { sourceDescription: string | null; potentialImpact: string | null } {
+    // Пункт [fact-check-source-closure]: проверяется ПЕРВЫМ, отдельно
+    // от цикла ниже — checkAgainstFactCheckAPI() никогда не вызывает
+    // AI, поэтому evidence.aiInference для таких записей всегда null,
+    // и без этой проверки они молча пропускались бы циклом целиком
+    // (`if (!ev.aiInference) continue`), теряя sourceDescription.
+    const factCheckEvidence = signal.evidence.find((ev) => ev.factCheckSourceDescription);
+    if (factCheckEvidence) {
+      return { sourceDescription: factCheckEvidence.factCheckSourceDescription!, potentialImpact: null };
+    }
+
     for (const ev of signal.evidence) {
       if (!ev.aiInference) continue;
       try {

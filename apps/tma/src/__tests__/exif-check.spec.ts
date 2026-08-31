@@ -4,7 +4,7 @@ import { checkExifForGeoTag, stripExifMetadata, checkMp4ForGeoTag, stripMp4Metad
 // (Exif + TIFF IFD0 с одной записью) + SOS + "данные изображения".
 // Не настоящий декодируемый JPEG — но структурно достаточен, чтобы
 // проверить именно логику сегмент-парсера/поиска тега, не рендеринг.
-function buildSyntheticJpeg(options: { includeGpsTag: boolean }): Uint8Array {
+function buildSyntheticJpeg(options: { includeGpsTag: boolean }): Uint8Array<ArrayBuffer> {
   const parts: number[] = [];
 
   // SOI
@@ -61,7 +61,7 @@ function buildBox(type: string, body: number[]): number[] {
 // Синтетический MP4/MOV-подобный буфер: ftyp + moov(udta(©xyz?)) —
 // минимально достаточен для проверки логики box-парсера, не настоящее
 // декодируемое видео.
-function buildSyntheticMp4(options: { includeGeoTag: boolean }): Uint8Array {
+function buildSyntheticMp4(options: { includeGeoTag: boolean }): Uint8Array<ArrayBuffer> {
   const ftyp = buildBox('ftyp', [0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 1]); // произвольное содержимое, достаточно валидного box-заголовка
 
   const xyzString = '+37.3349-122.0090+000.000/';

@@ -1,4 +1,8 @@
-import { Controller, Delete, Get, Param, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, UseGuards, UseInterceptors } from '@nestjs/common';
+
+class DeleteAccountDto {
+  confirmation!: string;
+}
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
@@ -19,6 +23,12 @@ export class PrivacyCenterController {
   async deletePerson(@CurrentUser() userId: string, @Param('id') id: string) {
     await this.privacyCenter.deletePerson(userId, id);
     return { deleted: true };
+  }
+
+  /** GDPR art. 17 — удаление аккаунта со всеми данными (аудит БД §2.4). */
+  @Delete('account')
+  async deleteAccount(@CurrentUser() userId: string, @Body() dto: DeleteAccountDto) {
+    return this.privacyCenter.deleteAccount(userId, dto.confirmation);
   }
 
   @Get('export')

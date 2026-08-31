@@ -1,5 +1,20 @@
 import { SparringService } from '../sparring/sparring.service';
-import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+
+// Повторный аудит 2026-08-30: SparringService получил ConsentService —
+// голосовая реплика уходит внешнему провайдеру, и раньше это не
+// проверялось ничем. В спеках согласие считается выданным (сценарии
+// самой проверки живут в consent.service.spec.ts и
+// conversations.service.spec.ts), но вызов фиксируется — тест ниже
+// проверяет, что он реально происходит.
+function fakeConsent(calls: string[] = []) {
+  return {
+    calls,
+    assertAudioMayLeaveDevice: async (userId: string, projectId?: string) => {
+      calls.push(`${userId}:${projectId ?? '-'}`);
+    },
+  };
+}
 
 function createFakePrisma() {
   const projects = new Map<string, any>();
@@ -170,6 +185,10 @@ class FakeTranscriptionService {
   externalJobId = 'assemblyai-job-1';
   streamUploadCalled = false;
   submitJobCalled = false;
+  // Финальный аудит 2026-08-30 — реальный вебхук несёт только
+  // transcript_id/status; getTranscriptResult() имитирует отдельный GET.
+  getResultCalls: string[] = [];
+  transcriptResultByJobId: Record<string, any> = {};
 
   async streamUpload() {
     this.streamUploadCalled = true;
@@ -179,6 +198,11 @@ class FakeTranscriptionService {
   async submitJob() {
     this.submitJobCalled = true;
     return { externalJobId: this.externalJobId };
+  }
+
+  async getTranscriptResult(_apiKey: string, transcriptId: string) {
+    this.getResultCalls.push(transcriptId);
+    return this.transcriptResultByJobId[transcriptId] ?? { status: 'completed', id: transcriptId };
   }
 }
 
@@ -229,7 +253,7 @@ async function run() {
   test('startSession() бросает BadRequestException при archetypeType=REAL_PERSON без targetPersonId', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(
       () => svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, 'REAL_PERSON' as any),
       BadRequestException,
@@ -240,7 +264,7 @@ async function run() {
   test('startSession() бросает BadRequestException при archetypeType=CUSTOM без описания', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(
       () => svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, 'CUSTOM' as any),
       BadRequestException,
@@ -252,7 +276,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, 'TROUBLEMAKER' as any);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('скандалист'), true, 'описание архетипа TROUBLEMAKER попало в промпт');
@@ -261,7 +285,7 @@ async function run() {
   test('КЛЮЧЕВОЙ ТЕСТ: startSession() сохраняет archetypeType и снапшот voiceId на сессии', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, 'JEALOUS_SPOUSE' as any);
     assertEqual(session.archetypeType, 'JEALOUS_SPOUSE', 'архетип сохранён');
@@ -272,7 +296,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, 'CUSTOM' as any, 'Строгий начальник старой закалки');
     assertEqual(session.customArchetypeDescription, 'Строгий начальник старой закалки', 'кастомное описание сохранено');
@@ -282,7 +306,7 @@ async function run() {
   test('startSession() без архетипа — обратная совместимость, archetypeType=null', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     assertEqual(session.archetypeType, null, 'без архетипа — null, старое поведение не сломано');
@@ -292,7 +316,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, 'LAWYER' as any);
     await svc.reply(USER_ID, session.id, 'Мой ответ оппоненту');
@@ -304,7 +328,7 @@ async function run() {
   test('submitVoiceReply() бросает NotFoundException для чужой сессии', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, new FakeTranscriptionService() as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, new FakeTranscriptionService() as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(
       () => svc.submitVoiceReply(USER_ID, 'nonexistent-session', 'https://fake/audio.mp3'),
       NotFoundException,
@@ -312,11 +336,41 @@ async function run() {
     );
   });
 
+  test('КЛЮЧЕВОЙ ТЕСТ (повторный аудит 2026-08-30): голосовая реплика не уходит провайдеру без проверки согласий', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    const calls: string[] = [];
+    const consent = {
+      assertAudioMayLeaveDevice: async () => {
+        calls.push('checked');
+        throw new ForbiddenException('Consent required: RECORDING');
+      },
+    };
+    const transcription = { streamUpload: async () => { calls.push('UPLOADED'); return 'url'; } };
+    const svc = new SparringService(
+      prisma as any, new FakeAIRouterService() as any, transcription as any, {} as any,
+      new FakeTextToSpeechService() as any, consent as any,
+    );
+    const session = await prisma.sparringSession.create({
+      data: { projectId: PROJECT_ID, status: 'ACTIVE', archetypeType: 'TROUBLEMAKER' },
+    });
+
+    await assertThrowsAsync(
+      () => svc.streamUploadVoiceReply(USER_ID, session.id, null as any),
+      ForbiddenException,
+      'streamUploadVoiceReply() без согласий',
+    );
+    // Проверка ДО отправки байтов, а не после: иначе аудио уже у
+    // провайдера к моменту отказа — ровно та ошибка, которую аудит
+    // нашёл в ConversationsService.streamUploadAudio().
+    assertEqual(calls, ['checked'], 'ни одной загрузки при отсутствии согласия');
+  });
+
   test('КЛЮЧЕВОЙ ТЕСТ: submitVoiceReply() запускает транскрибацию и создаёт PENDING job', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTranscription = new FakeTranscriptionService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
@@ -329,16 +383,18 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTranscription = new FakeTranscriptionService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
 
-    await svc.handleVoiceReplyWebhook({
+    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = {
       status: 'completed',
       id: fakeTranscription.externalJobId,
       utterances: [{ speaker: 'A', text: 'Мой голосовой ответ', start: 0, end: 1000 }],
-    } as any);
+    };
+    // Финальный аудит 2026-08-30: реальный вебхук несёт только transcript_id/status.
+    await svc.handleVoiceReplyWebhook({ transcript_id: fakeTranscription.externalJobId, status: 'completed' } as any);
 
     const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === job.id);
     assertEqual(updatedJob.status, 'COMPLETED', 'job переведён в COMPLETED');
@@ -354,13 +410,14 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTranscription = new FakeTranscriptionService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
     const messagesBefore = prisma._getMessages().length;
 
-    await svc.handleVoiceReplyWebhook({ status: 'error', id: fakeTranscription.externalJobId, error: 'audio too short' } as any);
+    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = { status: 'error', id: fakeTranscription.externalJobId, error: 'audio too short' };
+    await svc.handleVoiceReplyWebhook({ transcript_id: fakeTranscription.externalJobId, status: 'error' } as any);
 
     const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === job.id);
     assertEqual(updatedJob.status, 'FAILED', 'job честно переведён в FAILED');
@@ -372,12 +429,13 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTranscription = new FakeTranscriptionService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
 
-    await svc.handleVoiceReplyWebhook({ status: 'completed', id: fakeTranscription.externalJobId, utterances: [] } as any);
+    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = { status: 'completed', id: fakeTranscription.externalJobId, utterances: [] };
+    await svc.handleVoiceReplyWebhook({ transcript_id: fakeTranscription.externalJobId, status: 'completed' } as any);
 
     const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === job.id);
     assertEqual(updatedJob.status, 'FAILED', 'пустая транскрипция честно помечена FAILED, не создаёт пустую реплику');
@@ -385,16 +443,24 @@ async function run() {
 
   test('handleVoiceReplyWebhook() молча игнорирует неизвестный externalTranscriptionJobId (не роняет обработчик)', async () => {
     const prisma = createFakePrisma();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, new FakeTranscriptionService() as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, new FakeTranscriptionService() as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     // Не должно бросить исключение — AssemblyAI будет ретраить webhook на не-200, важно не падать на неизвестном job.
-    await svc.handleVoiceReplyWebhook({ status: 'completed', id: 'unknown-job-id', utterances: [] } as any);
+    await svc.handleVoiceReplyWebhook({ transcript_id: 'unknown-job-id', status: 'completed' } as any);
+  });
+
+  test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): handleVoiceReplyWebhook() без transcript_id — не падає, GET до AssemblyAI не робиться', async () => {
+    const prisma = createFakePrisma();
+    const fakeTranscription = new FakeTranscriptionService();
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
+    await svc.handleVoiceReplyWebhook({ status: 'completed' } as any);
+    assertEqual(fakeTranscription.getResultCalls, [], 'без transcript_id зайвий зовнішній виклик не робиться');
   });
 
   test('getVoiceReplyStatus() бросает NotFoundException для job из другой сессии', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTranscription = new FakeTranscriptionService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const sessionA = await svc.startSession(USER_ID, PROJECT_ID);
     const sessionB = await svc.startSession(USER_ID, PROJECT_ID);
@@ -410,7 +476,7 @@ async function run() {
   test('startSession() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(() => svc.startSession(USER_ID, PROJECT_ID), NotFoundException, 'startSession() на чужой проект');
   });
 
@@ -418,7 +484,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     assertEqual(session.targetPersonId, null, 'общий оппонент без привязки к человеку');
@@ -435,7 +501,7 @@ async function run() {
     prisma._seedRelationship({ personAId: 'person-1', personBId: 'other', label: 'муж финансового директора' });
     prisma._seedPrecedent({ personId: 'person-1', precedentDescription: 'В марте отказал без объяснений' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     await svc.startSession(USER_ID, PROJECT_ID, 'person-1');
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Начальник Иван'), true, 'имя попало в промпт');
@@ -447,7 +513,7 @@ async function run() {
   test('startSession() бросает NotFoundException, если targetPersonId не привязан к проекту', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(
       () => svc.startSession(USER_ID, PROJECT_ID, 'not-in-project'),
       NotFoundException,
@@ -460,14 +526,14 @@ async function run() {
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
     await prisma.sparringSession.create({ data: { projectId: PROJECT_ID } });
     const [session] = prisma._getSessions();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(() => svc.reply(USER_ID, session.id, 'x'), NotFoundException, 'reply() на чужую сессию');
   });
 
   test('reply() бросает BadRequestException для уже завершённой сессии', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     await svc.endSession(USER_ID, session.id);
     await assertThrowsAsync(() => svc.reply(USER_ID, session.id, 'x'), BadRequestException, 'reply() на завершённую сессию');
@@ -476,7 +542,7 @@ async function run() {
   test('reply() бросает BadRequestException для пустого текста', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     await assertThrowsAsync(() => svc.reply(USER_ID, session.id, '   '), BadRequestException, 'reply() с пустым текстом');
   });
@@ -485,7 +551,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     const session = await svc.startSession(USER_ID, PROJECT_ID); // первое сообщение оппонента
     await svc.reply(USER_ID, session.id, 'Мой первый ответ на возражение');
@@ -501,7 +567,7 @@ async function run() {
   test('reply() создаёт и USER-сообщение, и ответ OPPONENT', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     const session = await svc.startSession(USER_ID, PROJECT_ID);
 
     const [userMsg, opponentMsg] = await svc.reply(USER_ID, session.id, 'Мой ответ');
@@ -513,7 +579,7 @@ async function run() {
   test('reply() бросает BadRequestException при достижении лимита сообщений', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     const session = await svc.startSession(USER_ID, PROJECT_ID);
 
     // Досеиваем сообщения напрямую, чтобы не делать 40 реальных вызовов.
@@ -527,7 +593,7 @@ async function run() {
   test('endSession() проставляет status=ENDED и endedAt', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     const session = await svc.startSession(USER_ID, PROJECT_ID);
 
     const ended = await svc.endSession(USER_ID, session.id);
@@ -538,7 +604,7 @@ async function run() {
   test('listSessions() возвращает сессии проекта', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await svc.startSession(USER_ID, PROJECT_ID);
     await svc.startSession(USER_ID, PROJECT_ID);
 
@@ -549,7 +615,7 @@ async function run() {
   test('getSession() возвращает сессию со всеми сообщениями по порядку', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     const session = await svc.startSession(USER_ID, PROJECT_ID);
     await svc.reply(USER_ID, session.id, 'Ответ пользователя');
 
@@ -561,7 +627,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new SparringService(prisma as any, failingRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, failingRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await assertThrowsAsync(() => svc.startSession(USER_ID, PROJECT_ID), BadGatewayException, 'startSession() при недоступности провайдера');
   });
 
@@ -670,7 +736,7 @@ async function run() {
     seedProject(prisma);
     prisma._seedScheduledConversation({ id: 'sched-1', projectId: PROJECT_ID, personId: null, scheduledAt: new Date() }); // без preGeneratedSparringOpenerText
     const fakeRouter = new FakeAIRouterService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, undefined, undefined, 'sched-1');
     assertEqual(fakeRouter.callCount, 1, 'без предзаготовки — обычная генерация, AI вызван как раньше');

@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
+import { NotRestrictedGuard } from '../telegram-auth/not-restricted.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-session.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { VenueApplicationService, SubmitApplicationInput } from './venue-application.service';
@@ -46,6 +48,7 @@ export class VenueApplicationController {
   }
 
   @Post('venue-applications')
+  @UseGuards(NotRestrictedGuard) // devils-advocate-admin-panel-tz.md §4.3
   async submit(@CurrentUser() userId: string, @Body() dto: SubmitApplicationInput) {
     return this.venueApplication.submitApplication(userId, dto);
   }
@@ -55,8 +58,41 @@ export class VenueApplicationController {
     return this.venueApplication.listMyApplications(userId);
   }
 
-  // Модерация — требует User.isVenueModerator (проверяется внутри
-  // сервиса, тот же минимальный подход, что у LibraryController).
+  // confirmBooking — самоотчёт обычного пользователя о состоявшейся
+  // брони (§3.22), НЕ действие модератора: assertModerator() внутри
+  // VenueApplicationService на этот метод не навешен (проверено —
+  // единственный из monetization-методов сервиса без него), поэтому
+  // остаётся на TelegramAuthGuard вместе с остальными пользовательскими
+  // эндпоинтами этого контроллера, не переезжает в модерационный.
+  @Post('approved-venues/:approvedVenueId/booking-confirmations')
+  async confirmBooking(
+    @CurrentUser() userId: string,
+    @Param('approvedVenueId') approvedVenueId: string,
+    @Body() dto: ConfirmBookingDto,
+  ) {
+    return this.venueApplication.confirmBooking(userId, approvedVenueId, dto.scheduledConversationId);
+  }
+}
+
+// Пункт [admin-panel] (devils-advocate-admin-panel-tz.md §4.1) —
+// та же поправка к буквальной формулировке ТЗ, что уже применена к
+// LibraryController (см. комментарий там): весь VenueApplicationController
+// переключить на AdminSessionGuard нельзя, не сломав search/autofill/
+// submit/listMine/confirmBooking — обычные действия пользователя TMA.
+// Сюда вынесены только методы, которые VenueApplicationService реально
+// защищает через assertModerator() (проверено в коде, не предположение):
+// listPendingForModeration, moderate, setReferralFee, setPriorityPartner,
+// getCommissionSummary — те самые функции, которые более ранний аудит
+// TMA (см. TODO.md, «Оставшиеся неиспользуемые функции API TMA») нашёл
+// «осиротевшими» именно потому, что ждали интерфейс администрирования,
+// не обычного пользователя. VenueApplicationService не меняется вообще
+// (acceptance-тест §5.4).
+@Controller()
+@UseGuards(AdminSessionGuard)
+@UseInterceptors(ApiResponseInterceptor)
+export class VenueApplicationModerationController {
+  constructor(private readonly venueApplication: VenueApplicationService) {}
+
   @Get('venue-applications/moderation-queue')
   async listPending(@CurrentUser() userId: string) {
     return this.venueApplication.listPendingForModeration(userId);
@@ -71,7 +107,8 @@ export class VenueApplicationController {
     return this.venueApplication.moderate(userId, applicationId, dto.decision, dto.referralFeeAmount);
   }
 
-  // ── Пункт 67 (§3.22 "Монетизация") ──
+  // ── Пункт 67 (§3.22 "Монетизация") — тоже модерационные/операционные
+  // действия, не путь обычного пользователя. ──
 
   @Patch('approved-venues/:approvedVenueId/referral-fee')
   async setReferralFee(
@@ -89,15 +126,6 @@ export class VenueApplicationController {
     @Body() dto: SetPriorityPartnerDto,
   ) {
     return this.venueApplication.setPriorityPartner(userId, approvedVenueId, dto.isPriorityPartner);
-  }
-
-  @Post('approved-venues/:approvedVenueId/booking-confirmations')
-  async confirmBooking(
-    @CurrentUser() userId: string,
-    @Param('approvedVenueId') approvedVenueId: string,
-    @Body() dto: ConfirmBookingDto,
-  ) {
-    return this.venueApplication.confirmBooking(userId, approvedVenueId, dto.scheduledConversationId);
   }
 
   @Get('approved-venues/:approvedVenueId/commission-summary')

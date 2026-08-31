@@ -27,6 +27,7 @@
 // "подтвердите ещё раз то, что вы только что явно выбрали".
 
 import { Injectable } from '@nestjs/common';
+import { countryNameToCode } from '../legal-disclaimer/jurisdiction-bucket';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
@@ -40,6 +41,7 @@ export interface SaveOnboardingInput {
   religion?: string | null;
   city?: string | null;
   country?: string | null;
+  countryCode?: string | null;
 }
 
 interface RawReligionSuggestion {
@@ -87,10 +89,14 @@ export class OnboardingService {
   }
 
   async save(userId: string, input: SaveOnboardingInput) {
-    const data: { religion?: string | null; city?: string | null; country?: string | null } = {};
+    const data: { religion?: string | null; city?: string | null; country?: string | null; countryCode?: string | null } = {};
     if (input.religion !== undefined) data.religion = input.religion || null;
     if (input.city !== undefined) data.city = input.city || null;
-    if (input.country !== undefined) data.country = input.country || null;
+    if (input.country !== undefined) {
+      data.country = input.country || null;
+      // код: явно переданный, иначе распознанный по названию (ручной ввод)
+      data.countryCode = input.countryCode || countryNameToCode(input.country) || null;
+    }
 
     const updated = await this.prisma.user.update({ where: { id: userId }, data });
 
@@ -100,7 +106,7 @@ export class OnboardingService {
       await this.revokeReligiousContentConsent(userId);
     }
 
-    return { religion: updated.religion, city: updated.city, country: updated.country };
+    return { religion: updated.religion, city: updated.city, country: updated.country, countryCode: updated.countryCode };
   }
 
   /** Пункт 49 — НЕ персистит ничего, только возвращает подсказку.
@@ -116,18 +122,18 @@ export class OnboardingService {
     // проверка, которой раньше не было в этом конкретном месте.
     await this.consent.requireConsent(userId, ConsentType.LOCATION);
 
-    let geo: { country: string | null; city: string | null };
+    let geo: { country: string | null; countryCode: string | null; city: string | null };
     try {
       geo = await reverseGeocode(lat, lon);
     } catch (err) {
       if (err instanceof NominatimError) {
-        return { country: null, city: null, suggestedReligion: null, reasoning: null };
+        return { country: null, countryCode: null, city: null, suggestedReligion: null, reasoning: null };
       }
       throw err;
     }
 
     if (!geo.country) {
-      return { country: geo.country, city: geo.city, suggestedReligion: null, reasoning: null };
+      return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: null, reasoning: null };
     }
 
     const userPrompt = `Страна: ${geo.country}. Какая религия/конфессия наиболее распространена в этой стране? Учитывай, что это лишь ОБЩАЯ статистическая тенденция по стране, не факт о конкретном человеке — в любой стране есть значительное религиозное разнообразие.`;
@@ -154,11 +160,11 @@ export class OnboardingService {
       // (детерминированный reverse-geocode уже отработал), просто без
       // suggestedReligion. Не роняем весь онбординг из-за
       // необязательной части.
-      return { country: geo.country, city: geo.city, suggestedReligion: null, reasoning: null };
+      return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: null, reasoning: null };
     }
 
     const raw: RawReligionSuggestion = JSON.parse(result.text);
-    return { country: geo.country, city: geo.city, suggestedReligion: raw.suggestedReligion, reasoning: raw.reasoning };
+    return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: raw.suggestedReligion, reasoning: raw.reasoning };
   }
 
   private async ensureReligiousContentConsent(userId: string): Promise<void> {

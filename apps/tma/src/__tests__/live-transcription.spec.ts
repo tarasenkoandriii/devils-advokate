@@ -1,4 +1,4 @@
-import { parseStreamingMessage, resampleTo16kMono } from '../lib/live-transcription';
+import { connectLiveTranscription, parseStreamingMessage, resampleTo16kMono } from '../lib/live-transcription';
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   const a = JSON.stringify(actual);
@@ -73,6 +73,149 @@ function run() {
   test('parseStreamingMessage() честно возвращает speakerLabel=undefined, если поле speaker отсутствует', () => {
     const result = parseStreamingMessage('{"type":"Turn","transcript":"привет","end_of_turn":true}');
     assertEqual(result?.speakerLabel, undefined, 'без диаризации — честный undefined, не выдуманная метка, остальной транскрипт всё равно разобран корректно');
+  });
+
+  // ── Финальный аудит 2026-08-30 (продолжение) — connectLiveTranscription()
+  // ── не имел вообще ни одного теста; заодно у него отсутствовал speech_model/
+  // ── mode в URL (см. docs/AUDIT-ASSEMBLYAI-2026-08-30.md). Браузерные API
+  // ── (WebSocket/AudioContext/MediaStream) минимально застублены — сама
+  // ── функция синхронна (открывает сокет, возвращает handle сразу), поэтому
+  // ── тест тоже синхронный, без сети.
+
+  test('РЕГРЕСІЯ: connectLiveTranscription() задає speech_model і mode в URL WebSocket (найпоширеніша помилка інтеграції за словами самої документації AssemblyAI)', () => {
+    let capturedUrl: string | undefined;
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 0;
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) { capturedUrl = url; }
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+    const fakeNode = { connect: () => {}, disconnect: () => {} };
+    const fakeAudioContext: any = {
+      sampleRate: 16000,
+      createMediaStreamSource: () => fakeNode,
+      createScriptProcessor: () => ({ ...fakeNode, onaudioprocess: null }),
+      destination: {},
+    };
+    const handle = connectLiveTranscription('test-token', fakeAudioContext, {} as any, () => {}, () => {});
+    handle.stop();
+
+    assertEqual(capturedUrl?.startsWith('wss://streaming.assemblyai.com/v3/ws?'), true, 'правильний endpoint');
+    assertEqual(capturedUrl?.includes('speech_model=universal-3-5-pro'), true, 'speech_model заданий явно — без нього AssemblyAI або відхиляє з’єднання, або мовчки закріплює застарілу модель (документація суперечлива щодо required/optional, тому явне значення безпечне за будь-якого трактування)');
+    assertEqual(capturedUrl?.includes('mode=balanced'), true, 'mode — основний регулятор латентність/точність, документація радить задавати його першим');
+    assertEqual(capturedUrl?.includes('token=test-token'), true, 'токен передано браузеру для прямого підключення, ключ на клієнт не потрапляє');
+  });
+
+  test('РЕГРЕСІЯ: connectLiveTranscription().stop() надсилає {"type":"Terminate"} ПЕРЕД закриттям сокету, не закриває його напряму (документація прямо вимагає — інакше AssemblyAI тарифікує сесію до 3-годинного стелі)', () => {
+    let capturedUrl: string | undefined;
+    let sentMessages: string[] = [];
+    let closeCalled = false;
+    class FakeWebSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = 1; // OPEN — сессия уже установлена на момент вызова stop()
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) { capturedUrl = url; }
+      send(data: string) { sentMessages.push(data); }
+      close() { closeCalled = true; }
+    }
+    (global as any).WebSocket = FakeWebSocket;
+    const fakeNode = { connect: () => {}, disconnect: () => {} };
+    const fakeAudioContext: any = {
+      sampleRate: 16000,
+      createMediaStreamSource: () => fakeNode,
+      createScriptProcessor: () => ({ ...fakeNode, onaudioprocess: null }),
+      destination: {},
+    };
+    // stop() ставит защитный setTimeout(…, 2000) на форсированное закрытие —
+    // в браузере это корректно (см. комментарий в live-transcription.ts), но
+    // здесь, в синхронном ts-node раннере, реальный таймер держал бы процесс
+    // живым лишние 2 секунды на каждый прогон файла. Подменяем global.setTimeout
+    // на no-op локально для этого теста — таймер не запускаем вовсе, тест
+    // проверяет только синхронную часть stop() (Terminate отправлен, close() нет).
+    const realSetTimeout = global.setTimeout;
+    (global as any).setTimeout = () => 0 as any;
+    try {
+      const handle = connectLiveTranscription('test-token', fakeAudioContext, {} as any, () => {}, () => {});
+      handle.stop();
+    } finally {
+      global.setTimeout = realSetTimeout;
+    }
+
+    assertEqual(sentMessages, [JSON.stringify({ type: 'Terminate' })], 'Terminate відправлено як контрольне повідомлення перед закриттям');
+    assertEqual(closeCalled, false, 'close() НЕ викликається синхронно — сервер сам закриє сокет після Terminate/SpeakerRevision, форсоване закриття лише як захисний таймаут');
+  });
+
+  test('РЕГРЕСІЯ: серверне закриття з кодом із таблиці документації (напр. 3008 — сесія прострочена) викликає onError з осмисленим повідомленням, навіть коли onerror НЕ спрацював', () => {
+    let lastInstance: any;
+    class FakeWebSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = 1;
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: any) => void) | null = null;
+      constructor(_url: string) { lastInstance = this; }
+      send() {}
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+    const fakeNode = { connect: () => {}, disconnect: () => {} };
+    const fakeAudioContext: any = {
+      sampleRate: 16000,
+      createMediaStreamSource: () => fakeNode,
+      createScriptProcessor: () => ({ ...fakeNode, onaudioprocess: null }),
+      destination: {},
+    };
+    let capturedError: string | undefined;
+    connectLiveTranscription('test-token', fakeAudioContext, {} as any, () => {}, (msg) => { capturedError = msg; });
+
+    // onerror НЕ викликається — саме так реально поводиться браузерний WebSocket
+    // при серверному закритті з ненульовим кодом (error і close — різні події).
+    lastInstance.onclose({ code: 3008 });
+
+    assertEqual(capturedError, 'Сессия транскрипции истекла по времени — начните заново', 'osмислене повідомлення по коду 3008 з таблиці документації, без будь-якого onerror');
+  });
+
+  test('РЕГРЕСІЯ: власний stop() (Terminate → нормальне закриття) НЕ викликає onError — closingIntentionally відрізняє намірене закриття від серверного', () => {
+    let lastInstance: any;
+    class FakeWebSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = 1;
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: any) => void) | null = null;
+      constructor(_url: string) { lastInstance = this; }
+      send() {}
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+    const fakeNode = { connect: () => {}, disconnect: () => {} };
+    const fakeAudioContext: any = {
+      sampleRate: 16000,
+      createMediaStreamSource: () => fakeNode,
+      createScriptProcessor: () => ({ ...fakeNode, onaudioprocess: null }),
+      destination: {},
+    };
+    let capturedError: string | undefined;
+    const realSetTimeout = global.setTimeout;
+    (global as any).setTimeout = () => 0 as any;
+    let handle: any;
+    try {
+      handle = connectLiveTranscription('test-token', fakeAudioContext, {} as any, () => {}, (msg) => { capturedError = msg; });
+      handle.stop();
+    } finally {
+      global.setTimeout = realSetTimeout;
+    }
+    // Сервер закриває сокет після Terminate — навіть довільним кодом (не завжди 1000).
+    lastInstance.onclose({ code: 3005 });
+
+    assertEqual(capturedError, undefined, 'закриття після власного stop() — очікуване, onError не викликається незалежно від коду, який надішле сервер');
   });
 
   for (const [name, fn] of scenarios) {

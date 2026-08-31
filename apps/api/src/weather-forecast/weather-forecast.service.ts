@@ -14,12 +14,15 @@
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SecretsService } from '../secrets/secrets.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
-import { geocodeCity, getForecast } from './open-meteo-client';
+import { geocodeCity, getForecast, type Coordinates, type ForecastResult } from './open-meteo-client';
+import { getWindyForecast } from './windy-client';
 import { ConsentType, WeatherRecommendation } from '@prisma/client';
 
 const TASK_TYPE = 'weather-recommendation';
+const WINDY_API_KEY_REF = 'WINDY_API_KEY';
 
 interface RawRecommendation {
   recommendation: 'PROCEED' | 'RECONSIDER';
@@ -48,7 +51,31 @@ export class WeatherForecastService {
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
     private readonly consent: ConsentService,
+    private readonly secrets: SecretsService,
   ) {}
+
+  /** Расширение на будущее (2026-08-30, по прямому запросу) — Windy
+   * первичным источником, Open-Meteo — fallback. Windy требует платного/
+   * freemium ключа (в отличие от бесплатного и не требующего ключа
+   * Open-Meteo), поэтому при отсутствии WINDY_API_KEY код тихо НЕ
+   * пытается его использовать вообще — не лишняя сетевая попытка на
+   * заведомо не настроенный сервис, не лишний лог ошибки. Любая другая
+   * ошибка Windy (сеть, 4xx/5xx, неожиданная форма ответа) — тоже честно
+   * падает на Open-Meteo, не наружу пользователю: Open-Meteo как fallback
+   * должен покрывать Windy надёжнее, чем наоборот (бесплатный сервис без
+   * ключа не может отказать по причине "квота/биллинг", в отличие от
+   * платного). */
+  private async getForecastWithFallback(coords: Coordinates, targetDate: Date): Promise<ForecastResult> {
+    const windyKey = await this.secrets.resolve(WINDY_API_KEY_REF).catch(() => null);
+    if (windyKey) {
+      try {
+        return await getWindyForecast(windyKey, coords, targetDate);
+      } catch {
+        // fall through — Open-Meteo ниже
+      }
+    }
+    return getForecast(coords, targetDate);
+  }
 
   /** "По городу, который пользователь указывает вручную" — не
    * требует согласия, простая текстовая строка. */
@@ -95,7 +122,7 @@ export class WeatherForecastService {
     cityLabel: string | null,
     engineId?: string,
   ) {
-    const forecast = await getForecast(coords, scheduled.scheduledAt).catch((err) => {
+    const forecast = await this.getForecastWithFallback(coords, scheduled.scheduledAt).catch((err) => {
       throw new BadGatewayException(err instanceof Error ? err.message : 'Не удалось получить прогноз погоды');
     });
 
@@ -199,7 +226,7 @@ export class WeatherForecastService {
     const coords = await geocodeCity(user.city).catch(() => null);
     if (!coords) return null;
 
-    const forecast = await getForecast(coords, targetDate).catch(() => null);
+    const forecast = await this.getForecastWithFallback(coords, targetDate).catch(() => null);
     if (!forecast) return null;
 
     const computed = await this.computeRecommendation(userId, projectId, targetDate, forecast, engineId).catch(() => null);

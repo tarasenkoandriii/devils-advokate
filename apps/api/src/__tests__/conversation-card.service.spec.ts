@@ -87,8 +87,8 @@ describe('ConversationCardService', () => {
     const service = new ConversationCardService(prisma as any, fakeDoNotSayService, fakeStaleFactService, fakeAgendaService, fakeProtectedNoteService);
     const card = await service.get(USER_ID, PROJECT_ID);
 
-    expect(card.objective.desiredOutcome).toBe('Повышение на 20%');
-    expect(card.boundaries.batna).toBe('Остаться как есть');
+    expect(card.objective!.desiredOutcome).toBe('Повышение на 20%');
+    expect(card.boundaries!.batna).toBe('Остаться как есть');
     expect(card.doNotSay).toEqual(['Не упоминать прошлые конфликты']);
     expect(card.selfRiskWarnings).toEqual([]); // Пункт 18: AI-детекция отдельно от ручного doNotSay выше — здесь пусто, т.к. фейковый DoNotSayService возвращает []
     expect(card.staleFacts).toEqual([]); // Пункт 22: детерминированная выборка, здесь пусто, т.к. фейковый StaleFactService возвращает []

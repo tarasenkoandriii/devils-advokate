@@ -24,6 +24,19 @@ export class LiveHintsController {
     return this.liveHints.analyze(userId, projectId, dto.transcriptWindow, dto?.engineId);
   }
 
+  // Пункт [interview-pool] §4.2/§5 ТЗ — ТЗ проєктував це як той самий
+  // ендпоінт з полем mode:'interview_pool' у тілі запиту; тут — окремий
+  // маршрут, той самий принцип, що вже застосований у цьому проекті
+  // (не диспетчеризація за прапорцем у тілі, окремий явний шлях).
+  @Post('interview')
+  async analyzeForInterview(
+    @CurrentUser() userId: string,
+    @Param('projectId') projectId: string,
+    @Body() dto: AnalyzeDto,
+  ) {
+    return this.liveHints.analyzeForInterview(userId, projectId, dto.transcriptWindow, dto?.engineId);
+  }
+
   @Patch(':eventId/dismiss')
   async dismiss(
     @CurrentUser() userId: string,

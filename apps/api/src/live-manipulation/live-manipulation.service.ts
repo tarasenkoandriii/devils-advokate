@@ -16,6 +16,7 @@
 // сжимается до одной "самой важной".
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { LiveManipulationFlag } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -91,7 +92,7 @@ export class LiveManipulationService {
 
     const rawFlags: RawFlag[] = JSON.parse(result.text);
 
-    const created = [];
+    const created: LiveManipulationFlag[] = [];
     for (const flag of rawFlags) {
       const record = await this.prisma.liveManipulationFlag.create({
         data: {

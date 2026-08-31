@@ -33,17 +33,28 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsentService } from '../consent/consent.service';
+import { ConsentType } from '@prisma/client';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, PublicSubmissionStatus } from '@prisma/client';
 
 @Injectable()
 export class PublicDiscussionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consent: ConsentService,
+  ) {}
 
   // ═══════════════════════ owner-side (TelegramAuthGuard) ═══════════════════════
 
+  /** Аудит моделей БД 2026-08-30, §2.3 — ConsentType.PUBLIC_SHARING существовал
+   * в enum'е с чекпоинта, но ни один сервис его не требовал: включение
+   * публичного доступа делало весь проект читаемым по токену без единой
+   * проверки согласия — тот же класс бага, что уже закрывался для LOCATION
+   * (Пункт 77). Тот же паттерн requireConsent(), что там. */
   async enableSharing(userId: string, projectId: string) {
     await assertProjectOwnership(this.prisma, userId, projectId);
+    await this.consent.requireConsent(userId, ConsentType.PUBLIC_SHARING, projectId);
     const token = randomBytes(24).toString('base64url'); // непредсказуемый, URL-safe
     return this.prisma.project.update({ where: { id: projectId }, data: { publicShareToken: token } });
   }

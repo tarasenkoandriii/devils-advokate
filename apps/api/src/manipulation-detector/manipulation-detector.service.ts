@@ -35,7 +35,7 @@
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { ConversationProcessingStatus, ConversationSignalType } from '@prisma/client';
+import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType } from '@prisma/client';
 
 const TASK_TYPE = 'manipulation-detection';
 
@@ -126,7 +126,7 @@ export class ManipulationDetectorService {
       segments.map((s: (typeof segments)[number]): [string, (typeof segments)[number]] => [s.id, s]),
     );
 
-    const created = [];
+    const created: Array<ConversationSignal & { segment: (typeof segments)[number]; technique: string; description: string }> = [];
     for (const point of rawPoints) {
       const segment = segmentById.get(point.segmentId);
       if (!segment) continue; // AI сослался на несуществующий id реплики — пропускаем, не падаем на всём батче

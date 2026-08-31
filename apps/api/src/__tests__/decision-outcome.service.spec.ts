@@ -110,7 +110,7 @@ async function run() {
     const svc = new DecisionOutcomeService(prisma as any);
 
     const result = await svc.recordOutcome(USER_ID, PROJECT_ID, { actualOutcome: 'WENT_WELL' as any });
-    assertEqual(Math.round(result.predictedLean * 100) / 100, 0.5, 'predictedLean = 0.8 - 0.3 = 0.5');
+    assertEqual(Math.round(result.predictedLean! * 100) / 100, 0.5, 'predictedLean = 0.8 - 0.3 = 0.5');
   });
 
   test('recordOutcome() исключает адресные (targetPersonId!=null) аргументы из подсчёта', async () => {

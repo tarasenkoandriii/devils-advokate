@@ -47,13 +47,19 @@ export async function generateMetadata({
       description: dict.meta.description,
       locale: params.lang,
       type: 'website',
-      images: ['/images/hero.png'],
+      // ПОВТОРНЫЙ АУДИТ 2026-08-30: здесь стоял /images/hero.png —
+      // файла с таким именем в public/images нет (есть hero-courtroom,
+      // hero-hell, hero-lawyer, hero-slogan). Любой репост ссылки в
+      // Telegram/Twitter/LinkedIn отдавал превью без картинки — для
+      // лендинга, у которого расшаривание и есть основная функция, это
+      // прямая потеря конверсии.
+      images: ['/images/hero-courtroom.png'],
     },
     twitter: {
       card: 'summary_large_image',
       title: dict.meta.title,
       description: dict.meta.description,
-      images: ['/images/hero.png'],
+      images: ['/images/hero-courtroom.png'],
     },
   };
 }

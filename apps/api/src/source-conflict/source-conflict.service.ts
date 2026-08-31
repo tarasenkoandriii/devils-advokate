@@ -26,7 +26,7 @@ import { BadGatewayException, BadRequestException, ForbiddenException, Injectabl
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
-import { FactStatus } from '@prisma/client';
+import { FactStatus, SourceConflict } from '@prisma/client';
 
 const TASK_TYPE = 'source-conflict-detection';
 
@@ -123,7 +123,7 @@ export class SourceConflictService {
       facts.map((f: (typeof facts)[number]): [string, (typeof facts)[number]] => [f.id, f]),
     );
 
-    const created = [];
+    const created: SourceConflict[] = [];
     for (const conflict of rawConflicts) {
       const factA = factById.get(conflict.factAId);
       const factB = factById.get(conflict.factBId);

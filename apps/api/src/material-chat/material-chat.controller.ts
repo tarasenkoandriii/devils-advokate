@@ -8,6 +8,7 @@ import type { Request } from 'express';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
+import { AssemblyAiWebhookGuard } from '../common/webhook/assemblyai-webhook.guard';
 import { MaterialChatService } from './material-chat.service';
 import type { AssemblyAiWebhookPayload } from '../conversations/transcription.service';
 
@@ -105,6 +106,7 @@ export class MaterialChatController {
   }
 
   @Post('material-chat-sessions/webhook/voice-reply')
+  @UseGuards(AssemblyAiWebhookGuard)
   async voiceReplyWebhook(@Body() payload: AssemblyAiWebhookPayload) {
     return this.materialChat.handleVoiceReplyWebhook(payload);
   }

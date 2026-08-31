@@ -4,6 +4,7 @@ import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SchedulerService } from './scheduler.service';
 import { SecretsService } from '../secrets/secrets.service';
+import { safeSecretEqual } from '../common/timing-safe-equal';
 
 const DISPATCH_SECRET_REF = 'SCHEDULER_DISPATCH_SECRET';
 const BOT_TOKEN_REF = 'TELEGRAM_BOT_TOKEN';
@@ -67,7 +68,7 @@ export class SchedulerDispatchController {
   @Post('dispatch')
   async dispatch(@Headers('x-dispatch-secret') providedSecret: string) {
     const expectedSecret = await this.secrets.resolve(DISPATCH_SECRET_REF);
-    if (!providedSecret || providedSecret !== expectedSecret) {
+    if (!safeSecretEqual(providedSecret, expectedSecret)) {
       throw new UnauthorizedException('Invalid dispatch secret');
     }
     const botToken = await this.secrets.resolve(BOT_TOKEN_REF);

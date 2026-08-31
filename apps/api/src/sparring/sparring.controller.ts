@@ -9,6 +9,7 @@ import type { Request } from 'express';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
+import { AssemblyAiWebhookGuard } from '../common/webhook/assemblyai-webhook.guard';
 import { SparringService } from './sparring.service';
 import type { AssemblyAiWebhookPayload } from '../conversations/transcription.service';
 import { ArchetypeType } from '@prisma/client';
@@ -121,6 +122,7 @@ export class SparringController {
   }
 
   @Post('sparring-sessions/webhook/voice-reply')
+  @UseGuards(AssemblyAiWebhookGuard)
   async voiceReplyWebhook(@Body() payload: AssemblyAiWebhookPayload) {
     return this.sparring.handleVoiceReplyWebhook(payload);
   }

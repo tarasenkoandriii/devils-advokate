@@ -21,6 +21,8 @@ const USER_AGENT = "Devil's Advocate onboarding geo-suggestion (single request p
 
 export interface ReverseGeocodeResult {
   country: string | null;
+  /** ISO-3166-1 alpha-2 в верхнем регистре (Nominatim отдаёт lowercase) */
+  countryCode: string | null;
   city: string | null;
 }
 
@@ -45,17 +47,18 @@ export async function reverseGeocode(lat: number, lon: number): Promise<ReverseG
     throw new NominatimError(`Nominatim вернул ${response.status} ${response.statusText}`);
   }
 
-  const data = await response.json();
+  const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
   if (data.error) {
     // Координаты вне покрытия OSM (открытый океан и т.п.) — не ошибка
     // сервиса, честный "ничего не найдено", не исключение.
-    return { country: null, city: null };
+    return { country: null, countryCode: null, city: null };
   }
 
   const address = data.address ?? {};
   const city = address.city ?? address.town ?? address.village ?? address.municipality ?? null;
   return {
     country: typeof address.country === 'string' ? address.country : null,
+    countryCode: typeof address.country_code === 'string' && address.country_code.length === 2 ? address.country_code.toUpperCase() : null,
     city: typeof city === 'string' ? city : null,
   };
 }

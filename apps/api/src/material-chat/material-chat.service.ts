@@ -24,6 +24,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { TranscriptionService, AssemblyAiWebhookPayload } from '../conversations/transcription.service';
 import { SecretsService } from '../secrets/secrets.service';
+import { ConsentService } from '../consent/consent.service';
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { MaterialChatMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
@@ -63,6 +64,7 @@ export class MaterialChatService {
     private readonly transcription: TranscriptionService,
     private readonly secrets: SecretsService,
     private readonly textToSpeech: TextToSpeechService,
+    private readonly consent: ConsentService,
   ) {}
 
   async startSession(userId: string, projectId: string, workingMaterialId: string, engineId?: string) {
@@ -275,7 +277,11 @@ export class MaterialChatService {
   // ═══════════════════════ голосовой ввод реплики — параллельный паттерн Пункта 69 ═══════════════════════
 
   async streamUploadVoiceReply(userId: string, sessionId: string, fileStream: ReadableStream<Uint8Array>) {
-    await this.findOwnedSession(userId, sessionId);
+    const session = await this.findOwnedSession(userId, sessionId);
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30 — см. тот же комментарий в
+    // SparringService: модуль не проверял ни режим приватности, ни
+    // согласия, хотя отправляет голос пользователя внешнему провайдеру.
+    await this.consent.assertAudioMayLeaveDevice(userId, session.workingMaterial.projectId);
     const apiKey = await this.resolveAssemblyAiKey();
     const audioUrl = await this.transcription.streamUpload(apiKey, fileStream);
     return { audioUrl };
@@ -283,6 +289,7 @@ export class MaterialChatService {
 
   async submitVoiceReply(userId: string, sessionId: string, audioUrl: string) {
     const session = await this.findOwnedSession(userId, sessionId);
+    await this.consent.assertAudioMayLeaveDevice(userId, session.workingMaterial.projectId);
     if (session.status !== SparringSessionStatus.ACTIVE) {
       throw new BadRequestException(`MaterialChatSession ${sessionId} is already ended`);
     }
@@ -312,18 +319,25 @@ export class MaterialChatService {
   }
 
   async handleVoiceReplyWebhook(payload: AssemblyAiWebhookPayload) {
-    const job = await this.prisma.materialChatVoiceReplyJob.findUnique({ where: { externalTranscriptionJobId: payload.id } });
+    // Финальный аудит 2026-08-30 — тот же фикс, что в
+    // ConversationsService.handleTranscriptionWebhook(): реальный вебхук
+    // несёт только transcript_id/status, полный результат — отдельным GET.
+    if (!payload.transcript_id) return;
+    const job = await this.prisma.materialChatVoiceReplyJob.findUnique({ where: { externalTranscriptionJobId: payload.transcript_id } });
     if (!job || job.status !== SparringVoiceReplyStatus.PENDING) return;
 
-    if (payload.status === 'error') {
+    const apiKey = await this.resolveAssemblyAiKey();
+    const result = await this.transcription.getTranscriptResult(apiKey, payload.transcript_id);
+
+    if (result.status === 'error') {
       await this.prisma.materialChatVoiceReplyJob.update({
         where: { id: job.id },
-        data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: payload.error ?? 'unknown error' },
+        data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: result.error ?? 'unknown error' },
       });
       return;
     }
 
-    const transcribedText = (payload.utterances ?? []).map((u: { text: string }) => u.text).join(' ').trim();
+    const transcribedText = (result.utterances ?? []).map((u: { text: string }) => u.text).join(' ').trim();
     if (!transcribedText) {
       await this.prisma.materialChatVoiceReplyJob.update({
         where: { id: job.id },
@@ -362,6 +376,14 @@ export class MaterialChatService {
 
   private buildVoiceWebhookUrl(): string {
     const base = process.env.API_PUBLIC_BASE_URL;
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30: проверки не было — в отличие от
+    // ConversationsService и SparringService, где она есть. Без неё
+    // AssemblyAI получал webhook_url вида "undefined/material-chat-..."
+    // и задача уходила в работу, результат которой не мог вернуться
+    // никогда. Отказ до отправки честнее молчаливо потерянного job'а.
+    if (!base) {
+      throw new Error('API_PUBLIC_BASE_URL is not set — required to build a webhook URL AssemblyAI can call back');
+    }
     return `${base}/material-chat-sessions/voice-reply-webhook`;
   }
 }

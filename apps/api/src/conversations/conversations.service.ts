@@ -25,11 +25,7 @@ import { ConsentService } from '../consent/consent.service';
 import { TranscriptionService, AssemblyAiWebhookPayload } from './transcription.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
-import {
-  ConsentType,
-  ConversationProcessingStatus,
-  PrivacyProcessingMode,
-} from '@prisma/client';
+import { ConversationProcessingStatus } from '@prisma/client';
 
 @Injectable()
 export class ConversationsService {
@@ -86,26 +82,17 @@ export class ConversationsService {
       );
     }
 
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
-
     // §4.6 ТЗ: MAXIMUM_PRIVACY запрещает EPHEMERAL_SERVER-обработку
     // вовсе — облачная транскрибация физически невозможна в этом
     // режиме, не просто "требует лишнего согласия". BALANCED/
-    // MAXIMUM_QUALITY допускают её с явным per-operation согласием
-    // (проверяется ниже через ConsentService).
-    if (user.privacyProcessingMode === PrivacyProcessingMode.MAXIMUM_PRIVACY) {
-      throw new ForbiddenException(
-        'privacyProcessingMode=MAXIMUM_PRIVACY forbids sending audio to an external transcription provider — switch to BALANCED or MAXIMUM_QUALITY to use cloud transcription, or transcribe on-device (not implemented server-side)',
-      );
-    }
-
-    // Раздел 2 ТЗ: явный дисклеймер перед записью/загрузкой — факт
-    // показа и подтверждения фиксируется ConsentType.RECORDING (уже
-    // существующий тип с чекпоинта 8, не новый). EPHEMERAL_SERVER —
-    // отдельное согласие конкретно на эту one-off передачу внешнему
-    // провайдеру, тот же принцип, что уже описан для AIRouterService.
-    await this.consent.requireConsent(userId, ConsentType.RECORDING, conversation.projectId);
-    await this.consent.requireConsent(userId, ConsentType.EPHEMERAL_SERVER, conversation.projectId);
+    // MAXIMUM_QUALITY допускают её с явным per-operation согласием.
+    //
+    // Повторный аудит 2026-08-30: те же три проверки, что раньше стояли
+    // здесь развёрнуто, теперь живут в ConsentService — потому что их
+    // нужно повторять ещё в четырёх местах (загрузка файла, спарринг,
+    // чат по материалам), а копия проверки в каждом и была причиной
+    // того, что часть точек осталась без неё.
+    await this.consent.assertAudioMayLeaveDevice(userId, conversation.projectId);
 
     const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
@@ -138,8 +125,19 @@ export class ConversationsService {
    * честно не реализована на этом проходе, см. README "Пункт 13",
    * известное упрощение. */
   async handleTranscriptionWebhook(payload: AssemblyAiWebhookPayload) {
+    // Финальный аудит 2026-08-30 — реальный вебхук AssemblyAI несёт только
+    // transcript_id/status, без данных; полный результат — отдельным GET.
+    // Явная проверка вместо доверия типу интерфейса: если поле пустое
+    // (баг у отправителя, руками собранный запрос через guard), не даём
+    // Prisma findFirst() трактовать undefined как «фильтра нет» и
+    // возвращать первую попавшуюся запись — см. комментарий в
+    // transcription.service.ts у AssemblyAiWebhookPayload.
+    if (!payload.transcript_id) {
+      return { acknowledged: true, matched: false };
+    }
+
     const conversation = await this.prisma.conversation.findFirst({
-      where: { externalTranscriptionJobId: payload.id },
+      where: { externalTranscriptionJobId: payload.transcript_id },
     });
     if (!conversation) {
       // Не бросаем 404 наружу как есть — AssemblyAI не обязан знать
@@ -150,7 +148,11 @@ export class ConversationsService {
       return { acknowledged: true, matched: false };
     }
 
-    if (payload.status === 'error') {
+    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
+    const result = await this.transcription.getTranscriptResult(apiKey, payload.transcript_id);
+
+    if (result.status === 'error') {
       await this.prisma.conversation.update({
         where: { id: conversation.id },
         data: { status: ConversationProcessingStatus.FAILED },
@@ -158,7 +160,7 @@ export class ConversationsService {
       return { acknowledged: true, matched: true };
     }
 
-    const parsed = this.transcription.parseWebhookPayload(payload);
+    const parsed = this.transcription.parseTranscriptResult(result);
 
     // Уникальные диаризационные лейблы → ConversationParticipant.
     // Первый встреченный спикер помечается isSelf=true эвристически
@@ -182,12 +184,25 @@ export class ConversationsService {
       participantsByLabel.set(label, participant.id);
     }
 
-    const transcript = await this.prisma.transcript.create({
-      data: {
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30 — идемпотентность. Transcript.conversationId
+    // объявлен @unique, а здесь стоял безусловный create(). AssemblyAI
+    // ретраит вебхук на любой не-2xx ответ, и повторная доставка (штатное
+    // поведение провайдера, а не экзотика) роняла обработчик на P2002 →
+    // 500 → новый ретрай → бесконечный цикл ошибок на одном разговоре.
+    // upsert по conversationId: повтор перезаписывает язык и не создаёт
+    // второй транскрипт.
+    const transcript = await this.prisma.transcript.upsert({
+      where: { conversationId: conversation.id },
+      update: { language: parsed.language },
+      create: {
         conversationId: conversation.id,
         language: parsed.language,
       },
     });
+
+    // Сегменты при повторной доставке нужно снести, иначе createMany
+    // ниже добавит второй комплект к первому и транскрипт удвоится.
+    await this.prisma.transcriptSegment.deleteMany({ where: { transcriptId: transcript.id } });
 
     if (parsed.segments.length > 0) {
       await this.prisma.transcriptSegment.createMany({
@@ -219,7 +234,15 @@ export class ConversationsService {
    * загруженный файл/подтвердить перед стартом обработки, не всегда
    * запускать её автоматически сразу по факту загрузки. */
   async streamUploadAudio(userId: string, conversationId: string, fileStream: ReadableStream<Uint8Array>) {
-    await this.findOwnedConversation(userId, conversationId);
+    const conversation = await this.findOwnedConversation(userId, conversationId);
+
+    // ПОВТОРНЫЙ АУДИТ 2026-08-30: здесь НЕ было ни одной приватность-
+    // проверки — только владение разговором. А байты файла уходят
+    // AssemblyAI именно на этом шаге; проверки в requestTranscription()
+    // срабатывали, когда аудио уже лежало у провайдера. То есть режим
+    // MAXIMUM_PRIVACY и оба согласия обходились простым порядком
+    // вызовов: upload без transcribe.
+    await this.consent.assertAudioMayLeaveDevice(userId, conversation.projectId);
 
     const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');

@@ -12,7 +12,7 @@
 import {
   TranscriptionService,
   TranscriptionProviderError,
-  AssemblyAiWebhookPayload,
+  AssemblyAiTranscriptResult,
 } from '../conversations/transcription.service';
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -48,11 +48,14 @@ async function run() {
   const scenarios: [string, () => Promise<void> | void][] = [];
   const test = (name: string, fn: () => Promise<void> | void) => scenarios.push([name, fn]);
 
-  // ── parseWebhookPayload() — чистая функция, без сети ──
+  // ── Финальный аудит 2026-08-30: реальный вебхук AssemblyAI несёт
+  // ── только transcript_id/status — полный результат получается
+  // ── отдельным GET /v2/transcript/{id}. parseTranscriptResult()
+  // ── работает над этим результатом, не над телом вебхука.
 
-  test('parseWebhookPayload() парсит успешный payload в сегменты', () => {
-    const svc = new TranscriptionService();
-    const payload: AssemblyAiWebhookPayload = {
+  test('parseTranscriptResult() парсит успешный результат в сегменты', () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    const result: AssemblyAiTranscriptResult = {
       status: 'completed',
       id: 'job-1',
       language_code: 'ru',
@@ -61,7 +64,7 @@ async function run() {
         { speaker: 'B', text: 'Здравствуйте', start: 1000, end: 2500 },
       ],
     };
-    const parsed = svc.parseWebhookPayload(payload);
+    const parsed = svc.parseTranscriptResult(result);
     assertEqual(parsed.language, 'ru', 'язык распознан');
     assertEqual(parsed.segments.length, 2, 'оба сегмента распознаны');
     assertEqual(parsed.segments[0].diarizationLabel, 'A', 'лейбл диаризации первого сегмента');
@@ -69,26 +72,51 @@ async function run() {
     assertEqual(parsed.segments[1].confidence, null, 'confidence=null, если провайдер его НЕ дал (не выдумываем число)');
   });
 
-  test('parseWebhookPayload() бросает TranscriptionProviderError при status=error', () => {
-    const svc = new TranscriptionService();
+  test('parseTranscriptResult() бросает TranscriptionProviderError при status=error', () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
     assertThrows(
-      () => svc.parseWebhookPayload({ status: 'error', id: 'job-2', error: 'audio too short' }),
+      () => svc.parseTranscriptResult({ status: 'error', id: 'job-2', error: 'audio too short' }),
       TranscriptionProviderError,
-      'parseWebhookPayload() при ошибке провайдера',
+      'parseTranscriptResult() при ошибке провайдера',
     );
   });
 
-  test('parseWebhookPayload() возвращает пустой массив сегментов, если utterances отсутствует', () => {
-    const svc = new TranscriptionService();
-    const parsed = svc.parseWebhookPayload({ status: 'completed', id: 'job-3' });
+  test('parseTranscriptResult() возвращает пустой массив сегментов, если utterances отсутствует', () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    const parsed = svc.parseTranscriptResult({ status: 'completed', id: 'job-3' });
     assertEqual(parsed.segments, [], 'пустой массив, не падение, если utterances нет вообще');
     assertEqual(parsed.language, null, 'язык null, если провайдер его не прислал');
+  });
+
+  // ── getTranscriptResult() — реальный fetch GET /v2/transcript/{id} ──
+
+  test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): getTranscriptResult() б’є в правильний URL і передає ключ без Bearer', async () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    let capturedUrl: string | undefined;
+    let capturedHeaders: any;
+    (global as any).fetch = async (url: string, init: any) => {
+      capturedUrl = url;
+      capturedHeaders = init.headers;
+      return { ok: true, json: async () => ({ status: 'completed', id: 'tr-123', language_code: 'en', utterances: [] }) };
+    };
+
+    const result = await svc.getTranscriptResult('test-api-key', 'tr-123');
+
+    assertEqual(capturedUrl, 'https://api.assemblyai.com/v2/transcript/tr-123', 'правильний ендпоінт з transcript_id у шляху');
+    assertEqual(capturedHeaders.Authorization, 'test-api-key', 'ключ без Bearer-префіксу (правило AssemblyAI для REST)');
+    assertEqual(result.status, 'completed', 'результат розпарсено');
+  });
+
+  test('getTranscriptResult() бросает TranscriptionProviderError при не-ok ответе', async () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    (global as any).fetch = async () => ({ ok: false, status: 404, statusText: 'Not Found', text: async () => 'not found' });
+    await assertThrowsAsync(() => svc.getTranscriptResult('k', 'missing'), TranscriptionProviderError, 'getTranscriptResult() при 404');
   });
 
   // ── submitJob() — реальный fetch, мокаем global.fetch ──
 
   test('submitJob() отправляет корректную форму запроса и возвращает externalJobId', async () => {
-    const svc = new TranscriptionService();
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
     let capturedUrl: string | undefined;
     let capturedBody: any;
     let capturedHeaders: any;
@@ -108,13 +136,24 @@ async function run() {
     assertEqual(result.externalJobId, 'ext-job-42', 'externalJobId возвращён из ответа провайдера');
     assertEqual(capturedUrl, 'https://api.assemblyai.com/v2/transcript', 'запрос ушёл на правильный endpoint');
     assertEqual(capturedBody.audio_url, 'https://cdn.example.com/audio.mp3', 'audio_url передан');
+    assertEqual(capturedBody.speech_models, ['universal-3-5-pro', 'universal-2'], 'фінальний аудит 2026-08-30: speech_models заданий явно (без цього AssemblyAI мовчки відкочується на застарілу universal-3-pro)');
     assertEqual(capturedBody.speaker_labels, true, 'диаризация запрошена явно (ради неё и выбран AssemblyAI)');
     assertEqual(capturedBody.redact_pii, false, 'redact_pii=false по умолчанию — не решаем за пользователя молча');
     assertEqual(capturedHeaders.Authorization, 'test-api-key', 'API-ключ передан в заголовке');
+    assertEqual(capturedBody.webhook_auth_header_name, 'x-assemblyai-webhook-secret', 'аудит 2026-08-30: имя заголовка секрета вебхука передано провайдеру');
+    assertEqual(capturedBody.webhook_auth_header_value, 'whsec-test', 'аудит 2026-08-30: секрет вебхука передан провайдеру');
+  });
+
+  test('РЕГРЕСІЯ (аудит 2026-08-30): без ASSEMBLYAI_WEBHOOK_SECRET submitJob() відмовляє (fail closed), запит до провайдера не йде', async () => {
+    const svc = new TranscriptionService({ resolve: async () => null } as any);
+    let fetched = false;
+    (global as any).fetch = async () => { fetched = true; return { ok: true, json: async () => ({ id: 'x' }) }; };
+    await assertThrowsAsync(() => svc.submitJob('k', { audioUrl: 'x', webhookUrl: 'y' }), TranscriptionProviderError, 'без секрету вебхука задачу відправляти не можна — результат ніколи не пройде guard');
+    assertEqual(fetched, false, 'fetch не викликався');
   });
 
   test('submitJob() бросает TranscriptionProviderError при неуспешном ответе', async () => {
-    const svc = new TranscriptionService();
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
     (global as any).fetch = async () => ({
       ok: false,
       status: 429,
@@ -132,7 +171,7 @@ async function run() {
   // ── streamUpload() — реальный fetch, мокаем global.fetch ──
 
   test('streamUpload() возвращает upload_url из успешного ответа', async () => {
-    const svc = new TranscriptionService();
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
     (global as any).fetch = async () => ({
       ok: true,
       json: async () => ({ upload_url: 'https://cdn.assemblyai.com/upload/abc123' }),
@@ -143,7 +182,7 @@ async function run() {
   });
 
   test('streamUpload() бросает TranscriptionProviderError при неуспешном ответе', async () => {
-    const svc = new TranscriptionService();
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
     (global as any).fetch = async () => ({
       ok: false,
       status: 413,

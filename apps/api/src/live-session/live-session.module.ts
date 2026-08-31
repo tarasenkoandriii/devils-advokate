@@ -3,9 +3,10 @@ import { LiveSessionController } from './live-session.controller';
 import { LiveSessionService } from './live-session.service';
 import { TelegramAuthModule } from '../telegram-auth/telegram-auth.module';
 import { SecretsModule } from '../secrets/secrets.module';
+import { ConsentModule } from '../consent/consent.module';
 
 @Module({
-  imports: [TelegramAuthModule, SecretsModule],
+  imports: [TelegramAuthModule, SecretsModule, ConsentModule],
   controllers: [LiveSessionController],
   providers: [LiveSessionService],
   exports: [LiveSessionService],

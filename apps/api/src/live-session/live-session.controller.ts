@@ -18,8 +18,8 @@ export class LiveSessionController {
   // Уровень пользователя, не проекта — токен не привязан к конкретному
   // проекту, клиент решает, для какого разговора его использовать.
   @Post('live-session/transcription-token')
-  async mintToken() {
-    return this.liveSession.mintTranscriptionToken();
+  async mintToken(@CurrentUser() userId: string) {
+    return this.liveSession.mintTranscriptionToken(userId);
   }
 
   @Post('projects/:projectId/cooldown-nudge-events')

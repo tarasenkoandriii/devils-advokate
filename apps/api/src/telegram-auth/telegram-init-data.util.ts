@@ -10,7 +10,7 @@
 // secret-key = HMAC-SHA256("WebAppData", bot_token)
 // ожидаемый hash = HMAC-SHA256(secret-key, data-check-string) в hex.
 
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 export interface TelegramInitDataUser {
   id: number;
@@ -37,24 +37,45 @@ export class TelegramInitDataInvalidError extends Error {
 /**
  * ВАЖНО — известный баг из предыдущих проектов ("bad_hash"/signature
  * exclusion fix): Telegram добавил поле `signature` (Ed25519-подпись
- * для сторонней валидации) ПОМИМО исходного `hash`. Если исключать
- * из data-check-string только `hash`, но забыть исключить `signature` —
- * валидация ломается на части реальных initData (в частности когда
- * клиент передаёт оба поля), потому что `signature` тоже попадает в
- * склеенную строку и меняет итоговый HMAC. Оба поля исключаются здесь
- * явно, а не только `hash` — это тот самый фикс, который уже один раз
- * стоил времени на дебаг в другом проекте, не повторяем его тут.
+ * для СОВЕРШЕННО ОТДЕЛЬНОЙ third-party схемы валидации, `validate3rd`
+ * по терминологии docs.telegram-mini-apps.com — использует публичный
+ * ключ Telegram, не токен бота, и не имеет отношения к классической
+ * HMAC-схеме ниже) ПОМИМО исходного `hash`.
+ *
+ * Дальнейший аудит (2026-08-30, по трём независимым проектам с реальным
+ * production-опытом) показал: несмотря на то что официальная документация
+ * описывает классическую HMAC-схему как исключающую только `hash`,
+ * РАЗНЫЕ версии Telegram-клиентов на практике расходятся в том, участвует
+ * ли `signature` в data-check-string классической схемы — часть клиентов
+ * это поле в HMAC-подписи учитывает, часть нет. Жёстко предполагать
+ * только один вариант (только исключать или только включать signature)
+ * ломает валидацию для части реальных клиентов. Правильное решение —
+ * не выбирать сторону, а принимать ОБА варианта: считаем hash дважды
+ * (с signature и без), сверяем полученный hash с любым из двух —
+ * тот же подход, что уже применяется в проверенных production-системах.
  */
-const FIELDS_EXCLUDED_FROM_CHECK_STRING = new Set(['hash', 'signature']);
+const FIELDS_ALWAYS_EXCLUDED_FROM_CHECK_STRING = new Set(['hash']);
 
-function buildDataCheckString(params: URLSearchParams): string {
+function buildDataCheckString(params: URLSearchParams, excludeSignature: boolean): string {
   const pairs: string[] = [];
   for (const [key, value] of params.entries()) {
-    if (FIELDS_EXCLUDED_FROM_CHECK_STRING.has(key)) continue;
+    if (FIELDS_ALWAYS_EXCLUDED_FROM_CHECK_STRING.has(key)) continue;
+    if (excludeSignature && key === 'signature') continue;
     pairs.push(`${key}=${value}`);
   }
   pairs.sort();
   return pairs.join('\n');
+}
+
+/** Constant-time сравнение двух hex-хешей одинаковой длины — не течёт
+ * тайминг-сигнал о том, на каком байте разошлось сравнение. Хеши
+ * разной длины (испорченный/неполный hash) — заведомо не совпадают,
+ * timingSafeEqual на разной длине сам бросил бы исключение, поэтому
+ * длина проверяется явно до вызова. */
+function hashesEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  return bufA.length === bufB.length && bufA.length > 0 && timingSafeEqual(bufA, bufB);
 }
 
 export interface TelegramInitDataValidationOptions {
@@ -82,12 +103,14 @@ export function validateTelegramInitData(
     throw new TelegramInitDataInvalidError('missing hash field');
   }
 
-  const dataCheckString = buildDataCheckString(params);
+  const dataCheckStringWithoutSignature = buildDataCheckString(params, true);
+  const dataCheckStringWithSignature = buildDataCheckString(params, false);
 
   const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest();
-  const expectedHash = createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+  const expectedHashWithoutSignature = createHmac('sha256', secretKey).update(dataCheckStringWithoutSignature).digest('hex');
+  const expectedHashWithSignature = createHmac('sha256', secretKey).update(dataCheckStringWithSignature).digest('hex');
 
-  if (expectedHash !== receivedHash) {
+  if (!hashesEqual(expectedHashWithoutSignature, receivedHash) && !hashesEqual(expectedHashWithSignature, receivedHash)) {
     throw new TelegramInitDataInvalidError('hash mismatch');
   }
 

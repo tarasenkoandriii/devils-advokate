@@ -5,7 +5,7 @@ import { deflateRawSync } from 'zlib';
 // локальной записью — ppt/slides/slide1.xml, реально сжатой через
 // zlib.deflateRawSync (тот же алгоритм raw deflate, что браузерный
 // DecompressionStream('deflate-raw') должен уметь распаковывать).
-function buildSyntheticPptxZip(slideXml: string): Uint8Array {
+function buildSyntheticPptxZip(slideXml: string): Uint8Array<ArrayBuffer> {
   const fileName = 'ppt/slides/slide1.xml';
   const fileNameBytes = new TextEncoder().encode(fileName);
   const xmlBytes = new TextEncoder().encode(slideXml);
