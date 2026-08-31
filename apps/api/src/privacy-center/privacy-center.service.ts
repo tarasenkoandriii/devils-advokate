@@ -27,8 +27,11 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { deleteBlob } from '../common/vercel-blob';
 import { createHash } from 'node:crypto';
+import { resolveBlobToken } from '../common/blob-token';
 
-const BLOB_TOKEN_REF = 'VERCEL_BLOB_READ_WRITE_TOKEN';
+// 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
+// сам создаёт переменную под именем BLOB_READ_WRITE_TOKEN (без
+// префикса), см. объяснение там.
 
 @Injectable()
 export class PrivacyCenterService {
@@ -70,7 +73,7 @@ export class PrivacyCenterService {
     let blobsDeleted = 0;
     let blobsFailed = 0;
     if (evidence.length > 0) {
-      const token = await this.secrets.resolve(BLOB_TOKEN_REF).catch(() => null);
+      const token = await resolveBlobToken(this.secrets).catch(() => null);
       for (const e of evidence) {
         if (!token) { blobsFailed++; continue; }
         try { await deleteBlob(token, e.blobUrl); blobsDeleted++; } catch { blobsFailed++; }

@@ -186,3 +186,39 @@ export interface DomainProjectList { items: DomainProjectRow[]; total: number; t
 export interface DomainProjectDetail { id: string; question: string; goal: string | null; createdAt: string; updatedAt: string; frozenAt: string | null; frozenNote: string | null; owner: { id: string; telegramId: string; isRestricted: boolean; isBlocked: boolean }; config: Record<string, unknown> | null; _count: { conversations: number } }
 export interface IntakeSummary { windowDays: number; total: number; byStatus: Record<string, number>; dispatched: number; mismatches: number; mismatchRate: number | null; avgConfidence: number | null; avgFollowUps: number | null; suggestedVsChosen: Record<string, Record<string, number>> }
 export interface AdminMediaReviewQueue { id: string; title: string; createdAt: string; ownerTelegramId: string; totalItems: number; byStatus: Record<string, number>; stuckProcessing: number }
+
+// ── Sandbox (пункт [admin-sandbox] 2026-08-31) ──
+
+export interface SandboxCheckItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail?: string;
+}
+export interface SandboxStatus { items: SandboxCheckItem[] }
+
+export interface SandboxYouTubeResult {
+  videoId: string;
+  title: string;
+  channelName: string;
+  thumbnailUrl: string;
+  durationSeconds: number | null;
+  publishedAt: string | null;
+}
+export interface SandboxYouTubeSearch { tookMs: number; results: SandboxYouTubeResult[] }
+
+export interface SandboxTranscriptionRun {
+  projectId: string;
+  conversationId: string;
+  status: string;
+  externalJobId: string | null;
+  note: string;
+}
+export interface SandboxConversation {
+  id: string;
+  status: string;
+  externalJobId: string | null;
+  segments: number;
+  participants: number;
+  updatedAt: string;
+}

@@ -79,6 +79,7 @@ import { CalibrationModule } from './calibration/calibration.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
 import { AdminAuthModule } from './admin-auth/admin-auth.module';
 import { AdminUsersModule } from './admin-users/admin-users.module';
+import { AdminSandboxModule } from './admin-sandbox/admin-sandbox.module';
 import { MediaReviewModule } from './media-review/media-review.module';
 import { IntakeModule } from './intake/intake.module';
 import { AdminDomainsModule } from './admin-domains/admin-domains.module';
@@ -181,6 +182,9 @@ import { DtpModule } from './dtp/dtp.module';
     // или /admin/users/* запрос не находил бы обработчик.
     AdminAuthModule,
     AdminUsersModule,
+    // Пункт [admin-sandbox] 2026-08-31: песочница оператора — прогон
+    // цепочки YouTube-разбора из админки против боевой конфигурации.
+    AdminSandboxModule,
     MediaReviewModule,
     IntakeModule, // ТЗ domain-ui-and-voice-intake §2 — голосовой квиз на входе
     AdminDomainsModule, // ТЗ domain-ui-and-voice-intake §1.4 — операторский обзор доменов/intake/media-review

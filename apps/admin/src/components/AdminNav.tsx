@@ -34,6 +34,10 @@ export function AdminNav() {
     { href: '/domains', label: 'Сценарии', visible: me.isOperator },
     { href: '/intake', label: 'Intake', visible: me.isOperator },
     { href: '/media-review', label: 'Медиа', visible: me.isOperator },
+    // Пункт [admin-sandbox] 2026-08-31: прогон продовых сценариев
+    // (цепочка YouTube-разбора) от имени самого оператора. isOperator,
+    // а не отдельный флаг: песочница тратит реальные деньги и квоты.
+    { href: '/sandbox', label: 'Sandbox', visible: me.isOperator },
   ];
 
   const visibleItems = items.filter((i) => i.visible);

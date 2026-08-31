@@ -231,3 +231,32 @@ export function listAdminMediaReviewQueues() {
 export function setDomainProjectFrozen(domain: string, id: string, frozen: boolean, note?: string) {
   return apiPatch<{ id: string; frozenAt: string | null; frozenNote: string | null }>(`/admin/domains/${domain}/projects/${id}/freeze`, { frozen, note });
 }
+
+// ── Sandbox (пункт [admin-sandbox] 2026-08-31) ──
+// Прогон продовых сценариев от имени самого оператора; описание границ
+// безопасности — в шапке apps/api/src/admin-sandbox/admin-sandbox.service.ts.
+import type {
+  SandboxStatus,
+  SandboxYouTubeSearch,
+  SandboxTranscriptionRun,
+  SandboxConversation,
+} from './types';
+
+export function getSandboxStatus() {
+  return apiGet<SandboxStatus>('/admin/sandbox/status');
+}
+export function grantSandboxConsents() {
+  return apiPost<{ granted: string[]; alreadyHad: string[] }>('/admin/sandbox/consents');
+}
+export function sandboxYouTubeSearch(query: string) {
+  return apiPost<SandboxYouTubeSearch>('/admin/sandbox/youtube-search', { query });
+}
+export function runSandboxTranscription() {
+  return apiPost<SandboxTranscriptionRun>('/admin/sandbox/transcription');
+}
+export function getSandboxConversation(id: string) {
+  return apiGet<SandboxConversation>(`/admin/sandbox/conversation/${id}`);
+}
+export function sandboxAnalyze(conversationId: string, kind: 'manipulation' | 'discrepancy' | 'turning-points') {
+  return apiPost<unknown>('/admin/sandbox/analyze', { conversationId, kind });
+}

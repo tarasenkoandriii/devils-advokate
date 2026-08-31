@@ -17,9 +17,12 @@ import { putPrivateBlob, VercelBlobError } from '../common/vercel-blob';
 import { ConsentType, DtpEvidenceMediaType, DtpCriterionCategory } from '@prisma/client';
 import { assertOwnedDtpProject } from './dtp-access';
 import { ExtractedDtpConfigDraft } from './dtp-onboarding.service';
+import { resolveBlobToken } from '../common/blob-token';
 
 const BREAKDOWN_TASK_TYPE = 'dtp-consultation-breakdown';
-const BLOB_TOKEN_REF = 'VERCEL_BLOB_READ_WRITE_TOKEN';
+// 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
+// сам создаёт переменную под именем BLOB_READ_WRITE_TOKEN (без
+// префикса), см. объяснение там.
 const MAX_EVIDENCE_BASE64_BYTES = 60_000_000; // ~60MB base64 — з запасом під коротке відео, суворіший ліміт за фото (Пункт [health-lab-ocr] 8MB)
 
 // §3.3 ТЗ, буквально — ЛИШЕ criterionId/whatWasSaid/sourceSegmentId,
@@ -294,7 +297,7 @@ export class DtpService {
     // цілісності, не клієнтське твердження (§3.4 ТЗ "chain of custody").
     const fileHash = createHash('sha256').update(buffer).digest('hex');
 
-    const token = await this.secrets.resolve(BLOB_TOKEN_REF);
+    const token = await resolveBlobToken(this.secrets);
     const pathname = `dtp-evidence/${configId}/${fileHash}`;
     let blobResult;
     try {

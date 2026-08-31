@@ -54,8 +54,7 @@ import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
-
-export const BLOB_TOKEN_REF = 'VERCEL_BLOB_READ_WRITE_TOKEN';
+import { resolveBlobToken } from '../common/blob-token';
 
 /** Префикс пути в сторе. Отдельный от dtp-/photo-verification-файлов
  * намеренно: по pathname должно быть видно, что это транзитное аудио
@@ -105,7 +104,9 @@ export class AudioBlobService {
   ) {}
 
   private async token(): Promise<string> {
-    return this.secrets.resolve(BLOB_TOKEN_REF);
+    // Два имени переменной, не одно — Vercel сам создаёт
+    // BLOB_READ_WRITE_TOKEN без префикса; см. common/blob-token.ts.
+    return resolveBlobToken(this.secrets);
   }
 
   /** Шаг 1 протокола. Возвращается СЫРОЙ ответ SDK, без нашего конверта

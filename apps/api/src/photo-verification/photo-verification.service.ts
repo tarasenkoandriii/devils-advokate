@@ -26,10 +26,13 @@ import { ConsentService } from '../consent/consent.service';
 import { putPublicBlob, deleteBlob, VercelBlobError } from '../common/vercel-blob';
 import { reverseImageSearch, SerpApiError } from '../common/serpapi-client';
 import { ConsentType, PhotoVerificationStatus } from '@prisma/client';
+import { resolveBlobToken } from '../common/blob-token';
 
 const DAILY_LIMIT_PER_USER = 5; // "особенно строгие лимиты" (§4.4 ТЗ) — намеренно низкое число, не для массового использования
 const MAX_IMAGE_BYTES = 8_000_000; // 8MB — с запасом под фото документа, не для видео/архивов
-const BLOB_TOKEN_REF = 'VERCEL_BLOB_READ_WRITE_TOKEN';
+// 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
+// сам создаёт переменную под именем BLOB_READ_WRITE_TOKEN (без
+// префикса), см. объяснение там.
 const SERPAPI_KEY_REF = 'SERPAPI_KEY';
 
 @Injectable()
@@ -52,7 +55,7 @@ export class PhotoVerificationService {
     const imageBuffer = await this.bufferStreamWithLimit(imageStream);
 
     const [blobToken, serpApiKey] = await Promise.all([
-      this.secrets.resolve(BLOB_TOKEN_REF),
+      resolveBlobToken(this.secrets),
       this.secrets.resolve(SERPAPI_KEY_REF),
     ]);
 

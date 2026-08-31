@@ -1,0 +1,404 @@
+// Пункт [admin-sandbox] 2026-08-31 — песочница оператора: прогон
+// реальных сценариев (в первую очередь цепочки YouTube-разбора) из
+// админки, против боевой конфигурации.
+//
+// ЗАЧЕМ ОНА, если есть TMA. Продовый API закрыт Telegram-авторизацией:
+// каждый запрос требует подписанной initData, curl'ом его не потрогать,
+// а `ALLOW_DEV_AUTH=true` в проде — дыра, а не инструмент. В итоге
+// единственным способом проверить «собралась ли цепочка» был клик по
+// настоящему TMA с телефона — медленно, без диагностики, и падает оно
+// там с сообщением для пользователя, а не для оператора. Песочница
+// делает то же самое из админки: тот же код, те же сервисы, тот же
+// пользователь — но с внятным отчётом на каждом шаге.
+//
+// ТРИ ПРИНЦИПА, каждый — граница безопасности:
+//
+// 1. Всё выполняется ОТ ИМЕНИ САМОГО ОПЕРАТОРА (userId из админ-сессии),
+//    никакой имперсонации. Оператор не может через песочницу читать
+//    чужие разговоры или расходовать чужие лимиты — только свои.
+//    Согласия тоже свои: кнопка «выдать согласия» выдаёт их
+//    операторскому аккаунту, тем же ConsentService.grant(), которым
+//    пользуется TMA, с source='admin-sandbox' в юридическом следе.
+//
+// 2. Никаких обходов проверок. Прогон транскрибации идёт через
+//    ConversationsService.streamUploadAudio()/requestTranscription() —
+//    со всеми проверками согласий и режима приватности. Если проверка
+//    останавливает прогон, это не сбой песочницы, это ЕЁ РЕЗУЛЬТАТ:
+//    значит, и у пользователя остановит.
+//
+// 3. Диагностика конфигурации НЕ показывает значений секретов — только
+//    задан/не задан и коды проблем. Единственное значение, которое
+//    выводится целиком, — API_PUBLIC_BASE_URL: это публичный адрес по
+//    определению, и именно его «почти правильные» значения (домен
+//    админки вместо API, слэш на конце) стоили больше всего времени на
+//    реальном деплое.
+
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ConsentType, ConversationSourceType } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { SecretsService } from '../secrets/secrets.service';
+import { ConsentService } from '../consent/consent.service';
+import { ConversationsService } from '../conversations/conversations.service';
+import { YouTubeSearchService } from '../media-review/youtube-search.service';
+import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
+import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
+import { TurningPointsService } from '../turning-points/turning-points.service';
+import { publicApiBaseUrl } from '../common/public-base-url';
+import { resolveBlobToken } from '../common/blob-token';
+import { diagnoseDatabaseUrl, diagnosePoolerMismatch } from '../prisma/database-url-check';
+
+/** Вопрос-маркер песочного проекта. Поиск идёт по нему, поэтому прогоны
+ * переиспользуют один проект, а не плодят новый на каждую кнопку. */
+const SANDBOX_PROJECT_QUESTION = '[SANDBOX] Проверка конвейера из админки';
+
+const SANDBOX_CONSENT_TYPES: ConsentType[] = [
+  ConsentType.RECORDING,
+  ConsentType.EPHEMERAL_SERVER,
+  ConsentType.EXTERNAL_AI,
+];
+
+export interface SandboxCheckItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  /** Пояснение ТОЛЬКО без секретов: коды, счётчики, публичные адреса. */
+  detail?: string;
+}
+
+export type SandboxAnalysisKind = 'manipulation' | 'discrepancy' | 'turning-points';
+
+/** 3 секунды моно 8кГц 16-бит — ~47 КБ. Синус 440 Гц с огибающей,
+ * чтобы файл не был строго периодическим (некоторые кодеки/валидаторы
+ * подозрительны к идеальной тишине и идеальному тону). Речи здесь нет,
+ * и транскрипт ожидаемо будет ПУСТЫМ — прогон проверяет конвейер
+ * (загрузка → job → вебхук → статус), а не качество распознавания. */
+export function makeSandboxWav(): Buffer {
+  const sampleRate = 8000;
+  const seconds = 3;
+  const samples = sampleRate * seconds;
+  const dataSize = samples * 2;
+  const buf = Buffer.alloc(44 + dataSize);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataSize, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16); // размер fmt-чанка
+  buf.writeUInt16LE(1, 20); // PCM
+  buf.writeUInt16LE(1, 22); // моно
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  buf.writeUInt16LE(2, 32); // block align
+  buf.writeUInt16LE(16, 34); // бит на сэмпл
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataSize, 40);
+  for (let i = 0; i < samples; i++) {
+    const t = i / sampleRate;
+    const envelope = Math.sin((Math.PI * i) / samples); // плавный вход/выход
+    const value = Math.round(Math.sin(2 * Math.PI * 440 * t) * envelope * 12000);
+    buf.writeInt16LE(value, 44 + i * 2);
+  }
+  return buf;
+}
+
+@Injectable()
+export class AdminSandboxService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly secrets: SecretsService,
+    private readonly consent: ConsentService,
+    private readonly conversations: ConversationsService,
+    private readonly youtube: YouTubeSearchService,
+    private readonly manipulation: ManipulationDetectorService,
+    private readonly discrepancy: DiscrepancyAnalysisService,
+    private readonly turningPoints: TurningPointsService,
+  ) {}
+
+  /** Песочница — операторский инструмент: она расходует реальные
+   * деньги (AssemblyAI, LLM) и реальную квоту YouTube, поэтому та же
+   * граница, что у остальных операционных вкладок (§4.1 admin-panel-tz),
+   * а не у модераторских. */
+  private async assertOperator(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isOperator: true } });
+    if (!user?.isOperator) {
+      throw new ForbiddenException('Требуется роль оператора');
+    }
+  }
+
+  private async secretPresent(ref: string): Promise<boolean> {
+    try {
+      await this.secrets.resolve(ref);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Чек-лист готовности цепочки YouTube-разбора. Каждый пункт — то,
+   * что на реальном деплое 2026-08-31 УЖЕ ломалось или могло сломаться
+   * молча; порядок — порядок шагов цепочки, а не важности. */
+  async getStatus(operatorUserId: string): Promise<{ items: SandboxCheckItem[] }> {
+    await this.assertOperator(operatorUserId);
+    const items: SandboxCheckItem[] = [];
+
+    // 1. База — без неё бессмысленно всё остальное.
+    const dbProblems = diagnoseDatabaseUrl(process.env.DATABASE_URL);
+    const poolerWarning = diagnosePoolerMismatch(process.env.DATABASE_URL);
+    let dbReachable = false;
+    let userCount = 0;
+    try {
+      userCount = await this.prisma.user.count();
+      dbReachable = true;
+    } catch {
+      /* отражено в items ниже */
+    }
+    items.push({
+      key: 'database',
+      label: 'База данных',
+      ok: dbReachable && dbProblems.length === 0,
+      detail: dbReachable
+        ? [`подключение работает, пользователей: ${userCount}`, poolerWarning].filter(Boolean).join('; ')
+        : dbProblems.length > 0
+          ? `DATABASE_URL: ${dbProblems.map((p) => p.code).join(', ')}`
+          : 'подключение не удалось — см. Runtime Logs',
+    });
+
+    // 2. Сид — без записей AIProvider резолвить credentialRef нечего.
+    let providers = 0;
+    let assemblyaiSeeded = false;
+    if (dbReachable) {
+      providers = await this.prisma.aIProvider.count();
+      assemblyaiSeeded = (await this.prisma.aIProvider.findUnique({ where: { name: 'assemblyai' } })) !== null;
+    }
+    items.push({
+      key: 'seed',
+      label: 'Сид БД (AIProvider/модели)',
+      ok: providers > 0 && assemblyaiSeeded,
+      detail:
+        providers === 0
+          ? 'провайдеров нет — выполните npm run prisma:seed'
+          : assemblyaiSeeded
+            ? `провайдеров: ${providers}`
+            : `провайдеров: ${providers}, но записи assemblyai нет`,
+    });
+
+    // 3. Ключи по шагам цепочки. Только задан/не задан — значения
+    // секретов из этого эндпоинта не выходят никогда.
+    items.push({
+      key: 'youtube',
+      label: 'YOUTUBE_API_KEY (шаг 1: поиск)',
+      ok: await this.secretPresent('YOUTUBE_API_KEY'),
+    });
+    items.push({
+      key: 'assemblyai',
+      label: 'ASSEMBLYAI_API_KEY (шаги 5–7: расшифровка)',
+      ok: await this.secretPresent('ASSEMBLYAI_API_KEY'),
+    });
+    items.push({
+      key: 'webhook-secret',
+      label: 'ASSEMBLYAI_WEBHOOK_SECRET (шаг 7: приём результата)',
+      ok: await this.secretPresent('ASSEMBLYAI_WEBHOOK_SECRET'),
+    });
+
+    // 4. Публичный адрес API — единственное значение, которое
+    // показывается целиком: оно публичное по определению, а «почти
+    // правильные» варианты (домен админки, слэш) неотличимы без него.
+    try {
+      const base = publicApiBaseUrl();
+      items.push({ key: 'base-url', label: 'API_PUBLIC_BASE_URL', ok: true, detail: base });
+    } catch (err) {
+      items.push({
+        key: 'base-url',
+        label: 'API_PUBLIC_BASE_URL',
+        ok: false,
+        detail: err instanceof Error ? err.message : 'не задан',
+      });
+    }
+
+    // 5. Blob-токен — под любым из двух имён (см. common/blob-token.ts).
+    let blobOk = true;
+    try {
+      await resolveBlobToken(this.secrets);
+    } catch {
+      blobOk = false;
+    }
+    items.push({
+      key: 'blob',
+      label: 'Токен Vercel Blob (прямая загрузка файлов)',
+      ok: blobOk,
+      detail: blobOk ? undefined : 'нет ни VERCEL_BLOB_READ_WRITE_TOKEN, ни BLOB_READ_WRITE_TOKEN',
+    });
+
+    // 6. LLM-ключи (шаг 8: анализ) — нужен хотя бы один.
+    const llm = {
+      openai: await this.secretPresent('OPENAI_API_KEY'),
+      anthropic: await this.secretPresent('ANTHROPIC_API_KEY'),
+      xai: await this.secretPresent('XAI_API_KEY'),
+    };
+    const llmAny = llm.openai || llm.anthropic || llm.xai;
+    items.push({
+      key: 'llm',
+      label: 'LLM-ключ (шаг 8: анализ)',
+      ok: llmAny,
+      detail: llmAny
+        ? Object.entries(llm)
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+            .join(', ')
+        : 'ни одного из OPENAI_API_KEY / ANTHROPIC_API_KEY / XAI_API_KEY',
+    });
+
+    // 7. CORS — не про цепочку, но про то, увидит ли её фронтенд.
+    const cors = process.env.CORS_ORIGIN?.trim();
+    items.push({
+      key: 'cors',
+      label: 'CORS_ORIGIN',
+      ok: Boolean(cors),
+      detail: cors || 'не задан — в проде это блокирует все cross-origin запросы (fail closed)',
+    });
+
+    // 8. Согласия и режим приватности САМОГО оператора: прогоны идут
+    // от его имени, и без согласий транскрибация честно откажет.
+    if (dbReachable) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: operatorUserId },
+        select: { privacyProcessingMode: true },
+      });
+      const consents: string[] = [];
+      const missing: string[] = [];
+      for (const type of SANDBOX_CONSENT_TYPES) {
+        (await this.consent.hasActiveConsent(operatorUserId, type)) ? consents.push(type) : missing.push(type);
+      }
+      const modeOk = user?.privacyProcessingMode !== 'MAXIMUM_PRIVACY';
+      items.push({
+        key: 'consents',
+        label: 'Согласия вашего аккаунта (для прогона транскрибации)',
+        ok: missing.length === 0 && modeOk,
+        detail: !modeOk
+          ? 'privacyProcessingMode=MAXIMUM_PRIVACY — облачная расшифровка запрещена, согласиями не обходится'
+          : missing.length > 0
+            ? `не хватает: ${missing.join(', ')} — кнопка «Выдать согласия» ниже`
+            : consents.join(', '),
+      });
+    }
+
+    return { items };
+  }
+
+  /** Согласия — СЕБЕ, тем же путём, что TMA. source='admin-sandbox'
+   * остаётся в юридическом следе: видно, что согласие выдано из
+   * песочницы, а не через пользовательский экран согласий. */
+  async grantOwnConsents(operatorUserId: string) {
+    await this.assertOperator(operatorUserId);
+    const granted: string[] = [];
+    for (const type of SANDBOX_CONSENT_TYPES) {
+      if (!(await this.consent.hasActiveConsent(operatorUserId, type))) {
+        await this.consent.grant({
+          userId: operatorUserId,
+          consentType: type,
+          version: '1.0',
+          source: 'admin-sandbox',
+        });
+        granted.push(type);
+      }
+    }
+    return { granted, alreadyHad: SANDBOX_CONSENT_TYPES.filter((t) => !granted.includes(t)) };
+  }
+
+  /** Шаг 1 цепочки: реальный поиск через YouTubeSearchService — с
+   * реальной квотой Google и реальным лимитом 20/сутки, которые
+   * расходуются с аккаунта оператора. Песочница намеренно НЕ обходит
+   * лимит: «у оператора работает, у пользователей кончилась квота» —
+   * ровно тот класс расхождений, который она должна ловить, а не
+   * создавать. */
+  async youtubeSearch(operatorUserId: string, query: string) {
+    await this.assertOperator(operatorUserId);
+    if (!query?.trim()) {
+      throw new BadRequestException('Пустой запрос');
+    }
+    const startedAt = Date.now();
+    const results = await this.youtube.search(operatorUserId, query.trim());
+    return { tookMs: Date.now() - startedAt, results };
+  }
+
+  /** Шаги 4–6 цепочки одним прогоном: проект → разговор → загрузка
+   * сгенерированного WAV → постановка задачи на расшифровку. Дальше
+   * работает вебхук; его результат смотрят через getConversation().
+   *
+   * Файл синтетический (3 сек тона, ~47 КБ) — see makeSandboxWav().
+   * Это осознанный компромисс: прогон проверяет ИНФРАСТРУКТУРУ
+   * (ключ, загрузку, webhook-адрес, секрет вебхука, запись статусов),
+   * а не качество распознавания, и стоит копейки. Транскрипт будет
+   * пустым — это ожидаемо и написано в UI. */
+  async runTranscriptionSmoke(operatorUserId: string) {
+    await this.assertOperator(operatorUserId);
+
+    let project = await this.prisma.project.findFirst({
+      where: { ownerId: operatorUserId, question: SANDBOX_PROJECT_QUESTION },
+    });
+    if (!project) {
+      project = await this.prisma.project.create({
+        data: {
+          ownerId: operatorUserId,
+          question: SANDBOX_PROJECT_QUESTION,
+          goal: 'Технический проект песочницы админки — можно удалять',
+        },
+      });
+    }
+
+    const conversation = await this.conversations.create(operatorUserId, project.id, {
+      sourceType: ConversationSourceType.UPLOADED_AUDIO,
+      occurredAt: new Date().toISOString(),
+      durationSeconds: 3,
+    } as never);
+
+    // Загрузка и постановка задачи — через те же методы сервиса, что
+    // использует TMA, со всеми проверками согласий/приватности внутри.
+    const wav = makeSandboxWav();
+    const { Readable } = await import('node:stream');
+    const stream = Readable.toWeb(Readable.from(wav)) as unknown as ReadableStream<Uint8Array>;
+    const { audioUrl } = await this.conversations.streamUploadAudio(operatorUserId, conversation.id, stream);
+
+    const updated = await this.conversations.requestTranscription(operatorUserId, conversation.id, { audioUrl });
+
+    return {
+      projectId: project.id,
+      conversationId: conversation.id,
+      status: updated.status,
+      externalJobId: updated.externalTranscriptionJobId,
+      note: 'Файл — синтетический тон: транскрипт ожидаемо будет пустым. Прогон проверяет конвейер, не распознавание.',
+    };
+  }
+
+  async getConversation(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    const conversation = await this.conversations.get(operatorUserId, conversationId);
+    if (!conversation) {
+      throw new BadRequestException(`Conversation ${conversationId} не найден`);
+    }
+    return {
+      id: conversation.id,
+      status: conversation.status,
+      externalJobId: conversation.externalTranscriptionJobId,
+      segments: conversation.transcript?.segments?.length ?? 0,
+      participants: conversation.participants?.length ?? 0,
+      updatedAt: conversation.updatedAt,
+    };
+  }
+
+  /** Шаг 8: три вида анализа — те же сервисы, что и продовые
+   * эндпоинты, от имени оператора. Порядок важен для статуса DONE в
+   * очереди медиа-разбора: ANALYZED ставит только turning-points. */
+  async analyze(operatorUserId: string, conversationId: string, kind: SandboxAnalysisKind) {
+    await this.assertOperator(operatorUserId);
+    switch (kind) {
+      case 'manipulation':
+        return this.manipulation.detect(operatorUserId, conversationId);
+      case 'discrepancy':
+        return this.discrepancy.detect(operatorUserId, conversationId);
+      case 'turning-points':
+        return this.turningPoints.detect(operatorUserId, conversationId);
+      default:
+        throw new BadRequestException(`Неизвестный вид анализа: ${String(kind)}`);
+    }
+  }
+}
