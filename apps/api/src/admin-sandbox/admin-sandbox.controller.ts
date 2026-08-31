@@ -19,6 +19,27 @@ class AnalyzeDto {
   kind!: SandboxAnalysisKind;
 }
 
+// Вторая итерация 2026-08-31 — загрузка реального файла из песочницы.
+class CreateUploadConversationDto {
+  isVideo?: boolean;
+  durationSeconds?: number;
+}
+
+class UploadTokenDto {
+  conversationId!: string;
+  pathname!: string;
+}
+
+class ConfirmUploadDto {
+  conversationId!: string;
+  pathname!: string;
+}
+
+class TranscribeDto {
+  conversationId!: string;
+  languageCode?: string;
+}
+
 @Controller('admin/sandbox')
 @UseGuards(AdminSessionGuard)
 @UseInterceptors(ApiResponseInterceptor)
@@ -53,5 +74,31 @@ export class AdminSandboxController {
   @Post('analyze')
   async analyze(@CurrentUser() userId: string, @Body() dto: AnalyzeDto) {
     return this.sandbox.analyze(userId, dto.conversationId, dto.kind);
+  }
+
+  // ── Загрузка реального аудио/видео (вторая итерация 2026-08-31) ──
+  // В отличие от TMA-эндпоинта выдачи токена (audio-upload.controller.ts,
+  // без интерцептора — его ответ разбирает SDK), здесь ответ в НАШЕМ
+  // конверте: клиентскую половину протокола админка выполняет сама
+  // (put() с готовым токеном), поэтому обычный формат уместен.
+
+  @Post('upload-conversation')
+  async createUploadConversation(@CurrentUser() userId: string, @Body() dto: CreateUploadConversationDto) {
+    return this.sandbox.createUploadConversation(userId, dto.isVideo ?? false, dto.durationSeconds);
+  }
+
+  @Post('upload-token')
+  async uploadToken(@CurrentUser() userId: string, @Body() dto: UploadTokenDto) {
+    return this.sandbox.issueUploadClientToken(userId, dto.conversationId, dto.pathname);
+  }
+
+  @Post('confirm-upload')
+  async confirmUpload(@CurrentUser() userId: string, @Body() dto: ConfirmUploadDto) {
+    return this.sandbox.confirmUpload(userId, dto.conversationId, dto.pathname);
+  }
+
+  @Post('transcribe')
+  async transcribe(@CurrentUser() userId: string, @Body() dto: TranscribeDto) {
+    return this.sandbox.transcribeUploaded(userId, dto.conversationId, dto.languageCode);
   }
 }

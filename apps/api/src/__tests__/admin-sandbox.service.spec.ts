@@ -51,11 +51,15 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
       transcript: { segments: [] }, participants: [], updatedAt: new Date(),
     })),
   };
+  const audioBlob = {
+    issueUploadToken: jest.fn(async () => ({ type: 'blob.generate-client-token', clientToken: 'tok-1' })),
+    confirmUpload: jest.fn(async () => ({ pathname: 'conversation-audio/conv-1/f.m4a', sizeBytes: 10, contentType: 'audio/mp4' })),
+  };
   const youtube = { search: jest.fn(async () => [{ videoId: 'v1' }]) };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
   const discrepancy = { detect: jest.fn(async () => ({ kind: 'disc' })) };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, youtube, manipulation, discrepancy, turningPoints };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, manipulation, discrepancy, turningPoints };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -64,6 +68,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.secrets as any,
     deps.consent as any,
     deps.conversations as any,
+    deps.audioBlob as any,
     deps.youtube as any,
     deps.manipulation as any,
     deps.discrepancy as any,
@@ -82,6 +87,10 @@ describe('AdminSandboxService — граница по роли', () => {
     await expect(svc.runTranscriptionSmoke(REGULAR)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(svc.getConversation(REGULAR, 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
     await expect(svc.analyze(REGULAR, 'conv-1', 'manipulation')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.createUploadConversation(REGULAR, false)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.issueUploadClientToken(REGULAR, 'conv-1', 'conversation-audio/conv-1/f.m4a')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.confirmUpload(REGULAR, 'conv-1', 'conversation-audio/conv-1/f.m4a')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.transcribeUploaded(REGULAR, 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
     // Ни платных вызовов, ни выдачи согласий не произошло.
     expect(deps.youtube.search).not.toHaveBeenCalled();
     expect(deps.consent.grant).not.toHaveBeenCalled();
@@ -209,6 +218,61 @@ describe('AdminSandboxService.analyze', () => {
     const deps = makeDeps();
     const svc = makeService(deps);
     await expect(svc.analyze(OPERATOR, 'conv-1', 'nonsense' as never)).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('AdminSandboxService — загрузка реального файла (вторая итерация)', () => {
+  it('токен берётся через AudioBlobService с userId оператора и multipart', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const res = await svc.issueUploadClientToken(OPERATOR, 'conv-1', ' conversation-audio/conv-1/rec.m4a ');
+
+    expect(res.clientToken).toBe('tok-1');
+    const [userId, convId, body] = (deps.audioBlob.issueUploadToken as jest.Mock).mock.calls[0];
+    expect(userId).toBe(OPERATOR);
+    expect(convId).toBe('conv-1');
+    // Синтезированное тело — ровно протокол handleUpload, с trim'ом
+    // pathname: пробел из буфера обмена не должен попадать в токен.
+    expect(body).toEqual({
+      type: 'blob.generate-client-token',
+      payload: { pathname: 'conversation-audio/conv-1/rec.m4a', clientPayload: null, multipart: true },
+    });
+  });
+
+  it('пустой pathname — отказ до обращения к blob', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    await expect(svc.issueUploadClientToken(OPERATOR, 'conv-1', '  ')).rejects.toBeInstanceOf(BadRequestException);
+    expect(deps.audioBlob.issueUploadToken).not.toHaveBeenCalled();
+  });
+
+  it('подтверждение и запуск расшифровки делегируются продовым сервисам с userId оператора', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.confirmUpload(OPERATOR, 'conv-1', 'conversation-audio/conv-1/rec.m4a');
+    expect(deps.audioBlob.confirmUpload).toHaveBeenCalledWith(OPERATOR, 'conv-1', {
+      pathname: 'conversation-audio/conv-1/rec.m4a',
+    });
+
+    const started = await svc.transcribeUploaded(OPERATOR, 'conv-1');
+    // Без audioUrl — ссылку подписывает сам ConversationsService из
+    // audioBlobPathname; передать сюда URL значило бы открыть обход.
+    expect(deps.conversations.requestTranscription).toHaveBeenCalledWith(OPERATOR, 'conv-1', {
+      languageCode: undefined,
+    });
+    expect(started.status).toBe('TRANSCRIBING');
+  });
+
+  it('createUploadConversation выбирает sourceType по типу файла', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.createUploadConversation(OPERATOR, true, 120);
+    const dto = (deps.conversations.create as jest.Mock).mock.calls[0][2];
+    expect(dto.sourceType).toBe('UPLOADED_VIDEO');
+    expect(dto.durationSeconds).toBe(120);
   });
 });
 

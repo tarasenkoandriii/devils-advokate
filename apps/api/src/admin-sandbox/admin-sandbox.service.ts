@@ -34,11 +34,13 @@
 //    реальном деплое.
 
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import type { HandleUploadBody } from '@vercel/blob/client';
 import { ConsentType, ConversationSourceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConversationsService } from '../conversations/conversations.service';
+import { AudioBlobService } from '../conversations/audio-blob.service';
 import { YouTubeSearchService } from '../media-review/youtube-search.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
@@ -107,6 +109,7 @@ export class AdminSandboxService {
     private readonly secrets: SecretsService,
     private readonly consent: ConsentService,
     private readonly conversations: ConversationsService,
+    private readonly audioBlob: AudioBlobService,
     private readonly youtube: YouTubeSearchService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
@@ -366,6 +369,97 @@ export class AdminSandboxService {
       status: updated.status,
       externalJobId: updated.externalTranscriptionJobId,
       note: 'Файл — синтетический тон: транскрипт ожидаемо будет пустым. Прогон проверяет конвейер, не распознавание.',
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Пункт [admin-sandbox], вторая итерация 2026-08-31 — загрузка
+  // РЕАЛЬНОГО аудио/видео из песочницы, а не только синтетического WAV.
+  //
+  // Повод буквальный: первый же прогон на проде дошёл до TRANSCRIBED с
+  // нулём сегментов (что и обещано), а следующий шаг — «загрузите
+  // реальный разговор через TMA с телефона» — разрывал отладочный цикл
+  // на полпути. Теперь весь цикл, включая содержательный анализ,
+  // проходится из одной вкладки.
+  //
+  // Механика ровно та же, что у TMA (пункт [blob-upload]): токен →
+  // прямая загрузка в приватный blob мимо функции → подтверждение →
+  // transcribe без audioUrl. Отличие одно: у админки авторизация — не
+  // Telegram-заголовок, а httpOnly-cookie, и клиентская половина
+  // @vercel/blob не умеет слать cookie на кросс-доменный handleUploadUrl.
+  // Поэтому админка получает клиентский токен через ОБЫЧНЫЙ
+  // admin-эндпоинт (наш конверт, наши credentials) и грузит файл
+  // функцией put() с этим токеном — SDK-протокол handleUpload здесь
+  // синтезируется на сервере, см. issueUploadClientToken().
+  // ─────────────────────────────────────────────────────────────────
+
+  /** Разговор под загрузку реального файла — в том же песочном
+   * проекте, что и синтетические прогоны. sourceType от типа файла:
+   * это видно потом в TMA и влияет только на подпись, не на конвейер. */
+  async createUploadConversation(operatorUserId: string, isVideo: boolean, durationSeconds?: number) {
+    await this.assertOperator(operatorUserId);
+
+    let project = await this.prisma.project.findFirst({
+      where: { ownerId: operatorUserId, question: SANDBOX_PROJECT_QUESTION },
+    });
+    if (!project) {
+      project = await this.prisma.project.create({
+        data: {
+          ownerId: operatorUserId,
+          question: SANDBOX_PROJECT_QUESTION,
+          goal: 'Технический проект песочницы админки — можно удалять',
+        },
+      });
+    }
+
+    const conversation = await this.conversations.create(operatorUserId, project.id, {
+      sourceType: isVideo ? ConversationSourceType.UPLOADED_VIDEO : ConversationSourceType.UPLOADED_AUDIO,
+      occurredAt: new Date().toISOString(),
+      durationSeconds,
+    } as never);
+
+    return { projectId: project.id, conversationId: conversation.id };
+  }
+
+  /** Клиентский токен на прямую запись в blob. Тело протокола
+   * handleUpload синтезируется здесь, на сервере, — клиент присылает
+   * только pathname. Все ограничения (владение, согласия, префикс,
+   * типы, 500 МБ, TTL) применяет AudioBlobService — тот же код, что
+   * для TMA, ни одной собственной проверки-копии. */
+  async issueUploadClientToken(operatorUserId: string, conversationId: string, pathname: string) {
+    await this.assertOperator(operatorUserId);
+    if (!pathname?.trim()) {
+      throw new BadRequestException('pathname обязателен');
+    }
+
+    const body: HandleUploadBody = {
+      type: 'blob.generate-client-token',
+      payload: { pathname: pathname.trim(), clientPayload: null, multipart: true },
+    };
+    const result = await this.audioBlob.issueUploadToken(operatorUserId, conversationId, body, {});
+    if (!('clientToken' in result)) {
+      // По построению body недостижимо; проверка — чтобы тип ответа
+      // был честным, а не «as any».
+      throw new BadRequestException('Не удалось выдать токен загрузки');
+    }
+    return { clientToken: result.clientToken };
+  }
+
+  /** Подтверждение — тот же confirmUpload, что дергает TMA. */
+  async confirmUpload(operatorUserId: string, conversationId: string, pathname: string) {
+    await this.assertOperator(operatorUserId);
+    return this.audioBlob.confirmUpload(operatorUserId, conversationId, { pathname });
+  }
+
+  /** Запуск расшифровки загруженного файла — transcribe без audioUrl:
+   * ссылку подпишет сам ConversationsService из audioBlobPathname. */
+  async transcribeUploaded(operatorUserId: string, conversationId: string, languageCode?: string) {
+    await this.assertOperator(operatorUserId);
+    const updated = await this.conversations.requestTranscription(operatorUserId, conversationId, { languageCode });
+    return {
+      conversationId,
+      status: updated.status,
+      externalJobId: updated.externalTranscriptionJobId,
     };
   }
 

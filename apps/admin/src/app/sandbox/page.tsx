@@ -22,6 +22,10 @@ import {
   runSandboxTranscription,
   getSandboxConversation,
   sandboxAnalyze,
+  createSandboxUploadConversation,
+  getSandboxUploadToken,
+  confirmSandboxUpload,
+  sandboxTranscribe,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -126,6 +130,67 @@ export default function SandboxPage() {
       setRunError(errText(e));
     } finally {
       setRunning(false);
+    }
+  }
+
+  // ── Загрузка реального файла (вторая итерация 2026-08-31) ──
+  // Тот же протокол прямой загрузки, что у TMA, но клиентскую половину
+  // страница выполняет сама: токен берётся обычным admin-запросом (с
+  // cookie), а байты уходят put()'ом напрямую в blob — SDK-шный
+  // upload() не подходит, он не умеет слать cookie на кросс-доменный
+  // handleUploadUrl.
+  const [file, setFile] = useState<File | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<'idle' | 'preparing' | 'uploading' | 'confirming' | 'starting'>('idle');
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  async function handleFileRun() {
+    if (!file) return;
+    setUploadError(null);
+    setRunError(null);
+    setConversation(null);
+    setRun(null);
+    try {
+      setUploadPhase('preparing');
+      const isVideo = file.type.startsWith('video/');
+      const { projectId, conversationId } = await createSandboxUploadConversation(isVideo);
+
+      // Префикс обязан совпадать с AUDIO_PREFIX на бэкенде — токен вне
+      // него просто не выдадут.
+      const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'upload';
+      const pathname = `conversation-audio/${conversationId}/${safeName}`;
+      const { clientToken } = await getSandboxUploadToken(conversationId, pathname);
+
+      setUploadPhase('uploading');
+      setUploadPercent(0);
+      const { put } = await import('@vercel/blob/client');
+      const blob = await put(pathname, file, {
+        access: 'private',
+        token: clientToken,
+        contentType: file.type || 'application/octet-stream',
+        multipart: true,
+        onUploadProgress: ({ percentage }) => setUploadPercent(percentage),
+      });
+
+      setUploadPhase('confirming');
+      await confirmSandboxUpload(conversationId, blob.pathname);
+
+      setUploadPhase('starting');
+      const started = await sandboxTranscribe(conversationId);
+
+      // Дальше — та же панель статуса и те же кнопки анализа, что у
+      // синтетического прогона: run единый для обоих путей.
+      setRun({
+        projectId,
+        conversationId,
+        status: started.status,
+        externalJobId: started.externalJobId,
+        note: 'Реальный файл: после TRANSCRIBED сегментов будет больше нуля — можно запускать анализ ниже.',
+      });
+    } catch (e) {
+      setUploadError(errText(e));
+    } finally {
+      setUploadPhase('idle');
     }
   }
 
@@ -253,13 +318,47 @@ export default function SandboxPage() {
           проверяется конвейер: ключ, загрузка, адрес вебхука, секрет, запись статусов.
           Терминальный статус TRANSCRIBED = вся цепочка доставки работает.
         </p>
-        <button type="button" onClick={handleRun} disabled={running}>
-          {running ? 'Запускаем…' : 'Прогнать транскрибацию'}
+        <button type="button" onClick={handleRun} disabled={running || uploadPhase !== 'idle'}>
+          {running ? 'Запускаем…' : 'Прогнать транскрибацию (синтетический WAV)'}
         </button>
+
+        {/* Вторая итерация 2026-08-31 — реальный файл, тот же конвейер.
+            После загрузки статус и анализ переиспользуют панель ниже. */}
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            …или загрузите реальное аудио/видео (до 500 МБ): файл уйдёт напрямую в приватное
+            хранилище, минуя API, — тем же путём, что у пользователей TMA. После расшифровки
+            сегментов будет больше нуля, и анализ ниже станет содержательным. Расшифровка
+            AssemblyAI платная — тарификация поминутная.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="file"
+              accept="audio/*,video/*"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              disabled={uploadPhase !== 'idle'}
+            />
+            <button type="button" onClick={handleFileRun} disabled={!file || uploadPhase !== 'idle' || running}>
+              {uploadPhase === 'idle' && 'Загрузить и расшифровать'}
+              {uploadPhase === 'preparing' && 'Готовим разговор…'}
+              {uploadPhase === 'uploading' && `Загружаем… ${Math.round(uploadPercent)}%`}
+              {uploadPhase === 'confirming' && 'Подтверждаем файл…'}
+              {uploadPhase === 'starting' && 'Запускаем расшифровку…'}
+            </button>
+            {file && uploadPhase === 'idle' && (
+              <span className="muted" style={{ fontSize: 13 }}>
+                {file.name} · {(file.size / 1024 / 1024).toFixed(1)} МБ
+              </span>
+            )}
+          </div>
+          {uploadError && <p style={{ color: 'var(--signal-critical)', marginTop: 10 }}>{uploadError}</p>}
+        </div>
+
         {runError && <p style={{ color: 'var(--signal-critical)', marginTop: 10 }}>{runError}</p>}
         {run && (
           <div style={{ marginTop: 12 }}>
             <div className="muted">Разговор: <code>{run.conversationId}</code> · job: <code>{run.externalJobId ?? '—'}</code></div>
+            <p className="muted" style={{ marginTop: 6, marginBottom: 0 }}>{run.note}</p>
             <div style={{ marginTop: 8, display: 'flex', gap: 16, alignItems: 'center' }}>
               <span>
                 Статус:{' '}

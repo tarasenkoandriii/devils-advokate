@@ -114,6 +114,21 @@ describe('AudioBlobService.issueUploadToken', () => {
   });
 });
 
+describe('AudioBlobService.issueUploadToken — префикс pathname', () => {
+  it('КЛЮЧЕВОЙ ТЕСТ: pathname вне conversation-audio/ не получает токен вовсе', async () => {
+    const deps = makeDeps();
+    mockHandleUpload.mockImplementation(async (opts: any) => {
+      // Настоящий SDK передал бы pathname из запроса клиента — здесь
+      // клиент просит токен на чужой префикс стора.
+      const payload = await opts.onBeforeGenerateToken('dtp-evidence/чужое.jpg', null, false);
+      return { type: 'blob.generate-client-token', clientToken: 'tok', _payload: payload };
+    });
+    const svc = makeService(deps);
+
+    await expect(svc.issueUploadToken(USER_ID, CONV_ID, {} as any, {})).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
 describe('AudioBlobService.confirmUpload', () => {
   it('КЛЮЧЕВОЙ ТЕСТ: размер берётся из хранилища, а не со слов клиента', async () => {
     const deps = makeDeps();

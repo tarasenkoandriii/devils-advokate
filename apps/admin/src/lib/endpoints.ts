@@ -260,3 +260,26 @@ export function getSandboxConversation(id: string) {
 export function sandboxAnalyze(conversationId: string, kind: 'manipulation' | 'discrepancy' | 'turning-points') {
   return apiPost<unknown>('/admin/sandbox/analyze', { conversationId, kind });
 }
+
+// ── Sandbox: загрузка реального аудио/видео (вторая итерация 2026-08-31) ──
+export function createSandboxUploadConversation(isVideo: boolean, durationSeconds?: number) {
+  return apiPost<{ projectId: string; conversationId: string }>('/admin/sandbox/upload-conversation', {
+    isVideo,
+    durationSeconds,
+  });
+}
+export function getSandboxUploadToken(conversationId: string, pathname: string) {
+  return apiPost<{ clientToken: string }>('/admin/sandbox/upload-token', { conversationId, pathname });
+}
+export function confirmSandboxUpload(conversationId: string, pathname: string) {
+  return apiPost<{ pathname: string; sizeBytes: number; contentType: string }>('/admin/sandbox/confirm-upload', {
+    conversationId,
+    pathname,
+  });
+}
+export function sandboxTranscribe(conversationId: string, languageCode?: string) {
+  return apiPost<{ conversationId: string; status: string; externalJobId: string | null }>('/admin/sandbox/transcribe', {
+    conversationId,
+    languageCode,
+  });
+}

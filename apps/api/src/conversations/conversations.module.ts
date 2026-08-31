@@ -19,6 +19,10 @@ import { SecretsModule } from '../secrets/secrets.module';
   // TranscriptionService экспортирован дополнительно к
   // ConversationsService (Пункт 69, §3.26 ТЗ) — переиспользуется в
   // SparringModule для голосового ввода реплик, не задублирован.
-  exports: [ConversationsService, TranscriptionService],
+  // AudioBlobService — для AdminSandboxModule (загрузка реального файла
+  // из песочницы идёт тем же протоколом, что у TMA). Отсутствие этого
+  // экспорта поймал app-bootstrap.spec.ts — тот самый тест, ради
+  // которого он и был написан после инцидента с SecretsService.
+  exports: [ConversationsService, TranscriptionService, AudioBlobService],
 })
 export class ConversationsModule {}

@@ -60,7 +60,7 @@ import { resolveBlobToken } from '../common/blob-token';
  * намеренно: по pathname должно быть видно, что это транзитное аудио
  * разговора, а не долгоживущее доказательство — их политики удаления
  * прямо противоположны (см. putPrivateBlob в common/vercel-blob.ts). */
-const AUDIO_PREFIX = 'conversation-audio/';
+export const AUDIO_PREFIX = 'conversation-audio/';
 
 /** 500 МБ — не «круглое число на глаз», а верхняя граница того, что
  * имеет смысл отправлять в AssemblyAI одним файлом: у самого
@@ -124,7 +124,16 @@ export class AudioBlobService {
       // шапку файла). Express-объект подходит по форме: SDK читает
       // request.headers[...] для веток, которых у нас нет.
       request: request as Parameters<typeof handleUpload>[0]['request'],
-      onBeforeGenerateToken: async () => {
+      onBeforeGenerateToken: async (pathname: string) => {
+        // 2026-08-31 (вторая итерация): префикс проверяется уже ЗДЕСЬ,
+        // а не только на подтверждении. Токен с pathname вне префикса
+        // раньше выдавался и позволял записать файл-сирота в чужую
+        // часть стора (подтвердить его было нельзя, но байты уже
+        // лежали). Токен пришивает pathname намертво, поэтому одна
+        // проверка до выдачи закрывает вопрос целиком.
+        if (!pathname.startsWith(AUDIO_PREFIX)) {
+          throw new ForbiddenException(`pathname должен начинаться с «${AUDIO_PREFIX}»`);
+        }
         // ГЛАВНАЯ ПРИЧИНА, ПО КОТОРОЙ ЭТО НЕ ПРОСТО ПРОКСИ К SDK.
         // Токен — это право записать файл в наш стор, поэтому обе
         // проверки обязаны стоять ЗДЕСЬ, до его выдачи, а не на шаге
