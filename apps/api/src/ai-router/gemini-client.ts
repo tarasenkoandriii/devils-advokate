@@ -206,10 +206,22 @@ export class GeminiClient implements AIBackgroundProviderClient {
       throw new GeminiApiError(response.status, errorText, 'submit');
     }
 
-    const json: any = await response.json();
+    const rawBody = await response.text();
+    let json: any;
+    try {
+      json = JSON.parse(rawBody);
+    } catch {
+      throw new GeminiApiError(response.status, `non-JSON submit body: ${rawBody.slice(0, 1500)}`, 'submit');
+    }
     const externalId = json?.id;
     if (typeof externalId !== 'string' || !externalId) {
-      throw new Error('Gemini interactions submit returned unexpected shape (no id)');
+      // Задача может быть уже принята (и оплачена) провайдером, но без
+      // id мы её потеряли — падаем с ПОЛНЫМ телом, не ретраим вслепую.
+      throw new GeminiApiError(
+        response.status,
+        `submit succeeded but no interaction id in body: ${rawBody.slice(0, 1500)}`,
+        'submit',
+      );
     }
     return { externalId };
   }
@@ -230,21 +242,37 @@ export class GeminiClient implements AIBackgroundProviderClient {
       throw new GeminiApiError(response.status, errorText, 'poll');
     }
 
-    const json: any = await response.json();
+    // ФОРМА ОТВЕТА — через сырой текст: ошибки формы ниже несут ПОЛНОЕ
+    // тело в GeminiApiError(200, …) и потому НЕ ретраятся (isRetryable
+    // false — форма детерминирована, следующий тик увидит то же самое).
+    // Урок первого живого прогона: shape-ошибка как generic Error
+    // трактовалась воркером как транзиентная, и джоба молча ждала
+    // 2-часовой lease, опрашивая ответ, который никогда не изменится.
+    const rawBody = await response.text();
+    let json: any;
+    try {
+      json = JSON.parse(rawBody);
+    } catch {
+      throw new GeminiApiError(response.status, `non-JSON poll body: ${rawBody.slice(0, 1500)}`, 'poll');
+    }
     const status = json?.status;
     if (typeof status !== 'string') {
-      throw new Error('Gemini interactions fetch returned unexpected shape (no status)');
+      throw new GeminiApiError(
+        response.status,
+        `poll body has no status field: ${rawBody.slice(0, 1500)}`,
+        'poll',
+      );
     }
 
-    // output_text — конкатенация последнего model_output; полная форма
-    // — steps[].content[].text. Для completed без output_text — явная
-    // ошибка о неожиданной форме, как у двух существующих клиентов.
     let text: string | undefined;
     if (status === 'completed') {
-      if (typeof json?.output_text === 'string') {
-        text = json.output_text;
-      } else {
-        throw new Error('Gemini interactions returned status=completed without output_text — unexpected shape');
+      text = GeminiClient.extractText(json);
+      if (text === undefined) {
+        throw new GeminiApiError(
+          response.status,
+          `status=completed but no readable text (neither output_text nor steps[].content[].text): ${rawBody.slice(0, 1500)}`,
+          'poll',
+        );
       }
     }
 
@@ -262,5 +290,28 @@ export class GeminiClient implements AIBackgroundProviderClient {
         : undefined,
       raw: json,
     };
+  }
+
+  /** Достать текст завершённой интеракции. output_text — удобное
+   * агрегатное поле; полная форма — steps[], где последний шаг типа
+   * model_output несёт content[] с текстовыми частями. Пробуем ОБА,
+   * прежде чем признать форму неожиданной: живой прогон показал, что
+   * поверхность может отдавать любую из них. undefined = не нашли. */
+  static extractText(json: any): string | undefined {
+    if (typeof json?.output_text === 'string' && json.output_text.trim()) {
+      return json.output_text;
+    }
+    const steps = Array.isArray(json?.steps) ? json.steps : [];
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const step = steps[i];
+      if (step?.type !== 'model_output') continue;
+      const parts = Array.isArray(step?.content) ? step.content : [];
+      const text = parts
+        .filter((p: any) => p?.type === 'text' && typeof p.text === 'string')
+        .map((p: any) => p.text)
+        .join('');
+      if (text.trim()) return text;
+    }
+    return undefined;
   }
 }

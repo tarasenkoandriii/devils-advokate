@@ -180,10 +180,41 @@ describe('GeminiClient.fetchBackground — маппинг статусов', () 
     expect(res.usage?.inputTokensByModality?.video).toBe(350000);
   });
 
-  it('КЛЮЧЕВОЙ ТЕСТ: completed БЕЗ output_text — ошибка о неожиданной форме, не пустой успех', async () => {
-    mockFetchOnce({ id: 'int-1', status: 'completed' });
+  it('completed с текстом в steps[] (без output_text) — текст извлекается из последнего model_output', async () => {
+    mockFetchOnce({
+      id: 'int-1',
+      status: 'completed',
+      steps: [
+        { type: 'user_input', content: [{ type: 'text', text: 'промпт' }] },
+        { type: 'model_output', content: [{ type: 'text', text: '{"ok":' }, { type: 'text', text: 'true}' }] },
+      ],
+    });
     const client = new GeminiClient();
-    await expect(client.fetchBackground('int-1', CREDS)).rejects.toThrow(/output_text/);
+    const res = await client.fetchBackground('int-1', CREDS);
+    expect(res.text).toBe('{"ok":true}');
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (живой прогон, вторая находка): completed БЕЗ читаемого текста — GeminiApiError с ПОЛНЫМ телом, НЕ ретраится', async () => {
+    mockFetchOnce({ id: 'int-1', status: 'completed', outputs: [{ something: 'else' }] });
+    const client = new GeminiClient();
+    const err = (await client.fetchBackground('int-1', CREDS).then(() => null, (e: unknown) => e)) as GeminiApiError;
+    // Раньше это был generic Error → воркер считал его транзиентным и
+    // молча опрашивал НЕИЗМЕНЯЕМЫЙ ответ до 2-часового lease. Теперь —
+    // не-ретраебельная ошибка с телом: воркер закроет джобу сразу, и
+    // форма ответа будет видна в partialResult.
+    expect(err).toBeInstanceOf(GeminiApiError);
+    expect(err.isRetryable).toBe(false);
+    expect(err.message).toMatch(/output_text/);
+    expect(err.body).toContain('"outputs"');
+  });
+
+  it('тело без поля status — тоже GeminiApiError с телом, не транзиентное «waiting»', async () => {
+    mockFetchOnce({ interaction: { id: 'int-1' } });
+    const client = new GeminiClient();
+    const err = (await client.fetchBackground('int-1', CREDS).then(() => null, (e: unknown) => e)) as GeminiApiError;
+    expect(err).toBeInstanceOf(GeminiApiError);
+    expect(err.isRetryable).toBe(false);
+    expect(err.body).toContain('"interaction"');
   });
 });
 

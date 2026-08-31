@@ -213,7 +213,7 @@ describe('AIRouterService — воркер', () => {
     jest.spyOn(global, 'fetch').mockResolvedValueOnce({
       ok: true, status: 200, statusText: 'OK',
       json: async () => ({ id: 'int-1', status: 'completed', output_text: 'result-text' }),
-      text: async () => '',
+      text: async () => JSON.stringify({ id: 'int-1', status: 'completed', output_text: 'result-text' }),
     } as unknown as Response);
 
     const res = await router.pollRunning(10);
@@ -241,7 +241,7 @@ describe('AIRouterService — воркер', () => {
     jest.spyOn(global, 'fetch').mockResolvedValueOnce({
       ok: true, status: 200, statusText: 'OK',
       json: async () => ({ id: 'int-1', status: 'budget_exceeded' }),
-      text: async () => '',
+      text: async () => JSON.stringify({ id: 'int-1', status: 'budget_exceeded' }),
     } as unknown as Response);
 
     const res = await router.pollRunning(10);
@@ -268,7 +268,7 @@ describe('AIRouterService — воркер', () => {
     jest.spyOn(global, 'fetch').mockResolvedValueOnce({
       ok: true, status: 200, statusText: 'OK',
       json: async () => ({ id: 'int-old', status: 'failed', error: { message: 'boom' } }),
-      text: async () => '',
+      text: async () => JSON.stringify({ id: 'int-old', status: 'failed', error: { message: 'boom' } }),
     } as unknown as Response);
 
     await router.pollRunning(10);
@@ -314,6 +314,35 @@ describe('AIRouterService — воркер', () => {
     expect(job.partialResult).toContain('Invalid interaction id');
     expect(job.retryCount).toBe(0);
     expect((outcomes[0] as { kind: string }).kind).toBe('failed');
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (вторая находка живого прогона): completed без читаемого текста → FAILED с телом ответа, не вечный опрос', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+    });
+    await deps.prisma.aIJob.update({ where: { id: jobId }, data: { status: 'RUNNING', externalInteractionId: 'int-1' } });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    const weirdBody = { id: 'int-1', status: 'completed', outputs: [{ mystery: true }] };
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true, status: 200, statusText: 'OK',
+      json: async () => weirdBody,
+      text: async () => JSON.stringify(weirdBody),
+    } as unknown as Response);
+
+    const res = await router.pollRunning(10);
+    jest.restoreAllMocks();
+
+    // Ответ терминален и больше не изменится — ждать нечего: джоба
+    // закрывается сразу, а ФОРМА ответа целиком видна в partialResult.
+    expect(res.failed).toBe(1);
+    expect(res.waiting).toBe(0);
+    const job = deps.prisma._jobs.get(jobId);
+    expect(job.status).toBe('FAILED');
+    expect(job.partialResult).toContain('mystery');
   });
 
   it('503 на опросе → waiting, статус остаётся RUNNING, но причина ЗАПИСАНА в partialResult', async () => {
