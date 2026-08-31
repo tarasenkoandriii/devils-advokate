@@ -25,7 +25,7 @@ import {
   EXTERNAL_INTERACTION_MAX_WAIT_MS,
 } from './ai-provider-client';
 import { MediaUriResolverService } from './media-uri-resolver.service';
-import { isBackgroundCapable } from './gemini-client';
+import { isBackgroundCapable, GeminiApiError } from './gemini-client';
 import {
   Prisma,
   AIJobStatus,
@@ -605,7 +605,14 @@ export class AIRouterService {
       } catch (err) {
         failed++;
         this.logger.warn(`submitQueued: job ${jobId} failed to submit: ${err}`);
-        const outcome = await this.failOrRequeue(jobId, payload, `постановка задачи провайдеру не удалась: ${err}`);
+        // 4xx (кроме 429) — форма запроса: ретрай той же формы даст тот
+        // же ответ, падаем СРАЗУ с сырым телом ответа провайдера в
+        // partialResult (первый живой прогон: тело 400-го — единственный
+        // источник причины). Транзиентные (429/5xx/сеть) — рекью.
+        const outcome =
+          err instanceof GeminiApiError && !err.isRetryable
+            ? await this.failJob(jobId, `провайдер отверг запрос (HTTP ${err.httpStatus}, не ретраится): ${err.body.slice(0, 1500)}`)
+            : await this.failOrRequeue(jobId, payload, `постановка задачи провайдеру не удалась: ${err}`);
         await this.notifyCompletion(job.taskType, outcome);
       }
     }
@@ -703,6 +710,9 @@ export class AIRouterService {
                 completedAt: new Date(),
                 pendingRequest: Prisma.DbNull,
                 leaseExpiresAt: null,
+                // Чистим диагностическую заметку «ожидание: …», если
+                // прошлые тики записали транзиентную ошибку опроса.
+                partialResult: null,
               },
             });
             completed++;
@@ -760,11 +770,34 @@ export class AIRouterService {
           }
         }
       } catch (err) {
-        // Сетевая ошибка опроса — не терминальна: задача у провайдера
-        // жива, попробуем в следующий тик. Терминальность обеспечивает
-        // leaseExpiresAt + сторожевая.
         this.logger.warn(`pollRunning: job ${jobId} poll failed: ${err}`);
-        waiting++;
+        if (err instanceof GeminiApiError && !err.isRetryable) {
+          // 4xx (кроме 429) на опросе — не транзиентность, а разошедшийся
+          // контракт (плохой id, неверная форма GET). Ждать бессмысленно:
+          // до этой правки такая ошибка глоталась как «waiting», и джоба
+          // молча висела в RUNNING до истечения 2-часового lease —
+          // воспроизведено в первом живом прогоне. Падаем сразу, с телом.
+          const outcome = await this.failJob(
+            jobId,
+            `провайдер отверг опрос задачи (HTTP ${err.httpStatus}, не ретраится): ${err.body.slice(0, 1500)}`,
+          );
+          failed++;
+          await this.notifyCompletion(job.taskType, outcome);
+        } else {
+          // Транзиентная ошибка (429/5xx/сеть) — задача у провайдера
+          // жива, попробуем в следующий тик. Терминальность обеспечивает
+          // leaseExpiresAt + сторожевая. Но причину ЗАПИСЫВАЕМ в
+          // partialResult (статус не меняем): иначе «зависшая» джоба в
+          // SQL выглядит как retryCount 0 / reason NULL, и отладка
+          // превращается в гадание.
+          waiting++;
+          await this.prisma.aIJob
+            .update({
+              where: { id: jobId },
+              data: { partialResult: `ожидание: последняя ошибка опроса — ${String(err).slice(0, 1500)}` },
+            })
+            .catch(() => undefined);
+        }
       }
     }
 
@@ -787,6 +820,9 @@ export class AIRouterService {
           retryCount: { increment: 1 },
           externalInteractionId: null,
           leaseExpiresAt: new Date(Date.now() + QUEUED_LEASE_MS),
+          // Причина рекью — в partialResult: без неё джоба между
+          // попытками выглядит в SQL как «висит без причины».
+          partialResult: `ретрай новой постановкой: ${reason.slice(0, 1500)}`,
         },
       });
       return { kind: 'waiting', jobId };

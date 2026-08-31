@@ -281,6 +281,122 @@ describe('AIRouterService — воркер', () => {
     expect(job.retryCount).toBe(1);
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ (живой прогон 2026-08-31): 400 на ОПРОСЕ → FAILED сразу, тело ответа в partialResult — не молчаливое «waiting»', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const outcomes: unknown[] = [];
+    router.registerCompletionHandler('media-public-review', async (o) => {
+      outcomes.push(o);
+    });
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+    });
+    await deps.prisma.aIJob.update({ where: { id: jobId }, data: { status: 'RUNNING', externalInteractionId: 'int-1' } });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: false, status: 400, statusText: 'Bad Request',
+      json: async () => ({}),
+      text: async () => '{"error":{"code":400,"message":"Invalid interaction id"}}',
+    } as unknown as Response);
+
+    const res = await router.pollRunning(10);
+    jest.restoreAllMocks();
+
+    // До правки это была ветка «waiting++» без записи: джоба молча
+    // висела в RUNNING (retryCount 0, partialResult NULL) до 2-часового
+    // lease. Теперь — немедленный FAILED с причиной от провайдера.
+    expect(res.failed).toBe(1);
+    expect(res.waiting).toBe(0);
+    const job = deps.prisma._jobs.get(jobId);
+    expect(job.status).toBe('FAILED');
+    expect(job.partialResult).toContain('Invalid interaction id');
+    expect(job.retryCount).toBe(0);
+    expect((outcomes[0] as { kind: string }).kind).toBe('failed');
+  });
+
+  it('503 на опросе → waiting, статус остаётся RUNNING, но причина ЗАПИСАНА в partialResult', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+    });
+    await deps.prisma.aIJob.update({ where: { id: jobId }, data: { status: 'RUNNING', externalInteractionId: 'int-1' } });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: false, status: 503, statusText: 'Service Unavailable',
+      json: async () => ({}),
+      text: async () => '{"error":{"code":503,"message":"The model is overloaded"}}',
+    } as unknown as Response);
+
+    const res = await router.pollRunning(10);
+    jest.restoreAllMocks();
+
+    expect(res.waiting).toBe(1);
+    const job = deps.prisma._jobs.get(jobId);
+    // Транзиентная ошибка: задача у провайдера жива, ждём следующего
+    // тика — но зависание больше не «без причины»: SQL покажет её.
+    expect(job.status).toBe('RUNNING');
+    expect(job.partialResult).toContain('overloaded');
+  });
+
+  it('400 на ПОСТАНОВКЕ → FAILED сразу, без рекью (та же форма даст тот же 400)', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+      maxRetries: 3,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: false, status: 400, statusText: 'Bad Request',
+      json: async () => ({}),
+      text: async () => '{"error":{"code":400,"message":"Unknown name \\"system_instruction\\""}}',
+    } as unknown as Response);
+
+    const res = await router.submitQueued(3);
+    jest.restoreAllMocks();
+
+    expect(res.failed).toBe(1);
+    const job = deps.prisma._jobs.get(jobId);
+    // maxRetries 3, но 400 не ретраится: рекью новой постановкой дал бы
+    // тот же 400 и сжёг бы попытки без новой информации.
+    expect(job.status).toBe('FAILED');
+    expect(job.retryCount).toBe(0);
+    expect(job.partialResult).toContain('system_instruction');
+  });
+
+  it('503 на постановке → рекью новой постановкой, причина записана в partialResult', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+      maxRetries: 3,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: false, status: 503, statusText: 'Service Unavailable',
+      json: async () => ({}),
+      text: async () => '{"error":{"code":503,"message":"overloaded"}}',
+    } as unknown as Response);
+
+    await router.submitQueued(3);
+    jest.restoreAllMocks();
+
+    const job = deps.prisma._jobs.get(jobId);
+    expect(job.status).toBe('QUEUED');
+    expect(job.retryCount).toBe(1);
+    expect(job.externalInteractionId).toBeNull();
+    expect(job.partialResult).toContain('503');
+  });
+
   it('сторожевая различает QUEUED (воркер не поставил) и RUNNING (провайдер молчит)', async () => {
     const deps = makeDeps();
     const router = makeRouter(deps);

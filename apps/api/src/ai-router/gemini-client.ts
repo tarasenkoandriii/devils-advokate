@@ -9,15 +9,19 @@
 // Без SDK — глобальный fetch, по той же причине, что у двух соседних
 // клиентов (см. шапку ai-provider-client.ts).
 //
-// АВТОРИЗАЦИЯ: в отличие от OpenAI/Anthropic (ключ в заголовке), Gemini
-// принимает ключ query-параметром. AIProvider.authMethod в схеме
-// существовал с чекпоинта 1 и НИГДЕ не читался — этот клиент оживляет
-// его вместе с vision/audio (§12.2 самоаудита ТЗ).
+// КОНТРАКТ ПОДТВЕРЖДЁН ЖИВЫМ ВЫЗОВОМ (диагностика 2026-08-31,
+// scripts/diagnose-gemini.ts, вариант A1 — единственный прошедший):
+//   POST /v1beta/interactions
+//   заголовок x-goog-api-key: <ключ>        ← header-auth, НЕ ?key=
+//   тело: { model, background: true, input: [видео → текст] }
+//   ответ: { id, status: "in_progress", ... } за ~2 с.
 //
-// ЧЕСТНАЯ ГРАНИЦА: контракт Interactions API восстановлен по
-// официальной документации (включая страницу breaking changes), но НЕ
-// подтверждён живым вызовом — в этой среде нет ключа. Та же оговорка,
-// что у всего внешнего периметра проекта.
+// Что НЕ подтверждено и потому НЕ отправляется:
+//   - generation_config (max_output_tokens, thinking_level) — убран
+//     целиком; thinking_level — главный подозреваемый прод-400-х;
+//   - system_instruction — вместо отдельного поля системный промпт
+//     ПОДКЛЕИВАЕТСЯ в начало текстового блока (см. submitBackground).
+// Расширять тело можно только через новый прогон diagnose-gemini.ts.
 
 import {
   AIProviderClient,
@@ -72,6 +76,31 @@ export interface AIBackgroundProviderClient extends AIProviderClient {
     externalId: string,
     credentials: { apiKey: string; apiEndpoint: string },
   ): Promise<BackgroundFetchResult>;
+}
+
+/** Ошибка провайдера, НЕСУЩАЯ СЫРОЕ ТЕЛО ОТВЕТА.
+ *
+ * Прямая причина, по которой 400-е были «неотлаживаемы» в первом живом
+ * прогоне: Google в теле 400 возвращает КОНКРЕТНОЕ сообщение о том,
+ * какое поле не так. Обобщённый Error его глотал, и джоба молча висела
+ * в RUNNING (retryCount 0, partialResult NULL) — воспроизведено на
+ * проде 2026-08-31. Теперь тело доезжает до AIJob.partialResult. */
+export class GeminiApiError extends Error {
+  constructor(
+    readonly httpStatus: number,
+    readonly body: string,
+    readonly phase: 'submit' | 'poll',
+  ) {
+    super(`Gemini ${phase} failed: HTTP ${httpStatus} — ${body.slice(0, 2000)}`);
+    this.name = 'GeminiApiError';
+  }
+
+  /** 429/5xx — транзиентные, имеет смысл ретраить/ждать следующего
+   * тика. 400 — форма запроса: ретрай той же формы даст тот же 400,
+   * джоба должна упасть СРАЗУ с телом ответа в partialResult. */
+  get isRetryable(): boolean {
+    return this.httpStatus === 429 || this.httpStatus >= 500;
+  }
 }
 
 export function isBackgroundCapable(client: AIProviderClient): client is AIBackgroundProviderClient {
@@ -133,32 +162,48 @@ export class GeminiClient implements AIBackgroundProviderClient {
     params: AIProviderCompletionParams,
     credentials: { apiKey: string; apiEndpoint: string },
   ): Promise<BackgroundSubmitResult> {
+    const input = serializeInput(params.userPrompt);
+
+    // Системный промпт — В ТЕКСТОВЫЙ БЛОК, не отдельным полем: живой
+    // прогон подтвердил только форму A1 (model/background/input), поле
+    // system_instruction не проверено и до подтверждения новым прогоном
+    // diagnose-gemini.ts в тело не кладётся. Подклеиваем в ПЕРВЫЙ
+    // текстовый блок — он и так идёт после медиа (порядок §5).
+    if (params.systemPrompt) {
+      const firstText = input.find((b) => b.type === 'text');
+      if (firstText) {
+        firstText.text = `${params.systemPrompt}\n\n${firstText.text}`;
+      } else {
+        input.push({ type: 'text', text: params.systemPrompt });
+      }
+    }
+
+    // Ровно форма A1: model + background + input, БЕЗ generation_config
+    // (params.maxTokens сознательно игнорируется: несуществующее поле в
+    // теле — это прод-400 на каждый вызов, а дефолтный потолок модели
+    // достаточно велик; статус incomplete обрабатывается воркером).
+    // response_mime_type/structured output НЕ задаём (ТЗ §5): валидация
+    // остаётся за validateOutput, требование JSON живёт в промпте.
     const body: Record<string, unknown> = {
       model: params.model,
       background: true,
-      input: serializeInput(params.userPrompt),
-      generation_config: {
-        max_output_tokens: params.maxTokens ?? 8192,
-        thinking_level: 'medium',
-      },
-      ...(params.systemPrompt ? { system_instruction: params.systemPrompt } : {}),
-      // response_mime_type/structured output НЕ задаём (ТЗ §5):
-      // валидация остаётся за validateOutput, как у двух существующих
-      // провайдеров; требование JSON живёт в тексте промпта.
+      input,
     };
 
-    const response = await fetch(
-      `${credentials.apiEndpoint}/v1beta/interactions?key=${encodeURIComponent(credentials.apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    const response = await fetch(`${credentials.apiEndpoint}/v1beta/interactions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Header-auth подтверждён A1; query-вариант (?key=) в живом
+        // прогоне не прошёл ни разу.
+        'x-goog-api-key': credentials.apiKey,
       },
-    );
+      body: JSON.stringify(body),
+    });
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '<unreadable body>');
-      throw new Error(`Gemini interactions submit error: ${response.status} ${response.statusText} — ${errorText}`);
+      throw new GeminiApiError(response.status, errorText, 'submit');
     }
 
     const json: any = await response.json();
@@ -174,13 +219,15 @@ export class GeminiClient implements AIBackgroundProviderClient {
     credentials: { apiKey: string; apiEndpoint: string },
   ): Promise<BackgroundFetchResult> {
     const response = await fetch(
-      `${credentials.apiEndpoint}/v1beta/interactions/${encodeURIComponent(externalId)}?key=${encodeURIComponent(credentials.apiKey)}`,
-      { method: 'GET' },
+      `${credentials.apiEndpoint}/v1beta/interactions/${encodeURIComponent(externalId)}`,
+      // Header-auth — как в подтверждённом submit (A1); отдельно GET не
+      // диагностировался, но схема auth у поверхности одна.
+      { method: 'GET', headers: { 'x-goog-api-key': credentials.apiKey } },
     );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '<unreadable body>');
-      throw new Error(`Gemini interactions fetch error: ${response.status} ${response.statusText} — ${errorText}`);
+      throw new GeminiApiError(response.status, errorText, 'poll');
     }
 
     const json: any = await response.json();

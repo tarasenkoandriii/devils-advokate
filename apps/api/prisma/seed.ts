@@ -63,15 +63,14 @@ async function main() {
 
   // Пункт [multimodal] §5 — Gemini: единственный провайдер с медиа и
   // фоновыми задачами (Interactions API, background: true). Ключ — в
-  // query-параметре, не в заголовке: authMethod 'query-key' наконец
-  // читается кодом (до этого поле существовало с чекпоинта 1 и нигде
-  // не использовалось, как и vision/audio ниже).
+  // ЗАГОЛОВКЕ x-goog-api-key: живая диагностика 2026-08-31
+  // (scripts/diagnose-gemini.ts) подтвердила header-auth (вариант A1),
+  // query-вариант (?key=) не прошёл ни разу. authMethod здесь —
+  // документальное описание; клиент использует header-auth напрямую.
   //
-  // ВЕРСИЯ МОДЕЛИ: значение ниже — плейсхолдер по актуальной на
-  // 2026-08-31 документации. ТЗ §1.2 прямо запрещает брать версии из
-  // документа: перед продом сверить со списком моделей, доступных
-  // ВАШЕМУ ключу, и поправить сид (иначе сид уедет в прод с устаревшей
-  // версией).
+  // ВЕРСИЯ МОДЕЛИ: gemini-3.7-flash подтверждена тем же живым прогоном
+  // (200 OK, задача принята). При смене модели — сверить со списком,
+  // доступным ВАШЕМУ ключу (ТЗ §1.2).
   const google = await prisma.aIProvider.upsert({
     where: { name: 'google' },
     update: {},
@@ -79,7 +78,7 @@ async function main() {
       name: 'google',
       region: 'US',
       apiEndpoint: 'https://generativelanguage.googleapis.com',
-      authMethod: 'query-key',
+      authMethod: 'header-key',
       credentialRef: 'GEMINI_API_KEY',
     },
   });

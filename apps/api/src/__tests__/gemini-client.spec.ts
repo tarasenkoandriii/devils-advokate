@@ -5,7 +5,7 @@
 // контракт, восстановленный по документации: если он окажется другим,
 // чиниться будет клиент, а тесты — вместе с ним, осознанно.
 
-import { GeminiClient, isBackgroundCapable } from '../ai-router/gemini-client';
+import { GeminiClient, GeminiApiError, isBackgroundCapable } from '../ai-router/gemini-client';
 import { OpenAiCompatibleClient, AnthropicClient, ContentBlock } from '../ai-router/ai-provider-client';
 
 const CREDS = { apiKey: 'gk-test', apiEndpoint: 'https://generativelanguage.googleapis.com' };
@@ -23,7 +23,7 @@ function mockFetchOnce(body: unknown, ok = true, status = 200) {
 afterEach(() => jest.restoreAllMocks());
 
 describe('GeminiClient.submitBackground', () => {
-  it('КЛЮЧЕВОЙ ТЕСТ: ключ в query-параметре, background: true, порядок блоков сохранён (медиа → текст)', async () => {
+  it('КЛЮЧЕВОЙ ТЕСТ (форма A1, подтверждена живым вызовом 2026-08-31): header-auth, тело ТОЛЬКО model+background+input', async () => {
     const spy = mockFetchOnce({ id: 'int-1', status: 'queued' });
     const client = new GeminiClient();
 
@@ -31,19 +31,57 @@ describe('GeminiClient.submitBackground', () => {
       { type: 'media', ref: { source: 'youtube', videoId: 'abc123' }, resolved: { uri: 'https://www.youtube.com/watch?v=abc123' } },
       { type: 'text', text: 'разбери ролик' },
     ];
-    const res = await client.submitBackground({ model: 'gemini-3.7-flash', userPrompt: prompt }, CREDS);
+    const res = await client.submitBackground({ model: 'gemini-3.7-flash', userPrompt: prompt, maxTokens: 8192 }, CREDS);
 
     expect(res.externalId).toBe('int-1');
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('/v1beta/interactions?key=gk-test');
+    // Ключ в ЗАГОЛОВКЕ, не в query: A1 (header) прошёл, A3 (?key=) — нет.
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
+    expect(url).not.toContain('key=');
+    expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('gk-test');
     const body = JSON.parse(init.body as string);
     expect(body.background).toBe(true);
     expect(body.model).toBe('gemini-3.7-flash');
+    // РОВНО три поля: непроверенное поле в теле = прод-400 на каждый вызов.
+    expect(Object.keys(body).sort()).toEqual(['background', 'input', 'model']);
+    // generation_config/thinking_level убраны — maxTokens сознательно игнорируется.
+    expect(body.generation_config).toBeUndefined();
     expect(body.input[0].type).toBe('video');
     expect(body.input[0].uri).toBe('https://www.youtube.com/watch?v=abc123');
     // mime_type для YouTube-URI НЕ передаётся (§5)
     expect(body.input[0].mime_type).toBeUndefined();
     expect(body.input[1]).toEqual({ type: 'text', text: 'разбери ролик' });
+  });
+
+  it('systemPrompt подклеивается в первый текстовый блок — поле system_instruction не отправляется (не подтверждено A1)', async () => {
+    const spy = mockFetchOnce({ id: 'int-3', status: 'queued' });
+    const client = new GeminiClient();
+    await client.submitBackground(
+      {
+        model: 'm',
+        systemPrompt: 'Ты строгий аналитик.',
+        userPrompt: [
+          { type: 'media', ref: { source: 'youtube', videoId: 'v' }, resolved: { uri: 'https://www.youtube.com/watch?v=v' } },
+          { type: 'text', text: 'разбери ролик' },
+        ],
+      },
+      CREDS,
+    );
+    const body = JSON.parse((spy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.system_instruction).toBeUndefined();
+    // Порядок сохранён: медиа первым, текст (с подклеенной системой) после.
+    expect(body.input[0].type).toBe('video');
+    expect(body.input[1].text).toBe('Ты строгий аналитик.\n\nразбери ролик');
+  });
+
+  it('poll идёт с тем же header-auth, без ?key=', async () => {
+    const spy = mockFetchOnce({ id: 'int-1', status: 'in_progress' });
+    const client = new GeminiClient();
+    await client.fetchBackground('int-1', CREDS);
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions/int-1');
+    expect(url).not.toContain('key=');
+    expect((init.headers as Record<string, string>)['x-goog-api-key']).toBe('gk-test');
   });
 
   it('mime_type передаётся ТОЛЬКО для blob-источника', async () => {
@@ -76,6 +114,36 @@ describe('GeminiClient.submitBackground', () => {
         CREDS,
       ),
     ).rejects.toThrow(/resolved URI/);
+  });
+});
+
+describe('GeminiApiError — сырое тело и ретраебельность', () => {
+  it('КЛЮЧЕВОЙ ТЕСТ (живой прогон 2026-08-31): 400 на submit — GeminiApiError с ТЕЛОМ ответа, isRetryable=false', async () => {
+    mockFetchOnce({ error: { code: 400, message: 'Invalid JSON payload received. Unknown name "thinking_level"' } }, false, 400);
+    const client = new GeminiClient();
+    const err = await client
+      .submitBackground({ model: 'm', userPrompt: 'p' }, CREDS)
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(GeminiApiError);
+    const apiErr = err as GeminiApiError;
+    expect(apiErr.httpStatus).toBe(400);
+    expect(apiErr.phase).toBe('submit');
+    // Тело 400-го — единственный источник причины; оно НЕ теряется.
+    expect(apiErr.body).toContain('thinking_level');
+    expect(apiErr.isRetryable).toBe(false);
+  });
+
+  it('503/429 на опросе — GeminiApiError с isRetryable=true (транзиентная, ждём следующий тик)', async () => {
+    mockFetchOnce({ error: { code: 503, message: 'The model is overloaded' } }, false, 503);
+    const client = new GeminiClient();
+    const err503 = (await client.fetchBackground('int-1', CREDS).then(() => null, (e: unknown) => e)) as GeminiApiError;
+    expect(err503).toBeInstanceOf(GeminiApiError);
+    expect(err503.phase).toBe('poll');
+    expect(err503.isRetryable).toBe(true);
+
+    mockFetchOnce({ error: { code: 429, message: 'quota' } }, false, 429);
+    const err429 = (await client.fetchBackground('int-1', CREDS).then(() => null, (e: unknown) => e)) as GeminiApiError;
+    expect(err429.isRetryable).toBe(true);
   });
 });
 

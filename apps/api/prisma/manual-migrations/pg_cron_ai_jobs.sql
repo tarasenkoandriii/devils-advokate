@@ -84,3 +84,21 @@ SELECT cron.schedule(
 -- Проверка после настройки:
 --   SELECT * FROM cron.job WHERE jobname LIKE 'ai-jobs-%';
 --   SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 20;
+
+-- ── Разовая расчистка джоб, зависших ДО этой настройки ──────────────
+-- Первый живой прогон (2026-08-31) оставил джобу в RUNNING с
+-- retryCount 0 и partialResult NULL: ошибки опроса тогда глотались
+-- кодом, а сторожевая ещё не была включена. Если такие строки есть —
+-- сначала посмотрите выборку, затем выполните UPDATE один раз.
+--
+-- SELECT id, status, "taskType", "retryCount", "createdAt"
+--   FROM ai_jobs
+--  WHERE status = 'RUNNING' AND "createdAt" < now() - interval '2 hours';
+--
+-- UPDATE ai_jobs
+--    SET status = 'FAILED',
+--        "completedAt" = now(),
+--        "pendingRequest" = NULL,
+--        "leaseExpiresAt" = NULL,
+--        "partialResult" = 'закрыто вручную: джоба висела до включения сторожевой cron-задачи и записи причин опроса'
+--  WHERE status = 'RUNNING' AND "createdAt" < now() - interval '2 hours';
