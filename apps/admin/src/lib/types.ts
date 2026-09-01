@@ -241,3 +241,19 @@ export interface SandboxQueue {
   title: string;
   items: SandboxQueueItem[];
 }
+export interface SandboxAnalysisSignal {
+  type: string;
+  channel: string | null;
+  confidence: number | null;
+}
+export interface SandboxAnalysisSegment {
+  startMs: number;
+  endMs: number;
+  speaker: string | null;
+  text: string;
+  signals: SandboxAnalysisSignal[];
+}
+export interface SandboxAnalysis {
+  language: string | null;
+  segments: SandboxAnalysisSegment[];
+}

@@ -142,4 +142,9 @@ export class AdminSandboxController {
   async retryQueueItem(@CurrentUser() userId: string, @Body() dto: RetryQueueItemDto) {
     return this.sandbox.retryQueueItem(userId, dto.itemId);
   }
+
+  @Get('analysis/:conversationId')
+  async analysis(@CurrentUser() userId: string, @Param('conversationId') conversationId: string) {
+    return this.sandbox.getAnalysis(userId, conversationId);
+  }
 }

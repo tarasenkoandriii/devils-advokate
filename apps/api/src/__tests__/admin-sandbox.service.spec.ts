@@ -355,6 +355,33 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     await expect(svc.retryQueueItem(REGULAR, 'item-1')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('getAnalysis: сегменты с таймкодами и сигналами для аккордеона; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    deps.prisma.transcript.findUnique = jest.fn(async (): Promise<any> => ({
+      language: 'ru',
+      segments: [
+        {
+          startMs: 5000, endMs: 12000, text: 'реплика',
+          participant: { diarizationLabel: 'SPEAKER_00' },
+          signals: [{ signalType: 'MANIPULATION_PATTERN', paralinguisticChannel: null, confidence: 0.7 }],
+        },
+      ],
+    }));
+    const svc = makeService(deps);
+
+    const res = await svc.getAnalysis(OPERATOR, 'conv-1');
+    expect(res.language).toBe('ru');
+    expect(res.segments[0].speaker).toBe('SPEAKER_00');
+    expect(res.segments[0].signals[0].type).toBe('MANIPULATION_PATTERN');
+
+    await expect(svc.getAnalysis(REGULAR, 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
+
+    // Разговор без транскрипта — пустой разбор, не ошибка.
+    deps.prisma.transcript.findUnique = jest.fn(async (): Promise<any> => null);
+    const empty = await svc.getAnalysis(OPERATOR, 'conv-2');
+    expect(empty.segments).toEqual([]);
+  });
+
   it('очереди ещё нет — честный null, а не создание пустой при каждом просмотре', async () => {
     const deps = makeDeps();
     const svc = makeService(deps);

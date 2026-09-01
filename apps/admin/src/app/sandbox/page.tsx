@@ -30,6 +30,7 @@ import {
   sandboxLinkQueueItem,
   getSandboxQueue,
   sandboxRetryQueueItem,
+  getSandboxAnalysis,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -38,6 +39,7 @@ import type {
   SandboxTranscriptionRun,
   SandboxConversation,
   SandboxQueue,
+  SandboxAnalysis,
 } from '../../lib/types';
 
 function formatDuration(seconds: number | null): string {
@@ -165,6 +167,31 @@ export default function SandboxPage() {
 
   const [retryingItem, setRetryingItem] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
+
+  // Аккордеон готовности: свёрнут, когда всё зелёное; раскрыт при
+  // проблемах (их надо чинить, а не листать мимо).
+  const [statusOpen, setStatusOpen] = useState(false);
+  useEffect(() => {
+    if (status) setStatusOpen(!status.items.every((i) => i.ok));
+  }, [status]);
+
+  // Ленивая подгрузка содержимого разбора при раскрытии элемента.
+  const [analyses, setAnalyses] = useState<Record<string, SandboxAnalysis | 'loading' | 'error'>>({});
+
+  function loadAnalysis(conversationId: string) {
+    if (analyses[conversationId]) return;
+    setAnalyses((m) => ({ ...m, [conversationId]: 'loading' }));
+    getSandboxAnalysis(conversationId)
+      .then((a) => setAnalyses((m) => ({ ...m, [conversationId]: a })))
+      .catch(() => setAnalyses((m) => ({ ...m, [conversationId]: 'error' })));
+  }
+
+  function msToTimecode(ms: number): string {
+    const totalSec = Math.floor(ms / 1000);
+    const mm = Math.floor(totalSec / 60);
+    const ss = totalSec % 60;
+    return `${mm}:${String(ss).padStart(2, '0')}`;
+  }
 
   async function handleRetryItem(itemId: string) {
     setRetryingItem(itemId);
@@ -294,11 +321,28 @@ export default function SandboxPage() {
         Ни одна проверка не обходится: отказ здесь означает отказ и у пользователя.
       </p>
 
-      {/* ── 0. Готовность ── */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <h2 style={{ marginTop: 0 }}>Готовность конфигурации</h2>
-        {statusError && <p style={{ color: 'var(--signal-critical)' }}>{statusError}</p>}
-        {!status && !statusError && <p className="muted">Загрузка…</p>}
+      {/* ── 0. Готовность — аккордеон с интегральным статусом ── */}
+      <details
+        className="card"
+        style={{ marginBottom: 20 }}
+        open={statusOpen}
+        onToggle={(e) => setStatusOpen((e.target as HTMLDetailsElement).open)}
+      >
+        <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, listStyle: 'none' }}>
+          <h2 style={{ margin: 0, display: 'inline' }}>Готовность конфигурации</h2>
+          {!status && !statusError && <span className="muted" style={{ fontSize: 13 }}>загрузка…</span>}
+          {statusError && <span className="badge badge-bad">недоступно</span>}
+          {status && (allGreen ? (
+            <span className="badge badge-ok">OK · {status.items.length}/{status.items.length}</span>
+          ) : (
+            <span className="badge badge-bad">
+              проблем: {status.items.filter((i) => !i.ok).length} из {status.items.length}
+            </span>
+          ))}
+          <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>развернуть ▾</span>
+        </summary>
+        {statusError && <p style={{ color: 'var(--signal-critical)', marginTop: 12 }}>{statusError}</p>}
+        {!status && !statusError && <p className="muted" style={{ marginTop: 12 }}>Загрузка…</p>}
         {status && (
           <>
             <table>
@@ -329,7 +373,7 @@ export default function SandboxPage() {
             </div>
           </>
         )}
-      </div>
+      </details>
 
       {/* ── 1. Поиск ── */}
       <div className="card" style={{ marginBottom: 20 }}>
@@ -401,57 +445,93 @@ export default function SandboxPage() {
             часто чист. Содержимое разбора смотрите в TMA («Разбор публичных видео») или по conversationId.
           </p>
           {retryError && <p style={{ color: 'var(--signal-critical)' }}>{retryError}</p>}
-          <table>
-            <thead>
-              <tr><th>Ролик</th><th>Статус</th><th>Разбор</th><th>Разговор</th><th></th></tr>
-            </thead>
-            <tbody>
-              {queue.items.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <a href={`https://www.youtube.com/watch?v=${item.youtubeVideoId}`} target="_blank" rel="noreferrer">
-                      {item.title || item.youtubeVideoId}
-                    </a>
-                  </td>
-                  <td>
-                    {item.status === 'DONE' && <span className="badge badge-ok">DONE</span>}
-                    {item.status === 'PROCESSING' && <span className="badge badge-pending">PROCESSING</span>}
-                    {item.status === 'READY' && <span className="badge badge-pending">READY</span>}
-                    {!['DONE', 'PROCESSING', 'READY'].includes(item.status) && (
-                      <span className="badge">{item.status}</span>
-                    )}
-                    {item.autoAnalysisError && (
-                      <div style={{ color: 'var(--signal-critical)', fontSize: 12, marginTop: 4, maxWidth: 360 }}>
-                        {item.autoAnalysisError}
-                      </div>
-                    )}
-                  </td>
-                  <td className="muted">
-                    {item.segments > 0
-                      ? `${item.segments} сегм. / ${item.signals} сигн.`
-                      : '—'}
-                  </td>
-                  <td className="muted">{item.conversationId ? <code>{item.conversationId}</code> : 'файл не привязан'}</td>
-                  <td>
-                    {/* Повторная постановка — только для элементов, чей
-                        разбор упал (429/400/сторожевая). DONE не
-                        перезапускаем (перезаписал бы готовый разбор),
-                        PROCESSING защищён на сервере от двойного счёта. */}
-                    {item.status !== 'DONE' && item.status !== 'PROCESSING' && (
-                      <button
-                        type="button"
-                        onClick={() => handleRetryItem(item.id)}
-                        disabled={retryingItem !== null}
-                        title="Поставить автоматический разбор заново (после квоты/сбоя)"
-                      >
-                        {retryingItem === item.id ? 'Ставим…' : 'Повторить'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {queue.items.map((item) => (
+            <details
+              key={item.id}
+              style={{ borderTop: '1px solid var(--border, #2a2f3a)', padding: '10px 0' }}
+              onToggle={(e) => {
+                // Ленивая подгрузка содержимого разбора при первом раскрытии.
+                if ((e.target as HTMLDetailsElement).open && item.conversationId) {
+                  loadAnalysis(item.conversationId);
+                }
+              }}
+            >
+              <summary style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', listStyle: 'none' }}>
+                {item.status === 'DONE' && <span className="badge badge-ok">DONE</span>}
+                {item.status === 'PROCESSING' && <span className="badge badge-pending">PROCESSING</span>}
+                {item.status === 'READY' && <span className="badge badge-pending">READY</span>}
+                {!['DONE', 'PROCESSING', 'READY'].includes(item.status) && (
+                  <span className="badge">{item.status}</span>
+                )}
+                <span style={{ flex: '1 1 260px', minWidth: 200 }}>{item.title || item.youtubeVideoId}</span>
+                <span className="muted" style={{ fontSize: 13 }}>
+                  {item.segments > 0 ? `${item.segments} сегм. / ${item.signals} сигн.` : item.autoAnalysisError ? 'ошибка' : '—'}
+                </span>
+                {item.status !== 'DONE' && item.status !== 'PROCESSING' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      // Кнопка в summary: не даём клику схлопнуть аккордеон.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleRetryItem(item.id);
+                    }}
+                    disabled={retryingItem !== null}
+                    title="Поставить автоматический разбор заново (после квоты/сбоя)"
+                  >
+                    {retryingItem === item.id ? 'Ставим…' : 'Повторить'}
+                  </button>
+                )}
+                <span className="muted" style={{ fontSize: 12 }}>▾</span>
+              </summary>
+
+              <div style={{ padding: '10px 0 4px 4px', fontSize: 13 }}>
+                <div className="muted" style={{ marginBottom: 6 }}>
+                  <a href={`https://www.youtube.com/watch?v=${item.youtubeVideoId}`} target="_blank" rel="noreferrer">
+                    открыть на YouTube
+                  </a>
+                  {' · '}разговор: {item.conversationId ? <code>{item.conversationId}</code> : 'файл не привязан'}
+                </div>
+                {item.autoAnalysisError && (
+                  <div style={{ color: 'var(--signal-critical)', marginBottom: 8, maxWidth: 720 }}>
+                    {item.autoAnalysisError}
+                  </div>
+                )}
+                {item.conversationId && (() => {
+                  const a = analyses[item.conversationId];
+                  if (!a) return null;
+                  if (a === 'loading') return <p className="muted">Загружаем разбор…</p>;
+                  if (a === 'error') return <p style={{ color: 'var(--signal-critical)' }}>Не удалось загрузить разбор</p>;
+                  if (a.segments.length === 0) {
+                    return <p className="muted">Транскрипт пуст — разбор ещё не записан либо завершился отказом.</p>;
+                  }
+                  return (
+                    <div style={{ maxHeight: 340, overflow: 'auto', border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '8px 10px' }}>
+                      {a.language && <div className="muted" style={{ marginBottom: 6 }}>язык: {a.language}</div>}
+                      {a.segments.map((seg, i) => (
+                        <div key={i} style={{ marginBottom: 8 }}>
+                          <span className="muted" style={{ fontSize: 12 }}>
+                            [{msToTimecode(seg.startMs)}–{msToTimecode(seg.endMs)}] {seg.speaker ?? '—'}:
+                          </span>{' '}
+                          {seg.text}
+                          {seg.signals.length > 0 && (
+                            <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {seg.signals.map((sig, j) => (
+                                <span key={j} className="badge badge-pending" title={sig.channel ?? undefined}>
+                                  {sig.type}
+                                  {sig.confidence !== null ? ` · ${Math.round(sig.confidence * 100)}%` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            </details>
+          ))}
           <button type="button" onClick={loadQueue} style={{ marginTop: 10 }}>Обновить</button>
         </div>
       )}

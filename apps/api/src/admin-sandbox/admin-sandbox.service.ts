@@ -601,6 +601,42 @@ export class AdminSandboxService {
     return this.mediaReviewAuto.retryAnalysis(operatorUserId, itemId.trim());
   }
 
+  /** Содержимое разбора для аккордеона песочной очереди: сегменты с
+   * таймкодами, спикерами и сигналами. Только чтение; те же данные,
+   * что видит пользователь в TMA, — песочница ничего не обходит. */
+  async getAnalysis(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    const transcript = await this.prisma.transcript.findUnique({
+      where: { conversationId },
+      include: {
+        segments: {
+          orderBy: { startMs: 'asc' },
+          include: {
+            participant: { select: { diarizationLabel: true } },
+            signals: true,
+          },
+        },
+      },
+    });
+    if (!transcript) {
+      return { language: null, segments: [] };
+    }
+    return {
+      language: transcript.language ?? null,
+      segments: transcript.segments.map((s) => ({
+        startMs: s.startMs,
+        endMs: s.endMs,
+        speaker: s.participant?.diarizationLabel ?? null,
+        text: s.text,
+        signals: s.signals.map((sig) => ({
+          type: sig.signalType,
+          channel: sig.paralinguisticChannel ?? null,
+          confidence: sig.confidence ?? null,
+        })),
+      })),
+    };
+  }
+
   async getConversation(operatorUserId: string, conversationId: string) {
     await this.assertOperator(operatorUserId);
     const conversation = await this.conversations.get(operatorUserId, conversationId);
