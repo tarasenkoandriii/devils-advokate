@@ -115,6 +115,13 @@ function createFakePrisma() {
     aIJob: {
       findUnique: async ({ where }: any) => jobs.get(where.id) ?? null,
     },
+    aIInference: {
+      findFirst: async ({ where }: any) =>
+        where.aiJobId && jobs.get(where.aiJobId)?.inferenceId
+          ? { id: jobs.get(where.aiJobId).inferenceId }
+          : null,
+    },
+    _items: items,
     _seedJob(j: any) {
       const job = { id: nextId(), ...j };
       jobs.set(job.id, job);
@@ -137,11 +144,19 @@ function createFakePrisma() {
   };
 }
 
-function makeService(prisma: any) {
+function makeService(prisma: any, auto?: { persistCalls?: string[][] }) {
+  const persistCalls = auto?.persistCalls ?? [];
   return new MediaReviewService(prisma as any, {
     // Пункт [multimodal]: авто-разбор в этих юнит-тестах не запускается
     // — они проверяют очередь как таковую. tryEnqueueAnalysis — no-op.
     tryEnqueueAnalysis: async () => undefined,
+    // Дозапись оборванного персистенса (getQueue-ветка COMPLETED):
+    // фиксируем вызовы и симулируем успех — item становится DONE.
+    persistAnalysis: async (itemId: string, inferenceId: string) => {
+      persistCalls.push([itemId, inferenceId]);
+      const item = prisma._items?.get?.(itemId);
+      if (item) item.status = 'DONE';
+    },
   } as any);
 }
 
@@ -252,6 +267,24 @@ describe('MediaReviewService', () => {
     expect(result.items[0].status).toBe('AWAITING_UPLOAD');
     expect(result.items[0].autoAnalysisError).toContain('вручную');
     expect(conv.status).toBe('FAILED');
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (10-минутные дебаты): джоба COMPLETED при пустом персистенсе → getQueue дозаписывает разбор из готового inference', async () => {
+    const prisma = createFakePrisma();
+    const queue = prisma._seedQueue({ userId: 'u1', title: 'q' });
+    const conv = prisma._seedConversation({ status: 'ANALYZING' });
+    // Персистенс оборвался: джоба закрыта, inference оплачен и записан,
+    // а элемент так и висел в PROCESSING с пустым транскриптом.
+    const job = prisma._seedJob({ status: 'COMPLETED', inferenceId: 'inf-9' });
+    prisma._seedItem({ queueId: queue.id, conversationId: conv.id, status: 'PROCESSING', aiJobId: job.id });
+    const persistCalls: string[][] = [];
+    const svc = makeService(prisma, { persistCalls });
+
+    const result = await svc.getQueue('u1', queue.id);
+
+    // Дозапись из УЖЕ оплаченного результата, без нового вызова провайдера.
+    expect(persistCalls).toEqual([[result.items[0].id, 'inf-9']]);
+    expect(result.items[0].status).toBe('DONE');
   });
 
   it('фаза C: listQueues повертає лише свої черги з кількістю елементів', async () => {

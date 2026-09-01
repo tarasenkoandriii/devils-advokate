@@ -751,14 +751,40 @@ export class AdminSandboxService {
 
     // 4. Состояние после — и вердикт.
     const after = await this.aiRouter.inspectJob(item.aiJobId);
-    const itemAfter = await this.prisma.mediaReviewQueueItem.findUniqueOrThrow({
+    let itemAfter = await this.prisma.mediaReviewQueueItem.findUniqueOrThrow({
       where: { id: item.id },
       select: { status: true, autoAnalysisError: true },
     });
 
+    // 5. Дозапись оборванного персистенса: джоба COMPLETED (inference
+    // уже оплачен и записан), а элемент так и висит — записываем разбор
+    // из готового результата, не дергая провайдера повторно.
+    if (after.jobStatus === 'COMPLETED' && itemAfter.status === 'PROCESSING') {
+      const inference = await this.prisma.aIInference.findFirst({
+        where: { aiJobId: item.aiJobId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (inference) {
+        try {
+          await this.mediaReviewAuto.persistAnalysis(item.id, inference.id);
+          steps.push('персистенс был оборван — разбор дозаписан из готового результата провайдера');
+          itemAfter = await this.prisma.mediaReviewQueueItem.findUniqueOrThrow({
+            where: { id: item.id },
+            select: { status: true, autoAnalysisError: true },
+          });
+        } catch (err) {
+          steps.push(`дозапись разбора не прошла: ${String(err).slice(0, 200)}`);
+        }
+      }
+    }
+
     let verdict: string;
     if (itemAfter.status === 'DONE' || after.jobStatus === 'COMPLETED') {
-      verdict = 'Не сбой: результат был готов у провайдера — забрали прямо сейчас, обновите очередь';
+      verdict =
+        itemAfter.status === 'DONE'
+          ? 'Не сбой провайдера: результат готов и записан — обновите очередь'
+          : 'Результат у провайдера готов, но запись разбора не проходит — см. шаги';
     } else if (after.jobStatus === 'FAILED') {
       verdict = `Сбой подтверждён, джоба закрыта с причиной: ${itemAfter.autoAnalysisError ?? after.note ?? 'см. журнал'} — доступно «Повторить»`;
     } else if (before.providerStatus === 'in_progress' || before.providerStatus === 'queued') {

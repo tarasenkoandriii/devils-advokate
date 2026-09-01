@@ -178,6 +178,30 @@ export class MediaReviewService {
               where: { id: item.aiJobId },
               select: { status: true, partialResult: true },
             });
+            // Третья дыра того же класса (живой прогон, 10-минутные
+            // дебаты): джоба COMPLETED — результат у провайдера забран,
+            // AIInference записан — а персистенс оборвался (таймаут
+            // транзакции/функции на большом транскрипте). Элемент висел
+            // в PROCESSING с пустым транскриптом. Дозаписываем из уже
+            // оплаченного inference прямо при обновлении очереди.
+            if (job && job.status === AIJobStatus.COMPLETED) {
+              const inference = await this.prisma.aIInference.findFirst({
+                where: { aiJobId: item.aiJobId },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true },
+              });
+              if (inference) {
+                try {
+                  await this.auto.persistAnalysis(item.id, inference.id);
+                  return this.prisma.mediaReviewQueueItem.findUniqueOrThrow({ where: { id: item.id } });
+                } catch {
+                  // Персистенс снова не прошёл — оставляем PROCESSING,
+                  // попытка повторится на следующем обновлении; вечного
+                  // залипания нет, сторожевой здесь делать нечего
+                  // (джоба уже терминальна).
+                }
+              }
+            }
             if (job && job.status === AIJobStatus.FAILED) {
               const [updated] = await this.prisma.$transaction([
                 this.prisma.mediaReviewQueueItem.update({

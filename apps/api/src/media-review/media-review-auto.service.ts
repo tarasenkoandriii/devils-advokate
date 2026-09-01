@@ -377,6 +377,13 @@ export class MediaReviewAutoService implements OnModuleInit {
       return;
     }
 
+    // Таймаут транзакции поднят с дефолтных 5 с: первый живой прогон на
+    // 10-минутных дебатах показал, что запись десятков сегментов через
+    // pooler в них не помещается — транзакция рвалась ПОСЛЕ того, как
+    // джоба уже помечена COMPLETED, и элемент застревал в PROCESSING с
+    // пустым транскриптом (вместе с этим поднят maxDuration функции до
+    // 60 с в vercel.json — иначе таймаут транзакции упирался бы в
+    // потолок самой функции).
     await this.prisma.$transaction(async (tx) => {
       // 1. Участники: isSelf=false для ВСЕХ (пользователь — наблюдатель
       // публичного видео, не участник), personId никогда не
@@ -449,6 +456,6 @@ export class MediaReviewAutoService implements OnModuleInit {
         where: { id: itemId },
         data: { status: MediaReviewItemStatus.DONE, autoAnalysisError: null },
       });
-    });
+    }, { timeout: 55_000, maxWait: 10_000 });
   }
 }
