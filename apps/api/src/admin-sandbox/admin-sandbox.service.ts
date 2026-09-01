@@ -44,6 +44,7 @@ import { AudioBlobService } from '../conversations/audio-blob.service';
 import { YouTubeSearchService } from '../media-review/youtube-search.service';
 import { MediaReviewService } from '../media-review/media-review.service';
 import { MediaReviewAutoService } from '../media-review/media-review-auto.service';
+import { AIRouterService } from '../ai-router/ai-router.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 import { TurningPointsService } from '../turning-points/turning-points.service';
@@ -119,6 +120,7 @@ export class AdminSandboxService {
     private readonly youtube: YouTubeSearchService,
     private readonly mediaReview: MediaReviewService,
     private readonly mediaReviewAuto: MediaReviewAutoService,
+    private readonly aiRouter: AIRouterService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
@@ -685,6 +687,89 @@ export class AdminSandboxService {
         })),
       })),
     };
+  }
+
+  /** Пункт [progress-diagnose] — автоматический анализ «а не сбой ли
+   * это» для зависшего PROCESSING. Делает то, что оператор делал бы
+   * руками через SQL и curl: собирает факты о джобе, спрашивает у
+   * провайдера ЖИВОЙ статус интеракции, чинит единственную известную
+   * аномалию (RUNNING без lease — такую джобу сторожевая никогда не
+   * закроет), запускает внеочередной тик опроса и выносит вердикт
+   * словами. Ничего разрушительного: те же операции, что делает крон. */
+  async diagnoseQueueItem(operatorUserId: string, itemId: string) {
+    await this.assertOperator(operatorUserId);
+    const item = await this.prisma.mediaReviewQueueItem.findFirst({
+      where: { id: itemId, queue: { userId: operatorUserId } },
+      select: { id: true, status: true, aiJobId: true, conversationId: true },
+    });
+    if (!item) {
+      throw new BadRequestException('Элемент очереди не найден');
+    }
+
+    const steps: string[] = [];
+    let fixedMissingLease = false;
+
+    if (!item.aiJobId) {
+      return {
+        verdict: 'У элемента нет джобы разбора — нажмите «Повторить», чтобы поставить её заново',
+        steps,
+        fixedMissingLease,
+        pollResult: null,
+        inspection: null,
+      };
+    }
+
+    // 1. Факты + живой статус у провайдера (без записи).
+    const before = await this.aiRouter.inspectJob(item.aiJobId);
+    steps.push(
+      `джоба: ${before.jobStatus}, попыток ${before.retryCount}, задача ${before.submitted ? 'поставлена провайдеру' : 'ещё не поставлена'}`,
+    );
+    if (before.providerStatus) steps.push(`живой статус у провайдера: ${before.providerStatus}`);
+    if (before.providerError) steps.push(`опрос провайдера падает: ${before.providerError}`);
+    if (before.note) steps.push(`последняя заметка воркера: ${before.note}`);
+
+    // 2. Самолечение аномалии: RUNNING без lease — вне досягаемости
+    // сторожевой (reap ищет lease < now). Ставим короткий lease, чтобы
+    // джоба вернулась под её защиту.
+    if (before.jobStatus === 'RUNNING' && !before.leaseExpiresAt) {
+      await this.prisma.aIJob.update({
+        where: { id: item.aiJobId },
+        data: { leaseExpiresAt: new Date(Date.now() + 30 * 60 * 1000) },
+      });
+      fixedMissingLease = true;
+      steps.push('АНОМАЛИЯ ИСПРАВЛЕНА: у RUNNING-джобы не было lease (сторожевая её не видела) — назначен новый, 30 минут');
+    }
+
+    // 3. Внеочередной тик опроса — тот же код, что дергает крон.
+    let pollResult: { completed: number; failed: number; waiting: number } | null = null;
+    try {
+      pollResult = await this.aiRouter.pollRunning(10);
+      steps.push(`внеочередной опрос: завершено ${pollResult.completed}, упало ${pollResult.failed}, ждут ${pollResult.waiting}`);
+    } catch (err) {
+      steps.push(`внеочередной опрос не прошёл: ${String(err).slice(0, 200)}`);
+    }
+
+    // 4. Состояние после — и вердикт.
+    const after = await this.aiRouter.inspectJob(item.aiJobId);
+    const itemAfter = await this.prisma.mediaReviewQueueItem.findUniqueOrThrow({
+      where: { id: item.id },
+      select: { status: true, autoAnalysisError: true },
+    });
+
+    let verdict: string;
+    if (itemAfter.status === 'DONE' || after.jobStatus === 'COMPLETED') {
+      verdict = 'Не сбой: результат был готов у провайдера — забрали прямо сейчас, обновите очередь';
+    } else if (after.jobStatus === 'FAILED') {
+      verdict = `Сбой подтверждён, джоба закрыта с причиной: ${itemAfter.autoAnalysisError ?? after.note ?? 'см. журнал'} — доступно «Повторить»`;
+    } else if (before.providerStatus === 'in_progress' || before.providerStatus === 'queued') {
+      verdict = `Не сбой: провайдер подтверждает, что задача ${before.providerStatus === 'queued' ? 'в его очереди' : 'считается'} — остаётся ждать${fixedMissingLease ? ' (и теперь под защитой сторожевой)' : ''}`;
+    } else if (before.providerError) {
+      verdict = 'Похоже на сбой опроса: провайдер отвечает ошибкой (см. шаги) — если повторится, джобу закроет сторожевая, дальше «Повторить»';
+    } else {
+      verdict = 'Однозначного вердикта нет — см. шаги; сторожевая закроет джобу по lease, если движения не будет';
+    }
+
+    return { verdict, steps, fixedMissingLease, pollResult, inspection: after };
   }
 
   /** Fact Check по разобранному видео — поиск по базе опубликованных

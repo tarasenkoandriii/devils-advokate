@@ -285,6 +285,21 @@ export interface FactCheckSegmentResult {
   text: string;
   matches: FactCheckMatch[];
 }
+export interface SandboxDiagnosis {
+  verdict: string;
+  steps: string[];
+  fixedMissingLease: boolean;
+  pollResult: { completed: number; failed: number; waiting: number } | null;
+  inspection: {
+    jobStatus: string;
+    retryCount: number;
+    submitted: boolean;
+    leaseExpiresAt: string | null;
+    note: string | null;
+    providerStatus: string | null;
+    providerError: string | null;
+  } | null;
+}
 export interface SandboxFactCheck {
   language: string | null;
   checkedSegments: number;

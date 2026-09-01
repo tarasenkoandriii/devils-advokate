@@ -49,6 +49,11 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
         partialResult: null,
         leaseExpiresAt: new Date('2026-09-01T02:00:00Z'),
       })),
+      update: jest.fn(async () => ({})),
+    },
+    mediaReviewQueueItem: {
+      findFirst: jest.fn(async () => ({ id: 'item-1', status: 'PROCESSING', aiJobId: 'job-1', conversationId: 'conv-1' })),
+      findUniqueOrThrow: jest.fn(async () => ({ status: 'PROCESSING', autoAnalysisError: null })),
     },
   };
   const secrets = {
@@ -88,13 +93,20 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
   const mediaReviewAuto = {
     retryAnalysis: jest.fn(async () => ({ status: 'PROCESSING', autoAnalysisError: null })),
   };
+  const aiRouter = {
+    inspectJob: jest.fn(async () => ({
+      jobStatus: 'RUNNING', retryCount: 0, submitted: true,
+      leaseExpiresAt: null, note: null, providerStatus: 'in_progress', providerError: null,
+    })),
+    pollRunning: jest.fn(async () => ({ completed: 0, failed: 0, waiting: 1 })),
+  };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
   const discrepancy = {
     detect: jest.fn(async () => ({ kind: 'disc' })),
     factCheckConversationSegments: jest.fn(async () => ({ language: 'ru', checkedSegments: 1, totalSegments: 1, results: [] })),
   };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, manipulation, discrepancy, turningPoints };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, manipulation, discrepancy, turningPoints };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -107,6 +119,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.youtube as any,
     deps.mediaReview as any,
     deps.mediaReviewAuto as any,
+    deps.aiRouter as any,
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
@@ -423,6 +436,25 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     deps.prisma.transcript.findUnique = jest.fn(async (): Promise<any> => null);
     const empty = await svc.getAnalysis(OPERATOR, 'conv-2');
     expect(empty.segments).toEqual([]);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ диагностики: чинит RUNNING без lease, спрашивает живой статус провайдера, гоняет внеочередной опрос', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const d = await svc.diagnoseQueueItem(OPERATOR, 'item-1');
+
+    // Аномалия «RUNNING без lease» (inspectJob вернул leaseExpiresAt
+    // null) исправлена: без этого джоба вне досягаемости сторожевой.
+    expect(deps.prisma.aIJob.update).toHaveBeenCalled();
+    expect(d.fixedMissingLease).toBe(true);
+    // Внеочередной опрос — тот же продовый pollRunning, не копия.
+    expect(deps.aiRouter.pollRunning).toHaveBeenCalled();
+    // Провайдер подтвердил in_progress → вердикт «не сбой».
+    expect(d.verdict).toContain('провайдер подтверждает');
+    expect(d.steps.some((s) => s.includes('АНОМАЛИЯ'))).toBe(true);
+
+    await expect(svc.diagnoseQueueItem(REGULAR, 'item-1')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('fact-check делегируется сервису; не-оператору — отказ', async () => {

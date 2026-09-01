@@ -9,6 +9,7 @@ import { MediaReviewModule } from '../media-review/media-review.module';
 import { ManipulationDetectorModule } from '../manipulation-detector/manipulation-detector.module';
 import { DiscrepancyAnalysisModule } from '../discrepancy-analysis/discrepancy-analysis.module';
 import { TurningPointsModule } from '../turning-points/turning-points.module';
+import { AIRouterModule } from '../ai-router/ai-router.module';
 
 // Пункт [admin-sandbox] 2026-08-31: модуль НЕ содержит собственной
 // бизнес-логики цепочки — только переиспользует сервисы, которые уже
@@ -25,6 +26,7 @@ import { TurningPointsModule } from '../turning-points/turning-points.module';
     ManipulationDetectorModule,
     DiscrepancyAnalysisModule,
     TurningPointsModule,
+    AIRouterModule,
   ],
   controllers: [AdminSandboxController],
   providers: [AdminSandboxService],

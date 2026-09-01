@@ -866,6 +866,57 @@ export class AIRouterService {
     return { reaped: expired.length };
   }
 
+  /** Пункт [progress-diagnose] 2026-09-01 — инспекция джобы БЕЗ записи:
+   * факты из БД плюс ЖИВОЙ статус интеракции у провайдера (прямой GET
+   * мимо крона). Для кнопки «Диагностика»: различает «провайдер честно
+   * считает», «готово, но опрос ещё не забрал» и «опрос падает» —
+   * по одной строке в ai_jobs это неотличимо. */
+  async inspectJob(jobId: string): Promise<{
+    jobStatus: AIJobStatus;
+    retryCount: number;
+    submitted: boolean;
+    leaseExpiresAt: Date | null;
+    note: string | null;
+    providerStatus: string | null;
+    providerError: string | null;
+  }> {
+    const job = await this.prisma.aIJob.findUniqueOrThrow({
+      where: { id: jobId },
+      include: { modelVersion: { include: { model: { include: { provider: true } } } } },
+    });
+
+    let providerStatus: string | null = null;
+    let providerError: string | null = null;
+    if (job.externalInteractionId) {
+      try {
+        const provider = job.modelVersion.model.provider;
+        const client = selectProviderClient(provider.name);
+        if (!isBackgroundCapable(client) || !provider.apiEndpoint || !provider.credentialRef) {
+          providerError = `провайдер "${provider.name}" не поддерживает фоновый опрос`;
+        } else {
+          const apiKey = await this.secrets.resolve(provider.credentialRef);
+          const result = await client.fetchBackground(job.externalInteractionId, {
+            apiKey,
+            apiEndpoint: provider.apiEndpoint,
+          });
+          providerStatus = result.status;
+        }
+      } catch (err) {
+        providerError = String(err).slice(0, 300);
+      }
+    }
+
+    return {
+      jobStatus: job.status,
+      retryCount: job.retryCount,
+      submitted: job.externalInteractionId != null,
+      leaseExpiresAt: job.leaseExpiresAt,
+      note: job.partialResult ? job.partialResult.slice(0, 300) : null,
+      providerStatus,
+      providerError,
+    };
+  }
+
   /** GET /ai-jobs/:id — только свои джобы (§4.4). */
   async getJobForUser(userId: string, jobId: string) {
     const job = await this.prisma.aIJob.findUnique({

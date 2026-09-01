@@ -288,7 +288,7 @@ export function sandboxTranscribe(conversationId: string, languageCode?: string)
 // Кнопка «Разобрать» у результата поиска. Скачивания ролика здесь НЕТ
 // намеренно (ТЗ медиа-разбора §2.2): элемент очереди хранит метаданные,
 // файл приносит сам оператор.
-import type { SandboxAnalysis, SandboxFactCheck, SandboxQueue, SandboxYouTubeResult } from './types';
+import type { SandboxAnalysis, SandboxDiagnosis, SandboxFactCheck, SandboxQueue, SandboxYouTubeResult } from './types';
 
 export function sandboxAddToQueue(video: SandboxYouTubeResult) {
   return apiPost<{ queueId: string; itemId: string }>('/admin/sandbox/queue/items', {
@@ -311,6 +311,9 @@ export function sandboxRetryQueueItem(itemId: string) {
 }
 export function getSandboxAnalysis(conversationId: string) {
   return apiGet<SandboxAnalysis>(`/admin/sandbox/analysis/${conversationId}`);
+}
+export function sandboxDiagnoseQueueItem(itemId: string) {
+  return apiPost<SandboxDiagnosis>('/admin/sandbox/queue/diagnose', { itemId });
 }
 export function sandboxFactCheck(conversationId: string) {
   return apiPost<SandboxFactCheck>(`/admin/sandbox/fact-check/${conversationId}`, {});

@@ -148,6 +148,11 @@ export class AdminSandboxController {
     return this.sandbox.getAnalysis(userId, conversationId);
   }
 
+  @Post('queue/diagnose')
+  async diagnoseQueueItem(@CurrentUser() userId: string, @Body() dto: RetryQueueItemDto) {
+    return this.sandbox.diagnoseQueueItem(userId, dto.itemId);
+  }
+
   @Post('fact-check/:conversationId')
   async factCheck(@CurrentUser() userId: string, @Param('conversationId') conversationId: string) {
     return this.sandbox.factCheckConversation(userId, conversationId);

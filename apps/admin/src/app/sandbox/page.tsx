@@ -32,6 +32,7 @@ import {
   sandboxRetryQueueItem,
   getSandboxAnalysis,
   sandboxFactCheck,
+  sandboxDiagnoseQueueItem,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -43,6 +44,7 @@ import type {
   SandboxQueueItem,
   SandboxAnalysis,
   SandboxFactCheck,
+  SandboxDiagnosis,
 } from '../../lib/types';
 
 function formatDuration(seconds: number | null): string {
@@ -187,6 +189,20 @@ export default function SandboxPage() {
     getSandboxAnalysis(conversationId)
       .then((a) => setAnalyses((m) => ({ ...m, [conversationId]: a })))
       .catch(() => setAnalyses((m) => ({ ...m, [conversationId]: 'error' })));
+  }
+
+  // Диагностика зависшего PROCESSING: живой статус у провайдера +
+  // внеочередной опрос + вердикт словами. По itemId.
+  const [diagnoses, setDiagnoses] = useState<Record<string, SandboxDiagnosis | 'loading' | string>>({});
+
+  function runDiagnose(itemId: string) {
+    setDiagnoses((m) => ({ ...m, [itemId]: 'loading' }));
+    sandboxDiagnoseQueueItem(itemId)
+      .then((d) => {
+        setDiagnoses((m) => ({ ...m, [itemId]: d }));
+        loadQueue(); // диагностика могла продвинуть джобу (внеочередной опрос)
+      })
+      .catch((e) => setDiagnoses((m) => ({ ...m, [itemId]: `Ошибка: ${errText(e)}` })));
   }
 
   // Fact Check API — on-demand по кнопке, результаты по conversationId.
@@ -591,6 +607,20 @@ export default function SandboxPage() {
                     {retryingItem === item.id ? 'Ставим…' : 'Повторить'}
                   </button>
                 )}
+                {item.status === 'PROCESSING' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      runDiagnose(item.id);
+                    }}
+                    disabled={diagnoses[item.id] === 'loading'}
+                    title="Спросить у провайдера живой статус, прогнать внеочередной опрос и получить вердикт: сбой это или честное ожидание"
+                  >
+                    {diagnoses[item.id] === 'loading' ? 'Диагностируем…' : 'Диагностика'}
+                  </button>
+                )}
                 <span className="muted" style={{ fontSize: 12 }}>▾</span>
               </summary>
 
@@ -606,6 +636,19 @@ export default function SandboxPage() {
                     {item.autoAnalysisError}
                   </div>
                 )}
+                {(() => {
+                  const d = diagnoses[item.id];
+                  if (!d || d === 'loading') return null;
+                  if (typeof d === 'string') return <p style={{ color: 'var(--signal-critical)' }}>{d}</p>;
+                  return (
+                    <div style={{ marginBottom: 10, border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '8px 10px', fontSize: 13 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.verdict}</div>
+                      {d.steps.map((s, i) => (
+                        <div key={i} className="muted" style={{ fontSize: 12 }}>· {s}</div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {item.conversationId && (() => {
                   const a = analyses[item.conversationId];
                   if (!a) return null;
