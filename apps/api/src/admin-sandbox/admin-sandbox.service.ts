@@ -48,6 +48,7 @@ import { AIRouterService } from '../ai-router/ai-router.service';
 import { IntakeService, IntakeScenario } from '../intake/intake.service';
 import { HealthOnboardingService, ExtractedHealthConfigDraft } from '../health/health-onboarding.service';
 import { HealthService } from '../health/health.service';
+import { LiveSessionService } from '../live-session/live-session.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 import { TurningPointsService } from '../turning-points/turning-points.service';
@@ -72,6 +73,10 @@ const SANDBOX_CONSENT_TYPES: ConsentType[] = [
   // health-ТЗ) — без него прогон падал бы на createProject. Согласие
   // выдаётся ОПЕРАТОРСКОМУ аккаунту той же кнопкой, что остальные.
   ConsentType.HEALTH_DATA,
+  // Пункт [sandbox-voice] 2026-09-01: голосовой ввод квиза — прямой
+  // канал browser→AssemblyAI по короткоживущему токену; выдача токена
+  // требует ровно этого согласия (см. LiveSessionService).
+  ConsentType.THIRD_PARTY_AUDIO_RECORDING,
 ];
 
 export interface SandboxCheckItem {
@@ -132,6 +137,7 @@ export class AdminSandboxService {
     private readonly intake: IntakeService,
     private readonly healthOnboarding: HealthOnboardingService,
     private readonly health: HealthService,
+    private readonly liveSession: LiveSessionService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
@@ -773,6 +779,34 @@ export class AdminSandboxService {
     await this.assertOperator(operatorUserId);
     if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
     return this.health.createConfig(operatorUserId, projectId, draft);
+  }
+
+  /** Пункт [sandbox-voice] — токен живой транскрипции для голосового
+   * ввода квиза: ТОТ ЖЕ продовый mintTranscriptionToken, что у TMA
+   * (короткоживущий, 5 минут, browser→AssemblyAI напрямую, аудио через
+   * наш backend не проходит), с тем же требованием согласия
+   * THIRD_PARTY_AUDIO_RECORDING — отказ без согласия является
+   * результатом прогона, песочница его не обходит. */
+  async mintTranscriptionToken(operatorUserId: string) {
+    await this.assertOperator(operatorUserId);
+    return this.liveSession.mintTranscriptionToken(operatorUserId);
+  }
+
+  /** OCR лабдокумента — продовый uploadLabDocument: реальный вызов
+   * Cloud Vision (GOOGLE_VISION_API_KEY), реальный дневной лимит 10 на
+   * пользователя, само изображение НЕ персистуется — только извлечённый
+   * текст черновиком (verified: false, как у пользователей). */
+  async healthUploadLabDocument(operatorUserId: string, configId: string, base64Content: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    if (!base64Content?.trim()) throw new BadRequestException('Пустое изображение');
+    return this.health.uploadLabDocument(operatorUserId, configId, base64Content);
+  }
+
+  async healthVerifyLabDocument(operatorUserId: string, draftId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!draftId?.trim()) throw new BadRequestException('draftId обязателен');
+    return this.health.verifyLabDocument(operatorUserId, draftId);
   }
 
   /** Пункт [progress-diagnose] — автоматический анализ «а не сбой ли

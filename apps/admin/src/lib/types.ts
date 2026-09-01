@@ -287,6 +287,10 @@ export interface FactCheckSegmentResult {
   startMs: number;
   text: string;
   matches: FactCheckMatch[];
+  /** Пункт [fact-check-unmask] 2026-09-01 — причина сбоя поиска по
+   * этому сегменту (null = поиск прошёл). Раньше сбой выглядел как
+   * «совпадений: 0» — маскировал невключённый API. */
+  error: string | null;
 }
 export interface SandboxIntakeState {
   id: string;

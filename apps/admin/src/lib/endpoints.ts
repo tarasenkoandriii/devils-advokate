@@ -330,6 +330,15 @@ export function sandboxHealthExtract(conversationId: string) {
 export function sandboxHealthConfig(projectId: string, draft: SandboxHealthDraft) {
   return apiPost<{ id: string }>('/admin/sandbox/health/config', { projectId, ...draft });
 }
+export function sandboxTranscriptionToken() {
+  return apiPost<{ token: string; expiresInSeconds: number }>('/admin/sandbox/transcription-token', {});
+}
+export function sandboxHealthLabDocument(configId: string, base64Content: string) {
+  return apiPost<{ id: string; ocrText: string; verified: boolean }>('/admin/sandbox/health/lab-document', { configId, base64Content });
+}
+export function sandboxHealthLabVerify(draftId: string) {
+  return apiPost<{ id: string; verified: boolean }>('/admin/sandbox/health/lab-verify', { draftId });
+}
 export function sandboxDiagnoseQueueItem(itemId: string) {
   return apiPost<SandboxDiagnosis>('/admin/sandbox/queue/diagnose', { itemId });
 }

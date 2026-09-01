@@ -617,6 +617,12 @@ export class DiscrepancyAnalysisService {
         url: string | null;
         reviewDate: string | null;
       }>;
+      /** Пункт [fact-check-unmask] 2026-09-01 — текст ошибки, если поиск
+       * по ЭТОМУ сегменту упал (сеть/квота/PERMISSION_DENIED). Раньше
+       * сбой молча превращался в matches:[] — живой прогон показал
+       * цену: 14 запросов со 100% ошибок в Google Cloud Console
+       * выглядели в песочнице как честное «совпадений: 0». */
+      error: string | null;
     }>;
   }> {
     const transcript = await this.prisma.transcript.findUnique({
@@ -655,6 +661,7 @@ export class DiscrepancyAnalysisService {
         url: string | null;
         reviewDate: string | null;
       }>;
+      error: string | null;
     }> = [];
     for (const seg of candidates) {
       try {
@@ -671,12 +678,27 @@ export class DiscrepancyAnalysisService {
             url: c.reviewUrl ?? null,
             reviewDate: c.reviewDate ?? null,
           })),
+          error: null,
         });
-      } catch {
-        // Сбой одного сегмента (сеть, 5xx) не роняет остальные —
-        // частичный результат честнее пустого отказа.
-        results.push({ segmentId: seg.id, startMs: seg.startMs, text: seg.text, matches: [] });
+      } catch (err) {
+        // Пункт [fact-check-unmask] 2026-09-01 — сбой одного сегмента
+        // (сеть, 5xx) по-прежнему не роняет остальные, но причина
+        // теперь ЗАПИСЫВАЕТСЯ в результат, а не глотается: тело ошибки
+        // fetchOnePage уже содержит ответ Google (PERMISSION_DENIED /
+        // RESOURCE_EXHAUSTED / INVALID_ARGUMENT) — именно то, что
+        // отличает «фактчеков нет» от «API не включён».
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ segmentId: seg.id, startMs: seg.startMs, text: seg.text, matches: [], error: message.slice(0, 400) });
       }
+    }
+
+    // Все сегменты упали одинаково системно → это не «совпадений нет»,
+    // это отказ интеграции целиком — отдаём его ошибкой запроса, чтобы
+    // кнопка в песочнице показала красную причину, а не нулевой успех.
+    if (results.length > 0 && results.every((r) => r.error !== null)) {
+      throw new BadGatewayException(
+        `Fact Check Tools API отклонил все ${results.length} запросов. Последняя ошибка: ${results[results.length - 1].error}`,
+      );
     }
 
     return {

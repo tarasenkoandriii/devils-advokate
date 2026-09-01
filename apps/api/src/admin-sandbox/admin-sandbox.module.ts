@@ -12,6 +12,7 @@ import { TurningPointsModule } from '../turning-points/turning-points.module';
 import { AIRouterModule } from '../ai-router/ai-router.module';
 import { IntakeModule } from '../intake/intake.module';
 import { HealthModule } from '../health/health.module';
+import { LiveSessionModule } from '../live-session/live-session.module';
 
 // Пункт [admin-sandbox] 2026-08-31: модуль НЕ содержит собственной
 // бизнес-логики цепочки — только переиспользует сервисы, которые уже
@@ -31,6 +32,7 @@ import { HealthModule } from '../health/health.module';
     AIRouterModule,
     IntakeModule,
     HealthModule,
+    LiveSessionModule,
   ],
   controllers: [AdminSandboxController],
   providers: [AdminSandboxService],

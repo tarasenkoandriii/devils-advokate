@@ -109,14 +109,21 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     appendAnswer: jest.fn(async () => ({ id: 'seg-1' })),
     extract: jest.fn(async () => ({ goalDescription: 'операция на колене', targetBudget: null, currency: null, criteria: [] })),
   };
-  const health = { createConfig: jest.fn(async () => ({ id: 'hc-1' })) };
+  const health = {
+    createConfig: jest.fn(async () => ({ id: 'hc-1' })),
+    uploadLabDocument: jest.fn(async () => ({ id: 'draft-1', ocrText: 'Гемоглобин 140', verified: false })),
+    verifyLabDocument: jest.fn(async () => ({ id: 'draft-1', verified: true })),
+  };
+  const liveSession = {
+    mintTranscriptionToken: jest.fn(async () => ({ token: 'rt-token', expiresInSeconds: 300 })),
+  };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
   const discrepancy = {
     detect: jest.fn(async () => ({ kind: 'disc' })),
     factCheckConversationSegments: jest.fn(async () => ({ language: 'ru', checkedSegments: 1, totalSegments: 1, results: [] })),
   };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, manipulation, discrepancy, turningPoints };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -133,6 +140,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.intake as any,
     deps.healthOnboarding as any,
     deps.health as any,
+    deps.liveSession as any,
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
@@ -201,7 +209,7 @@ describe('AdminSandboxService.grantOwnConsents', () => {
 
     const res = await svc.grantOwnConsents(OPERATOR);
 
-    expect(res.granted.sort()).toEqual(['EPHEMERAL_SERVER', 'EXTERNAL_AI', 'HEALTH_DATA']);
+    expect(res.granted.sort()).toEqual(['EPHEMERAL_SERVER', 'EXTERNAL_AI', 'HEALTH_DATA', 'THIRD_PARTY_AUDIO_RECORDING']);
     expect(res.alreadyHad).toEqual(['RECORDING']);
     for (const call of (deps.consent.grant as jest.Mock).mock.calls) {
       expect(call[0].source).toBe('admin-sandbox');
@@ -506,6 +514,14 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     expect(config.id).toBe('hc-1');
 
     await expect(svc.healthExtract(REGULAR, 'conv-h')).rejects.toBeInstanceOf(ForbiddenException);
+
+    // OCR лабдокумента: делегирование с userId оператора, verify отдельно.
+    const labDraft = await svc.healthUploadLabDocument(OPERATOR, 'hc-1', 'aGVsbG8=');
+    expect(deps.health.uploadLabDocument).toHaveBeenCalledWith(OPERATOR, 'hc-1', 'aGVsbG8=');
+    expect(labDraft.verified).toBe(false);
+    const verified = await svc.healthVerifyLabDocument(OPERATOR, labDraft.id);
+    expect(verified.verified).toBe(true);
+    await expect(svc.healthUploadLabDocument(REGULAR, 'hc-1', 'x')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('согласия песочницы включают HEALTH_DATA — без него dispatch в health падал бы на createProject', async () => {
@@ -513,6 +529,15 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     const svc = makeService(deps);
     const res = await svc.grantOwnConsents(OPERATOR);
     expect(res.granted).toContain('HEALTH_DATA');
+  });
+
+  it('голосовой токен — тот же продовый mintTranscriptionToken, что у TMA; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    const res = await svc.mintTranscriptionToken(OPERATOR);
+    expect(deps.liveSession.mintTranscriptionToken).toHaveBeenCalledWith(OPERATOR);
+    expect(res.token).toBe('rt-token');
+    await expect(svc.mintTranscriptionToken(REGULAR)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('fact-check делегируется сервису; не-оператору — отказ', async () => {

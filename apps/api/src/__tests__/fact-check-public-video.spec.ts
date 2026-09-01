@@ -6,7 +6,7 @@
 // именно НОВУЮ обёртку (отбор сегментов, потолок запросов, изоляция
 // сбоев, честная ошибка про незаданный ключ), а не сам claims:search.
 
-import { BadRequestException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException } from '@nestjs/common';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 
 const LONG_TEXT = 'Это достаточно длинное утверждение, чтобы искать его в базе фактчеков.';
@@ -117,6 +117,35 @@ describe('DiscrepancyAnalysisService.factCheckConversationSegments', () => {
     expect(spy).toHaveBeenCalledTimes(8); // лишние 3 сегмента не проверялись
     expect(res.checkedSegments).toBe(8);
     expect(res.results).toHaveLength(8); // сбойный сегмент присутствует с нулём совпадений
+    // Пункт [fact-check-unmask]: причина сбоя видна в результате
+    // сегмента, а не проглочена как «совпадений: 0».
+    const failed = res.results.find((r) => r.segmentId === 's-2')!;
+    expect(failed.matches).toEqual([]);
+    expect(failed.error).toMatch(/недоступен|network/i);
+    expect(res.results.filter((r) => r.error === null)).toHaveLength(7);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [fact-check-unmask]: 100% отказов API → ошибка запроса с причиной, НЕ «совпадений: 0»', async () => {
+    // Живой прогон 2026-09-01: Fact Check Tools API не был включён в
+    // Google Cloud проекте → 14 мгновенных отказов (медиана 4мс), а
+    // песочница показывала «Проверено 6 из 6, совпадений 0» — системный
+    // сбой маскировался под честный пустой результат.
+    const { svc } = makeService({
+      segments: [
+        { id: 's-1', text: LONG_TEXT, startMs: 0 },
+        { id: 's-2', text: `${LONG_TEXT} №2`, startMs: 1000 },
+      ],
+    });
+    jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: async () =>
+        JSON.stringify({ error: { code: 403, status: 'PERMISSION_DENIED', message: 'Fact Check Tools API has not been used in project ... before or it is disabled.' } }),
+    } as unknown as Response);
+
+    const promise = svc.factCheckConversationSegments('conv-1');
+    await expect(promise).rejects.toBeInstanceOf(BadGatewayException);
+    await expect(svc.factCheckConversationSegments('conv-1')).rejects.toThrow(/PERMISSION_DENIED/);
   });
 
   it('без ключа — честная ошибка с именем переменной ДО единого запроса; без транскрипта — пустой результат', async () => {

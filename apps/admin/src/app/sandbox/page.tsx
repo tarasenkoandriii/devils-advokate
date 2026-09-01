@@ -39,6 +39,8 @@ import {
   sandboxHealthAnswer,
   sandboxHealthExtract,
   sandboxHealthConfig,
+  sandboxHealthLabDocument,
+  sandboxHealthLabVerify,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -54,6 +56,7 @@ import type {
   SandboxIntakeState,
   SandboxHealthDraft,
 } from '../../lib/types';
+import { VoiceTextInput } from '../../components/VoiceTextInput';
 
 function formatDuration(seconds: number | null): string {
   if (seconds === null) return '—';
@@ -234,6 +237,8 @@ export default function SandboxPage() {
   const [healthConfigId, setHealthConfigId] = useState<string | null>(null);
   const [healthBusy, setHealthBusy] = useState<string | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+
+  const [labDraft, setLabDraft] = useState<{ id: string; ocrText: string; verified: boolean } | null>(null);
 
   async function withHealth(action: string, fn: () => Promise<void>) {
     setHealthBusy(action);
@@ -765,6 +770,11 @@ export default function SandboxPage() {
                       if (!fc || fc === 'loading') return null;
                       if (typeof fc === 'string') return <p style={{ color: 'var(--signal-critical)', marginTop: 8 }}>{fc}</p>;
                       const withMatches = fc.results.filter((r) => r.matches.length > 0);
+                      // Пункт [fact-check-unmask] 2026-09-01 — частичные
+                      // сбои поиска показываются явно (полный отказ по
+                      // всем сегментам backend теперь отдаёт ошибкой
+                      // запроса — ветка typeof fc === 'string' выше).
+                      const withErrors = fc.results.filter((r) => r.error);
                       return (
                         <div style={{ marginTop: 8, fontSize: 13 }}>
                           <p className="muted" style={{ margin: '0 0 6px' }}>
@@ -772,6 +782,11 @@ export default function SandboxPage() {
                             в {withMatches.length}. Это поиск по базе опубликованных фактчеков — отсутствие
                             совпадений НЕ подтверждает утверждение.
                           </p>
+                          {withErrors.length > 0 && (
+                            <p style={{ color: 'var(--signal-critical)', margin: '0 0 6px' }}>
+                              Сбой поиска по {withErrors.length} сегм.: {withErrors[0].error}
+                            </p>
+                          )}
                           {withMatches.map((r) => (
                             <div key={r.segmentId} style={{ marginBottom: 10, border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '6px 10px' }}>
                               <div className="muted" style={{ fontSize: 12 }}>[{msToTimecode(r.startMs)}] {r.text.slice(0, 160)}</div>
@@ -819,12 +834,13 @@ export default function SandboxPage() {
             </button>
           ))}
         </div>
-        <textarea
+        {/* Голос и текст равноправны — тот же VoiceTextInput-путь, что в
+            TMA: токен → браузер → AssemblyAI напрямую. */}
+        <VoiceTextInput
           value={intakeText}
-          onChange={(e) => setIntakeText(e.target.value)}
-          placeholder={intakeState?.nextQuestion ? 'Ваш ответ на уточняющий вопрос…' : 'Опишите ситуацию своими словами…'}
-          rows={3}
-          style={{ width: '100%', boxSizing: 'border-box' }}
+          onChange={setIntakeText}
+          disabled={intakeBusy}
+          placeholder={intakeState?.nextQuestion ? 'Ваш ответ на уточняющий вопрос…' : 'Опишите ситуацию своими словами — можно голосом…'}
         />
         <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
           {(!intakeState || intakeState.status !== 'IN_PROGRESS' || !intakeState.nextQuestion) && (
@@ -992,6 +1008,61 @@ export default function SandboxPage() {
                               <div>
                                 <span className="badge badge-ok">КОНФИГ СОЗДАН</span> <code>{healthConfigId}</code>
                                 <span className="muted"> — воронка health дошла до «С конфигом»</span>
+
+                                {/* OCR лабдокумента: реальный Cloud Vision,
+                                    дневной лимит 10, изображение не
+                                    персистуется — только извлечённый текст
+                                    черновиком (verified: false). */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Лабдокумент (Vision OCR)</b>
+                                  <p className="muted" style={{ margin: '4px 0 6px', fontSize: 12 }}>
+                                    Изображение с текстом (фото анализа, до ~3 МБ — лимит тела запроса).
+                                    Нужен GOOGLE_VISION_API_KEY — см. чеклист готовности.
+                                  </p>
+                                  {!labDraft && (
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      disabled={healthBusy !== null}
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0];
+                                        if (!f) return;
+                                        const reader = new FileReader();
+                                        reader.onload = () =>
+                                          withHealth('ocr', async () => {
+                                            const dataUrl = String(reader.result ?? '');
+                                            const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+                                            setLabDraft(await sandboxHealthLabDocument(healthConfigId, base64));
+                                          });
+                                        reader.readAsDataURL(f);
+                                      }}
+                                    />
+                                  )}
+                                  {healthBusy === 'ocr' && <p className="muted">Распознаём…</p>}
+                                  {labDraft && (
+                                    <div style={{ marginTop: 6 }}>
+                                      <div className="muted" style={{ fontSize: 12 }}>
+                                        черновик <code>{labDraft.id}</code> ·{' '}
+                                        {labDraft.verified ? <span className="badge badge-ok">подтверждён</span> : 'не подтверждён (verified: false)'}
+                                      </div>
+                                      <pre style={{ maxHeight: 160, overflow: 'auto', fontSize: 12, marginTop: 4 }}>{labDraft.ocrText || '(текст не распознан)'}</pre>
+                                      {!labDraft.verified && (
+                                        <button
+                                          type="button"
+                                          disabled={healthBusy !== null}
+                                          onClick={() =>
+                                            withHealth('verify', async () => {
+                                              const r = await sandboxHealthLabVerify(labDraft.id);
+                                              setLabDraft({ ...labDraft, verified: r.verified });
+                                            })
+                                          }
+                                        >
+                                          {healthBusy === 'verify' ? 'Подтверждаем…' : 'Подтвердить (verify)'}
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             )}
                           </div>

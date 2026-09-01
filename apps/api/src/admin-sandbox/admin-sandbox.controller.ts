@@ -220,6 +220,21 @@ export class AdminSandboxController {
     });
   }
 
+  @Post('transcription-token')
+  async transcriptionToken(@CurrentUser() userId: string) {
+    return this.sandbox.mintTranscriptionToken(userId);
+  }
+
+  @Post('health/lab-document')
+  async healthLabDocument(@CurrentUser() userId: string, @Body() dto: { configId: string; base64Content: string }) {
+    return this.sandbox.healthUploadLabDocument(userId, dto.configId, dto.base64Content);
+  }
+
+  @Post('health/lab-verify')
+  async healthLabVerify(@CurrentUser() userId: string, @Body() dto: { draftId: string }) {
+    return this.sandbox.healthVerifyLabDocument(userId, dto.draftId);
+  }
+
   @Post('fact-check/:conversationId')
   async factCheck(@CurrentUser() userId: string, @Param('conversationId') conversationId: string) {
     return this.sandbox.factCheckConversation(userId, conversationId);
