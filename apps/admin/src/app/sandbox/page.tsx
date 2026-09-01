@@ -31,6 +31,7 @@ import {
   getSandboxQueue,
   sandboxRetryQueueItem,
   getSandboxAnalysis,
+  sandboxFactCheck,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -40,6 +41,7 @@ import type {
   SandboxConversation,
   SandboxQueue,
   SandboxAnalysis,
+  SandboxFactCheck,
 } from '../../lib/types';
 
 function formatDuration(seconds: number | null): string {
@@ -184,6 +186,16 @@ export default function SandboxPage() {
     getSandboxAnalysis(conversationId)
       .then((a) => setAnalyses((m) => ({ ...m, [conversationId]: a })))
       .catch(() => setAnalyses((m) => ({ ...m, [conversationId]: 'error' })));
+  }
+
+  // Fact Check API — on-demand по кнопке, результаты по conversationId.
+  const [factChecks, setFactChecks] = useState<Record<string, SandboxFactCheck | 'loading' | string>>({});
+
+  function runFactCheck(conversationId: string) {
+    setFactChecks((m) => ({ ...m, [conversationId]: 'loading' }));
+    sandboxFactCheck(conversationId)
+      .then((r) => setFactChecks((m) => ({ ...m, [conversationId]: r })))
+      .catch((e) => setFactChecks((m) => ({ ...m, [conversationId]: `Ошибка: ${errText(e)}` })));
   }
 
   function msToTimecode(ms: number): string {
@@ -529,6 +541,58 @@ export default function SandboxPage() {
                     </div>
                   );
                 })()}
+
+                {/* Fact Check API — только по готовому разбору. Поиск по
+                    базе опубликованных фактчеков, НЕ вердикт о
+                    правдивости: отсутствие совпадений ничего не
+                    доказывает. */}
+                {item.conversationId && item.status === 'DONE' && (
+                  <div style={{ marginTop: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => runFactCheck(item.conversationId as string)}
+                      disabled={factChecks[item.conversationId] === 'loading'}
+                      title="Поиск по базе опубликованных фактчеков (Google Fact Check Tools API), до 8 сегментов за нажатие"
+                    >
+                      {factChecks[item.conversationId] === 'loading' ? 'Проверяем…' : 'Проверить факты (Fact Check API)'}
+                    </button>
+                    {(() => {
+                      const fc = factChecks[item.conversationId as string];
+                      if (!fc || fc === 'loading') return null;
+                      if (typeof fc === 'string') return <p style={{ color: 'var(--signal-critical)', marginTop: 8 }}>{fc}</p>;
+                      const withMatches = fc.results.filter((r) => r.matches.length > 0);
+                      return (
+                        <div style={{ marginTop: 8, fontSize: 13 }}>
+                          <p className="muted" style={{ margin: '0 0 6px' }}>
+                            Проверено сегментов: {fc.checkedSegments} из {fc.totalSegments}. Совпадения найдены
+                            в {withMatches.length}. Это поиск по базе опубликованных фактчеков — отсутствие
+                            совпадений НЕ подтверждает утверждение.
+                          </p>
+                          {withMatches.map((r) => (
+                            <div key={r.segmentId} style={{ marginBottom: 10, border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '6px 10px' }}>
+                              <div className="muted" style={{ fontSize: 12 }}>[{msToTimecode(r.startMs)}] {r.text.slice(0, 160)}</div>
+                              {r.matches.map((m, i) => (
+                                <div key={i} style={{ marginTop: 4 }}>
+                                  <span className="badge badge-pending">{m.rating ?? 'без оценки'}</span>{' '}
+                                  {m.claim}
+                                  {m.claimant && <span className="muted"> — {m.claimant}</span>}
+                                  {m.url && (
+                                    <>
+                                      {' '}
+                                      <a href={m.url} target="_blank" rel="noreferrer">
+                                        {m.publisher ?? 'источник'}
+                                      </a>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             </details>
           ))}

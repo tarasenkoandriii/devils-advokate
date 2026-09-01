@@ -637,6 +637,16 @@ export class AdminSandboxService {
     };
   }
 
+  /** Fact Check по разобранному видео — поиск по базе опубликованных
+   * фактчеков (Google Fact Check Tools). НЕ вердикт о правдивости:
+   * отсутствие совпадений ничего не доказывает; результат — материал
+   * для человека. Делегирует DiscrepancyAnalysisService — там уже
+   * живут кэш, пагинация и ключ FACT_CHECK_TOOLS_API_KEY. */
+  async factCheckConversation(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    return this.discrepancy.factCheckConversationSegments(conversationId);
+  }
+
   async getConversation(operatorUserId: string, conversationId: string) {
     await this.assertOperator(operatorUserId);
     const conversation = await this.conversations.get(operatorUserId, conversationId);

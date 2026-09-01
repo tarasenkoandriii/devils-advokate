@@ -147,4 +147,9 @@ export class AdminSandboxController {
   async analysis(@CurrentUser() userId: string, @Param('conversationId') conversationId: string) {
     return this.sandbox.getAnalysis(userId, conversationId);
   }
+
+  @Post('fact-check/:conversationId')
+  async factCheck(@CurrentUser() userId: string, @Param('conversationId') conversationId: string) {
+    return this.sandbox.factCheckConversation(userId, conversationId);
+  }
 }

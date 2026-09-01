@@ -587,6 +587,106 @@ export class DiscrepancyAnalysisService {
     return allClaims;
   }
 
+  /** Пункт [fact-check] 2026-09-01 — проверка сегментов разобранного
+   * ПУБЛИЧНОГО видео по базе опубликованных фактчеков. По прямому
+   * запросу («добавить в YouTube + Fact Check API») — и намеренно
+   * ЗДЕСЬ, а не отдельным сервисом: fetchFactCheckClaims ниже уже
+   * несёт кэш (24 ч, FactCheckApiCache), пагинацию и ключ
+   * FACT_CHECK_TOOLS_API_KEY — вторая интеграция с тем же API была бы
+   * дублем без кэша.
+   *
+   * Границы, названные прямо: это ПОИСК по уже проведённым фактчекам
+   * (PolitiFact, StopFake…), не «детектор правды» — отсутствие
+   * совпадений НЕ подтверждает утверждение, совпадение — материал для
+   * человека, не вердикт (та же дисциплина, что §7.4 у
+   * паралингвистики). On-demand: до 8 сегментов за вызов —
+   * предсказуемый расход исторически небольшой квоты API. */
+  async factCheckConversationSegments(conversationId: string): Promise<{
+    language: string | null;
+    checkedSegments: number;
+    totalSegments: number;
+    results: Array<{
+      segmentId: string;
+      startMs: number;
+      text: string;
+      matches: Array<{
+        claim: string;
+        claimant: string | null;
+        rating: string | null;
+        publisher: string | null;
+        url: string | null;
+        reviewDate: string | null;
+      }>;
+    }>;
+  }> {
+    const transcript = await this.prisma.transcript.findUnique({
+      where: { conversationId },
+      include: { segments: { orderBy: { startMs: 'asc' } } },
+    });
+    if (!transcript || transcript.segments.length === 0) {
+      return { language: null, checkedSegments: 0, totalSegments: 0, results: [] };
+    }
+
+    // Ключ проверяется ДО перебора: без него каждый сегмент «упал бы»
+    // молча, а пользователь увидел бы ноль совпадений вместо причины.
+    try {
+      await this.secrets.resolve(FACT_CHECK_API_KEY_REF);
+    } catch {
+      throw new BadRequestException(
+        'FACT_CHECK_TOOLS_API_KEY не задан — включите Fact Check Tools API в проекте Google Cloud (том же, где ключ YouTube) и добавьте ключ в окружение API',
+      );
+    }
+
+    // Короткие реплики («Да», «Ну смотри») — не утверждения: поиск по
+    // ним шумит и жжёт квоту. Потолок сегментов — предсказуемый расход.
+    const candidates = transcript.segments
+      .filter((s) => s.text.trim().length >= 30)
+      .slice(0, 8);
+
+    const results: Array<{
+      segmentId: string;
+      startMs: number;
+      text: string;
+      matches: Array<{
+        claim: string;
+        claimant: string | null;
+        rating: string | null;
+        publisher: string | null;
+        url: string | null;
+        reviewDate: string | null;
+      }>;
+    }> = [];
+    for (const seg of candidates) {
+      try {
+        const claims = await this.fetchFactCheckClaims(seg.text);
+        results.push({
+          segmentId: seg.id,
+          startMs: seg.startMs,
+          text: seg.text,
+          matches: claims.slice(0, 5).map((c) => ({
+            claim: c.text,
+            claimant: c.claimant ?? null,
+            rating: c.textualRating ?? null,
+            publisher: c.publisher ?? null,
+            url: c.reviewUrl ?? null,
+            reviewDate: c.reviewDate ?? null,
+          })),
+        });
+      } catch {
+        // Сбой одного сегмента (сеть, 5xx) не роняет остальные —
+        // частичный результат честнее пустого отказа.
+        results.push({ segmentId: seg.id, startMs: seg.startMs, text: seg.text, matches: [] });
+      }
+    }
+
+    return {
+      language: transcript.language ?? null,
+      checkedSegments: results.length,
+      totalSegments: transcript.segments.length,
+      results,
+    };
+  }
+
   private async fetchFactCheckClaims(claimText: string): Promise<FactCheckClaim[]> {
     const normalized = claimText.trim().toLowerCase().replace(/\s+/g, ' ');
     const queryHash = createHash('sha256').update(normalized).digest('hex');

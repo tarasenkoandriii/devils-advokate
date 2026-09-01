@@ -76,7 +76,10 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     retryAnalysis: jest.fn(async () => ({ status: 'PROCESSING', autoAnalysisError: null })),
   };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
-  const discrepancy = { detect: jest.fn(async () => ({ kind: 'disc' })) };
+  const discrepancy = {
+    detect: jest.fn(async () => ({ kind: 'disc' })),
+    factCheckConversationSegments: jest.fn(async () => ({ language: 'ru', checkedSegments: 1, totalSegments: 1, results: [] })),
+  };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
   return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, manipulation, discrepancy, turningPoints };
 }
@@ -380,6 +383,15 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     deps.prisma.transcript.findUnique = jest.fn(async (): Promise<any> => null);
     const empty = await svc.getAnalysis(OPERATOR, 'conv-2');
     expect(empty.segments).toEqual([]);
+  });
+
+  it('fact-check делегируется сервису; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    const res = await svc.factCheckConversation(OPERATOR, 'conv-1');
+    expect(deps.discrepancy.factCheckConversationSegments).toHaveBeenCalledWith('conv-1');
+    expect(res.checkedSegments).toBe(1);
+    await expect(svc.factCheckConversation(REGULAR, 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('очереди ещё нет — честный null, а не создание пустой при каждом просмотре', async () => {

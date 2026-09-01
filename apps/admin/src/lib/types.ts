@@ -257,3 +257,23 @@ export interface SandboxAnalysis {
   language: string | null;
   segments: SandboxAnalysisSegment[];
 }
+export interface FactCheckMatch {
+  claim: string;
+  claimant: string | null;
+  rating: string | null;
+  publisher: string | null;
+  url: string | null;
+  reviewDate: string | null;
+}
+export interface FactCheckSegmentResult {
+  segmentId: string;
+  startMs: number;
+  text: string;
+  matches: FactCheckMatch[];
+}
+export interface SandboxFactCheck {
+  language: string | null;
+  checkedSegments: number;
+  totalSegments: number;
+  results: FactCheckSegmentResult[];
+}

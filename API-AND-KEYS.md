@@ -51,7 +51,7 @@
 | Сервис | Переменная | Вызовы | От чего зависит | Без ключа |
 | --- | --- | --- | --- | --- |
 | **YouTube Data API v3** | `YOUTUBE_API_KEY` | `search.list`, `videos.list` | поиск ролика для очереди медиа-разбора (**только метаданные**, никакого видео/аудио) | 500 на `GET /media-review/youtube-search` |
-| **Fact Check Tools API** | `FACT_CHECK_TOOLS_API_KEY` | `claims:search` | сверка реплики с уже проведёнными фактчеками | 500 только на этом эндпоинте; три других источника сверки работают |
+| **Fact Check Tools API** | `FACT_CHECK_TOOLS_API_KEY` | `claims:search` | сверка реплики с уже проведёнными фактчеками; с 2026-09-01 — также кнопка «Проверить факты» по разобранному YouTube-видео (Sandbox, до 8 сегментов за нажатие, кэш 24 ч) | 500 только на этих эндпоинтах; остальные источники сверки работают |
 | **Places API (legacy)** | `GOOGLE_PLACES_API_KEY` | `nearbysearch`, `textsearch`, `details` | рекомендация заведения для встречи, заявка владельца, локация крупной покупки | 500 на этих трёх фичах |
 | **Cloud Vision** | `GOOGLE_VISION_API_KEY` | `images:annotate` (`TEXT_DETECTION`) | OCR лабораторных документов | 500 на загрузке документа |
 
