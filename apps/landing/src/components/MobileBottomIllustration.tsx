@@ -10,7 +10,7 @@ export function MobileBottomIllustration() {
   return (
     <div className="mobile-only-illustration mobile-only-illustration--bottom" aria-hidden="true">
       <Image
-        src="/images/hero-lawyer.png"
+        src="/images/hero-lawyer.webp"
         alt=""
         width={1672}
         height={941}

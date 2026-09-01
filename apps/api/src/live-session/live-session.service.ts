@@ -23,6 +23,7 @@ import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { SecretsService } from '../secrets/secrets.service';
 import { assertProjectOwnership } from '../common/project-ownership';
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 const ASSEMBLYAI_TEMP_TOKEN_URL = 'https://streaming.assemblyai.com/v3/token';
 
@@ -57,7 +58,7 @@ export class LiveSessionService {
 
     let response: Response;
     try {
-      response = await fetch(`${ASSEMBLYAI_TEMP_TOKEN_URL}?expires_in_seconds=${expiresInSeconds}`, {
+      response = await fetchWithTimeout(`${ASSEMBLYAI_TEMP_TOKEN_URL}?expires_in_seconds=${expiresInSeconds}`, {
         method: 'GET',
         headers: { Authorization: apiKey },
       });

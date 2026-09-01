@@ -252,6 +252,7 @@ enum ProjectMode {
   HEALTH
   FAMILY_LAW
   DTP
+  JOB_SEARCH
 }
 
 model Project {
@@ -286,6 +287,9 @@ model Project {
   contractType    FamilyLawContractType?
   familyLawConfig FamilyLawConfig?
   dtpConfig       DtpConfig?
+  // Пункт [job-search] 2026-09-01 — домен кандидата: CV + сверка
+  // вакансий с локальных джоб-сайтов (по ссылкам пользователя).
+  jobSearchConfig JobSearchConfig?
 
   question String
   goal     String?
@@ -1488,6 +1492,8 @@ model AIJob {
   @@index([inputHash])
   @@index([taskType, createdAt]) // Пункт [telemetry]: агрегация по фиче за период на растущей таблице
   @@index([promptVersionId])
+  @@index([modelVersionId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
+  @@index([fallbackModelVersionId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
   @@map("ai_jobs")
 }
 
@@ -2344,6 +2350,8 @@ model SourceConflict {
 
   @@index([personId])
   @@index([generatedByInferenceId])
+  @@index([factAId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
+  @@index([factBId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
   @@map("source_conflicts")
 }
 
@@ -5089,6 +5097,7 @@ model CandidateStageProgress {
 
   @@unique([statusId, stageDefinitionId])
   @@index([stageDefinitionId])
+  @@index([conversationId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
   @@map("candidate_stage_progress")
   updatedAt DateTime @default(now()) @updatedAt
 }
@@ -5109,6 +5118,7 @@ model ComplianceFlag {
   createdAt DateTime @default(now())
   @@index([configId])
 
+  @@index([conversationId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
   @@map("compliance_flags")
 }
 
@@ -5181,6 +5191,7 @@ model CandidateFollowUpRequest {
   updatedAt DateTime @default(now()) @updatedAt
   @@index([statusId])
 
+  @@index([conversationId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
   @@map("candidate_follow_up_requests")
 }
 
@@ -6220,4 +6231,107 @@ model IntakeSession {
   @@index([userId, status])
   @@index([status, updatedAt])
   @@map("intake_sessions")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Пункт [job-search] 2026-09-01 — домен кандидата на поиск работы
+// (devils-advocate-job-search: по прямому запросу «формирование CV +
+// ИИ-поиск работы под это CV по локальным джоб-сайтам в том же
+// регионе/городе со статистикой вакансий»).
+//
+// ГРАНИЦА ОТВЕТСТВЕННОСТИ — та же, что у Пункта 40 и инвестиций:
+// НИКАКОГО автономного кроулинга джоб-сайтов. Пользователь сам
+// приносит ссылки на вакансии со своих локальных сайтов; сервер
+// скачивает ИМЕННО ИХ (safe-url-fetch, SSRF-защита) и сверяет с CV.
+// Статистика — детерминированные агрегаты по СОБРАННЫМ пользователем
+// вакансиям, не «рынок труда вообще».
+// ═══════════════════════════════════════════════════════════════════
+
+enum JobSearchCriterionCategory {
+  ROLE_FIT // соответствие роли/стеку/опыту
+  COMPENSATION // зарплата, бонусы
+  LOCATION // город/регион/удалёнка
+  CONDITIONS // график, формат, соцпакет
+  OTHER
+}
+
+// Соответствие вакансии городу/региону из конфига — детерминированное
+// поле от AI-сверки, но с честным UNKNOWN (в вакансии локация не
+// названа), никогда не угадывается.
+enum JobVacancyLocationMatch {
+  MATCHES
+  DIFFERENT
+  UNKNOWN
+}
+
+model JobSearchConfig {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  desiredRole       String
+  city              String?
+  region            String?
+  salaryExpectation Decimal? @db.Decimal(14, 2)
+  currency          String?
+  employmentFormat  String? // офис/гибрид/удалёнка — свободный текст пользователя
+  experienceSummary String? // выжимка опыта из онбординга (материал для CV)
+
+  // CV: AI формирует черновик (структура + скомпилированный текст),
+  // человек утверждает отдельным действием — тот же принцип §4.1
+  // interview-pool «AI предлагает, человек утверждает». Повторная
+  // генерация сбрасывает cvReviewedAt (правило из аудита [health]).
+  cvDraft      Json?
+  cvText       String?
+  cvDraftedAt  DateTime?
+  cvReviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  criteria  JobSearchCriterion[]
+  vacancies JobVacancy[]
+
+  @@map("job_search_configs")
+}
+
+model JobSearchCriterion {
+  id       String          @id @default(cuid())
+  configId String
+  config   JobSearchConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  text       String
+  category   JobSearchCriterionCategory
+  isRequired Boolean
+  orderIndex Int
+
+  createdAt DateTime @default(now()) // конвенция схемы: у каждой модели есть временная метка (schema-conventions.spec)
+
+  @@index([configId])
+  @@map("job_search_criteria")
+}
+
+model JobVacancy {
+  id       String          @id @default(cuid())
+  configId String
+  config   JobSearchConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  sourceUrl String
+  siteHost  String // домен джоб-сайта — ось статистики «по локальным сайтам»
+  rawText   String // текст страницы вакансии (safe-url-fetch), НЕ пересказ
+
+  // Заполняется AI-сверкой с CV (matchVacancy); до неё — null. Никаких
+  // score/rank — только покрытие критериев + нейтральные заметки, тот
+  // же принцип, что сравнительные таблицы investment/major-purchase.
+  title           String?
+  locationMatch   JobVacancyLocationMatch?
+  salaryMentioned String? // как названа вилка в вакансии, дословно; null = не названа
+  matchBreakdown  Json? // [{criterionId, coverage: covered|partial|not_covered|unknown, note}]
+  matchNotes      String? // нейтральные заметки для кандидата, без «подходит/не подходит»
+  matchedAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([configId])
+  @@map("job_vacancies")
 }

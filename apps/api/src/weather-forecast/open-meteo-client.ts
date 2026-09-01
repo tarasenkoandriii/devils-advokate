@@ -4,6 +4,8 @@
 // заводит новый секрет ради вспомогательной "nice-to-have" фичи,
 // buкально названной так в самой ТЗ.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 export interface Coordinates {
   latitude: number;
   longitude: number;
@@ -49,7 +51,7 @@ export async function geocodeCity(cityName: string): Promise<Coordinates | null>
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch {
     throw new Error('Open-Meteo (геокодирование) недоступен — сетевая ошибка');
   }
@@ -70,7 +72,7 @@ export async function getForecast(coords: Coordinates, targetDate: Date): Promis
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.latitude}&longitude=${coords.longitude}&hourly=temperature_2m,weathercode&start_date=${dateStr}&end_date=${dateStr}&timezone=auto`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch {
     throw new Error('Open-Meteo (прогноз) недоступен — сетевая ошибка');
   }

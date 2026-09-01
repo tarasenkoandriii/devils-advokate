@@ -9,6 +9,9 @@ import { ConsentService } from '../consent/consent.service';
 import { ContentScanService } from '../content-scan/content-scan.service';
 import { ForbiddenException } from '@nestjs/common';
 
+let fakeAiJobCount = 0; // [rate-limits]
+let fakeReusableJob: any = null; // [idempotency]: что вернёт aIJob.findFirst
+
 function createFakePrisma() {
   const aiJobs = new Map<string, any>();
   const aiModelVersions = new Map<string, any>();
@@ -26,6 +29,8 @@ function createFakePrisma() {
     _getJob(id: string) { return aiJobs.get(id); },
     _getDetections() { return contentScanDetections; },
     aIJob: {
+      count: async () => fakeAiJobCount, // [rate-limits]: настраивается тестом лимита
+      findFirst: async () => fakeReusableJob, // [idempotency]
       create: async ({ data }: any) => { const job = { id: nextId(), retryCount: 0, ...data }; aiJobs.set(job.id, job); return job; },
       update: async ({ where, data }: any) => {
         const job = aiJobs.get(where.id);
@@ -249,6 +254,94 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
         userPrompt: 'test',
       }),
     ).rejects.toThrow(AIRouterNoCapableModelError);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [idempotency] 2026-09-01: повтор идентичного запроса в окне возвращает готовый результат — без вызова провайдера, без новой джобы, без расхода лимита', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const getCallCount = mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+    const router = buildRouter(prisma);
+
+    try {
+      // Свежая COMPLETED-джоба с тем же inputHash уже есть.
+      fakeReusableJob = { id: 'job-prev', inferences: [{ id: 'inf-prev', output: '[{"text":"arg1","stance":"pro","weight":0.8}]', createdAt: new Date() }] };
+      fakeAiJobCount = 9999; // даже исчерпанный лимит не мешает переиспользованию
+      process.env.AI_CALLS_PER_USER_PER_DAY = '5';
+
+      const result = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'обычный вопрос про зарплату' });
+      expect(result.jobId).toBe('job-prev');
+      expect(result.aiInferenceId).toBe('inf-prev');
+      expect(getCallCount()).toBe(0); // провайдер не вызывался — оплаты нет
+
+      // Строгий validateOutput нового вызова отклоняет старый вывод —
+      // честно идём за свежим (и тут срабатывает лимит: 429).
+      await expect(
+        router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'обычный вопрос про зарплату', validateOutput: () => false }),
+      ).rejects.toThrow(/суточный лимит/);
+
+      // 0 в env отключает идемпотентность целиком.
+      process.env.AI_IDEMPOTENCY_WINDOW_MINUTES = '0';
+      delete process.env.AI_CALLS_PER_USER_PER_DAY;
+      fakeAiJobCount = 0;
+      const fresh = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'обычный вопрос про зарплату' });
+      expect(fresh.jobId).not.toBe('job-prev');
+      expect(getCallCount()).toBe(1);
+    } finally {
+      fakeReusableJob = null;
+      fakeAiJobCount = 0;
+      delete process.env.AI_CALLS_PER_USER_PER_DAY;
+      delete process.env.AI_IDEMPOTENCY_WINDOW_MINUTES;
+    }
+  });
+
+  it('[rate-limits] 2026-09-01: суточный потолок AI-вызовов — 429 ДО создания джобы; 0 в env отключает', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const getCallCount = mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+    const router = buildRouter(prisma);
+
+    try {
+      process.env.AI_CALLS_PER_USER_PER_DAY = '5';
+      fakeAiJobCount = 5; // пользователь уже выбрал лимит
+      await expect(
+        router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'вопрос' }),
+      ).rejects.toThrow(/суточный лимит AI-вызовов/);
+      expect(getCallCount()).toBe(0); // до провайдера не дошло
+
+      process.env.AI_CALLS_PER_USER_PER_DAY = '0'; // явное отключение
+      const result = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'вопрос' });
+      expect(result.text).toContain('arg1');
+    } finally {
+      delete process.env.AI_CALLS_PER_USER_PER_DAY;
+      fakeAiJobCount = 0;
+    }
+  });
+
+  // Пункт [external-timeouts] 2026-09-01 — ретраи из отчёта аудита.
+  it('КЛЮЧЕВОЙ ТЕСТ [external-timeouts]: 401 провайдера НЕ ретраится (одна попытка), 503 — ретраится до maxRetries', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const router = buildRouter(prisma);
+
+    // 401: неверный ключ не станет верным со второй попытки.
+    const count401 = mockFetchSequence([{ ok: false, status: 401, body: { error: 'invalid key' } }]);
+    await expect(
+      router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'вопрос', maxRetries: 3 }),
+    ).rejects.toThrow();
+    expect(count401()).toBe(1);
+
+    // 503: перегрузка — честные maxRetries попыток (бэкофф в тестах нулевой).
+    const count503 = mockFetchSequence([{ ok: false, status: 503, body: { error: 'overloaded' } }]);
+    await expect(
+      router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'вопрос', maxRetries: 3 }),
+    ).rejects.toThrow();
+    expect(count503()).toBe(3);
   });
 });
 

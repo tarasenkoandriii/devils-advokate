@@ -35,8 +35,14 @@ export default function VenuesModerationPage() {
   }, []);
 
   async function loadSummary(venueId: string) {
-    const summary = await getVenueCommissionSummary(venueId);
-    setSummaries((prev) => ({ ...prev, [venueId]: summary }));
+    // [project-audit] 2026-09-01: молчаливый сбой оставлял оператора
+    // без сводки и без объяснения.
+    try {
+      const summary = await getVenueCommissionSummary(venueId);
+      setSummaries((prev) => ({ ...prev, [venueId]: summary }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось загрузить сводку комиссий');
+    }
   }
 
   if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;
@@ -65,13 +71,23 @@ export default function VenuesModerationPage() {
             </>
           )}
           onAccept={async (app) => {
-            await moderateVenueApplication(app.id, 'APPROVE');
-            setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
-            load();
+            // [project-audit] 2026-09-01: молча несработавшая модерация —
+            // оператор думал, что одобрил; заявка возвращалась после F5.
+            try {
+              await moderateVenueApplication(app.id, 'APPROVE');
+              setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
+              load();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Не удалось одобрить заявку');
+            }
           }}
           onReject={async (app) => {
-            await moderateVenueApplication(app.id, 'REJECT');
-            setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
+            try {
+              await moderateVenueApplication(app.id, 'REJECT');
+              setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Не удалось отклонить заявку');
+            }
           }}
         />
       </section>
@@ -124,9 +140,13 @@ export default function VenuesModerationPage() {
                           }
                           setFeeError(null);
                           const amount = raw === undefined || raw === '' ? null : Number(raw);
-                          const updated = await setVenueReferralFee(venue.id, amount);
-                          setApproved((prev) => prev?.map((v) => (v.id === venue.id ? updated : v)) ?? null);
-                          setFeeDrafts((prev) => ({ ...prev, [venue.id]: '' }));
+                          try {
+                            const updated = await setVenueReferralFee(venue.id, amount);
+                            setApproved((prev) => prev?.map((v) => (v.id === venue.id ? updated : v)) ?? null);
+                            setFeeDrafts((prev) => ({ ...prev, [venue.id]: '' }));
+                          } catch (err) {
+                            setFeeError(err instanceof Error ? err.message : 'Не удалось сохранить комиссию');
+                          }
                         }}
                       >
                         Сохранить
@@ -139,8 +159,12 @@ export default function VenuesModerationPage() {
                         type="checkbox"
                         checked={venue.isPriorityPartner}
                         onChange={async (e) => {
-                          const updated = await setVenuePriorityPartner(venue.id, e.target.checked);
-                          setApproved((prev) => prev?.map((v) => (v.id === venue.id ? updated : v)) ?? null);
+                          try {
+                            const updated = await setVenuePriorityPartner(venue.id, e.target.checked);
+                            setApproved((prev) => prev?.map((v) => (v.id === venue.id ? updated : v)) ?? null);
+                          } catch (err) {
+                            setFeeError(err instanceof Error ? err.message : 'Не удалось изменить статус партнёра');
+                          }
                         }}
                       />
                       <span className={venue.isPriorityPartner ? 'badge badge-ok' : 'muted'}>

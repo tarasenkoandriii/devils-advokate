@@ -26,6 +26,8 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     aIProvider: {
       count: jest.fn(async () => 4),
       findUnique: jest.fn(async () => ({ id: 'p1', name: 'assemblyai' })),
+      // [voice-note-ru]: sandboxVoiceNote берёт ключ по credentialRef провайдера.
+      findUniqueOrThrow: jest.fn(async () => ({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' })),
     },
     project: {
       findFirst: jest.fn(async (): Promise<{ id: string } | null> => null),
@@ -51,6 +53,8 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
       findUnique: jest.fn(async () => ({ status: 'ANALYZING' })),
     },
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
+      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       findUnique: jest.fn(async () => ({
         status: 'RUNNING',
         createdAt: new Date('2026-09-01T00:00:00Z'),
@@ -75,6 +79,8 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
   const consent = {
     hasActiveConsent: jest.fn(async (_u: string, _type: string) => false),
     grant: jest.fn(async () => ({})),
+    // [voice-note-ru]: голосовая заметка требует согласия ДО обращения к провайдеру.
+    requireConsent: jest.fn(async () => undefined),
   };
   const conversations = {
     create: jest.fn(async () => ({ id: 'conv-1' })),
@@ -230,7 +236,24 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     getEvidenceAccessLog: jest.fn(async () => [{ action: 'VIEWED_METADATA', occurredAt: new Date('2026-09-01T10:00:01Z') }]),
     getSettlementProtocolDraft: jest.fn(async () => ({ text: 'чернетка... НЕ юридично завершений документ', generatedAt: new Date().toISOString(), disclaimer: 'x' })),
   };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints, majorPurchaseOnboarding, majorPurchase, investmentOnboarding, investment, investmentGroups, poolOnboarding, pool, poolCandidates, poolRelevance, poolReports, poolTeams, familyLawOnboarding, familyLaw, familyLawV2, dtpOnboarding, dtp, dtpV2 };
+  // Пункт [job-search] 2026-09-01 — седьмой домен: CV + вакансии.
+  const jobSearchOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-j' })),
+    extract: jest.fn(async () => ({ desiredRole: 'Frontend-разработчик', city: 'Київ', region: null, salaryExpectation: 3000, currency: 'USD', employmentFormat: 'гибрид', experienceSummary: '5 лет React', criteria: [{ text: 'React/TypeScript', category: 'ROLE_FIT', isRequired: true, orderIndex: 0 }] })),
+  };
+  const jobSearch = {
+    createConfig: jest.fn(async () => ({ id: 'jsc-1' })),
+    generateCvDraft: jest.fn(async () => ({ id: 'jsc-1', cvText: 'Frontend-разработчик, 5 лет React', cvDraft: { headline: 'FE' }, cvDraftedAt: new Date() })),
+    reviewCv: jest.fn(async () => ({ id: 'jsc-1', cvReviewedAt: new Date() })),
+    addVacancy: jest.fn(async () => ({ id: 'vac-1', siteHost: 'jobs.example.ua', sourceUrl: 'https://jobs.example.ua/v/1', rawText: 'x'.repeat(500) })),
+    matchVacancy: jest.fn(async () => ({ id: 'vac-1', title: 'FE Dev', locationMatch: 'MATCHES', salaryMentioned: '2500-3500 USD', matchBreakdown: [], matchNotes: 'нейтральные заметки' })),
+    getStatistics: jest.fn(async () => ({ total: 1, matched: 1, bySite: { 'jobs.example.ua': 1 }, byLocationMatch: { MATCHES: 1, DIFFERENT: 0, UNKNOWN: 0, NOT_MATCHED_YET: 0 }, withSalaryMentioned: 1, requiredCriteriaCount: 1, fullRequiredCoverage: 1, city: 'Київ', region: null })),
+  };
+  // Пункт [voice-note-ru] 2026-09-01 — синхронная транскрипция голосовой заметки.
+  const transcription = {
+    transcribeShortNoteSync: jest.fn(async () => ({ text: 'распознанный текст', language: 'ru' })),
+  };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints, majorPurchaseOnboarding, majorPurchase, investmentOnboarding, investment, investmentGroups, poolOnboarding, pool, poolCandidates, poolRelevance, poolReports, poolTeams, familyLawOnboarding, familyLaw, familyLawV2, dtpOnboarding, dtp, dtpV2, jobSearchOnboarding, jobSearch, transcription };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -268,6 +291,9 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.dtpOnboarding as any,
     deps.dtp as any,
     deps.dtpV2 as any,
+    deps.jobSearchOnboarding as any,
+    deps.jobSearch as any,
+    deps.transcription as any,
   );
 }
 
@@ -864,6 +890,41 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     await expect(svc.ipAttachInterview(REGULAR, 'proj-p', 'c')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('job-search-цикл (extract → config → CV draft/review → вакансия по ссылке → сверка → статистика) делегируется продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const draft = await svc.jsExtract(OPERATOR, 'conv-j');
+    expect(deps.jobSearchOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-j');
+
+    await svc.jsCreateConfig(OPERATOR, 'proj-j', draft as never);
+    expect(deps.jobSearch.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-j', draft);
+
+    // CV: два ОТДЕЛЬНЫХ шага — AI предлагает, человек утверждает.
+    const cv = await svc.jsCvDraft(OPERATOR, 'proj-j');
+    expect(deps.jobSearch.generateCvDraft).toHaveBeenCalledWith(OPERATOR, 'proj-j');
+    expect(deps.jobSearch.reviewCv).not.toHaveBeenCalled();
+    expect(cv.cvText).toContain('React');
+    await svc.jsCvReview(OPERATOR, 'proj-j');
+    expect(deps.jobSearch.reviewCv).toHaveBeenCalledWith(OPERATOR, 'proj-j');
+
+    // Вакансия: rawText целиком НЕ возвращается — только длина.
+    const v = await svc.jsAddVacancy(OPERATOR, 'proj-j', 'https://jobs.example.ua/v/1');
+    expect(deps.jobSearch.addVacancy).toHaveBeenCalledWith(OPERATOR, 'proj-j', 'https://jobs.example.ua/v/1');
+    expect(v.rawTextLength).toBe(500);
+    expect((v as Record<string, unknown>).rawText).toBeUndefined();
+
+    const m = await svc.jsMatchVacancy(OPERATOR, 'vac-1');
+    expect(deps.jobSearch.matchVacancy).toHaveBeenCalledWith(OPERATOR, 'vac-1');
+    expect(m.locationMatch).toBe('MATCHES');
+
+    const stats = await svc.jsStatistics(OPERATOR, 'proj-j');
+    expect(stats.bySite['jobs.example.ua']).toBe(1);
+
+    await expect(svc.jsExtract(REGULAR, 'conv-j')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.jsAddVacancy(REGULAR, 'proj-j', 'https://x')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('согласия песочницы включают HEALTH_DATA — без него dispatch в health падал бы на createProject', async () => {
     const deps = makeDeps();
     const svc = makeService(deps);
@@ -878,6 +939,32 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     expect(deps.liveSession.mintTranscriptionToken).toHaveBeenCalledWith(OPERATOR);
     expect(res.token).toBe('rt-token');
     await expect(svc.mintTranscriptionToken(REGULAR)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  // Пункт [voice-note-ru] 2026-09-01 — синхронная транскрипция голосовой
+  // заметки (ru/uk, которых нет в стриминге AssemblyAI): согласие
+  // обязательно, ключ берётся по credentialRef провайдера, base64
+  // декодируется в буфер, язык пробрасывается как есть.
+  it('голосовая заметка: consent → ключ провайдера → transcribeShortNoteSync; лимит размера; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    const base64 = Buffer.from('fake-webm-audio').toString('base64');
+    const res = await svc.sandboxVoiceNote(OPERATOR, base64, 'ru');
+    expect(deps.consent.requireConsent).toHaveBeenCalledWith(OPERATOR, 'THIRD_PARTY_AUDIO_RECORDING');
+    expect(deps.secrets.resolve).toHaveBeenCalledWith('ASSEMBLYAI_API_KEY');
+    const [keyArg, audioArg, langArg] = deps.transcription.transcribeShortNoteSync.mock.calls[0] as unknown as [string, Buffer, string?];
+    expect(keyArg).toBe('SUPERSECRET-VALUE-42');
+    expect(Buffer.isBuffer(audioArg)).toBe(true);
+    expect(audioArg.toString()).toBe('fake-webm-audio');
+    expect(langArg).toBe('ru');
+    expect(res).toEqual({ text: 'распознанный текст', language: 'ru' });
+
+    // Пустая и сверхдлинная запись отсекаются ДО согласия/провайдера.
+    await expect(svc.sandboxVoiceNote(OPERATOR, '  ')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.sandboxVoiceNote(OPERATOR, 'a'.repeat(4_000_001))).rejects.toBeInstanceOf(BadRequestException);
+    expect(deps.transcription.transcribeShortNoteSync).toHaveBeenCalledTimes(1);
+
+    await expect(svc.sandboxVoiceNote(REGULAR, base64)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('fact-check делегируется сервису; не-оператору — отказ', async () => {

@@ -69,9 +69,9 @@ const cls = (scenario: string, confidence: number, followUpQuestion: string | nu
 });
 
 function makeService(router: any, prisma = createFakePrisma()) {
-  const domains = { dtp: fakeOnboarding('dtp'), familyLaw: fakeOnboarding('fl'), health: fakeOnboarding('health'), interviewPool: fakeOnboarding('ip'), investment: fakeOnboarding('inv'), majorPurchase: fakeOnboarding('mp') };
+  const domains = { dtp: fakeOnboarding('dtp'), familyLaw: fakeOnboarding('fl'), health: fakeOnboarding('health'), interviewPool: fakeOnboarding('ip'), investment: fakeOnboarding('inv'), majorPurchase: fakeOnboarding('mp'), jobSearch: fakeOnboarding('js') };
   const projects = { created: [] as any[], create: async (_u: string, input: any) => { projects.created.push(input); return { id: 'universal-p1' }; } };
-  const svc = new IntakeService(prisma as any, router as any, projects as any, domains.dtp as any, domains.familyLaw as any, domains.health as any, domains.interviewPool as any, domains.investment as any, domains.majorPurchase as any);
+  const svc = new IntakeService(prisma as any, router as any, projects as any, domains.dtp as any, domains.familyLaw as any, domains.health as any, domains.interviewPool as any, domains.investment as any, domains.majorPurchase as any, domains.jobSearch as any);
   return { svc, domains, projects, prisma };
 }
 

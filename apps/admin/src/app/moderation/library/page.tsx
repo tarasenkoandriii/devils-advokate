@@ -51,12 +51,21 @@ export default function LibraryModerationPage() {
           </>
         )}
         onAccept={async (entry) => {
-          await moderateLibraryEntry(entry.id, 'ACCEPT');
-          setEntries((prev) => prev?.filter((e) => e.id !== entry.id) ?? null);
+          // [project-audit] 2026-09-01: сбой модерации был молчаливым.
+          try {
+            await moderateLibraryEntry(entry.id, 'ACCEPT');
+            setEntries((prev) => prev?.filter((e) => e.id !== entry.id) ?? null);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось принять запись');
+          }
         }}
         onReject={async (entry) => {
-          await moderateLibraryEntry(entry.id, 'REJECT');
-          setEntries((prev) => prev?.filter((e) => e.id !== entry.id) ?? null);
+          try {
+            await moderateLibraryEntry(entry.id, 'REJECT');
+            setEntries((prev) => prev?.filter((e) => e.id !== entry.id) ?? null);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Не удалось отклонить запись');
+          }
         }}
       />
     </div>

@@ -98,7 +98,7 @@ export function Technology({ dict }: { dict: Dictionary }) {
 
         <div className="technology__image-wrap">
           <Image
-            src="/images/technology.png"
+            src="/images/technology.webp"
             alt={dict.technology.title}
             width={1536}
             height={1024}

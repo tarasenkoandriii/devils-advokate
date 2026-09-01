@@ -37,6 +37,8 @@ function createFakePrisma() {
       findUnique: async ({ where }: any) => users.get(where.id) ?? null,
     },
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
+      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       findMany: async ({ where, orderBy, take }: any) => {
         let rows = [...jobs];
         if (where?.taskType !== undefined) rows = rows.filter((j) => j.taskType === where.taskType);

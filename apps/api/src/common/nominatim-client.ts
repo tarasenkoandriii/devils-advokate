@@ -16,6 +16,8 @@
 // не проверен вызовом против реального сервиса в этой среде — та же
 // оговорка, что у остальных внешних интеграций проекта.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 const NOMINATIM_HOST = 'https://nominatim.openstreetmap.org/reverse';
 const USER_AGENT = "Devil's Advocate onboarding geo-suggestion (single request per user, see docs/devils-advocate-tz.md §3.24)";
 
@@ -38,7 +40,7 @@ export async function reverseGeocode(lat: number, lon: number): Promise<ReverseG
 
   let response: Response;
   try {
-    response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+    response = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } });
   } catch (err) {
     throw new NominatimError(`Не удалось связаться с Nominatim: ${err instanceof Error ? err.message : 'неизвестная ошибка сети'}`);
   }

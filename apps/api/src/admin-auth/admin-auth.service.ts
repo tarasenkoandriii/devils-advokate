@@ -108,6 +108,7 @@ export class AdminAuthService {
 
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+    await this.pruneExpiredSessions();
     await this.prisma.adminSession.create({ data: { userId: user.id, token, expiresAt } });
 
     return { token, expiresAt };
@@ -177,11 +178,23 @@ export class AdminAuthService {
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
+    await this.pruneExpiredSessions();
     await this.prisma.adminSession.create({
       data: { userId: user.id, token, expiresAt },
     });
 
     return { token, expiresAt };
+  }
+
+  /** Пункт [project-audit] 2026-09-01 — просроченные AdminSession не
+   * удалялись никогда (guard их только игнорировал): таблица росла
+   * бесконечно на мёртвых токенах. Оппортунистическая чистка при
+   * каждом ЛОГИНЕ (не на каждый запрос — лишний write на горячем
+   * пути guard'а не нужен): логины редки, а чистка идемпотентна.
+   * Отдельный cron не заводится — deleteMany по индексу дешевле
+   * инфраструктуры вокруг него. */
+  private async pruneExpiredSessions(): Promise<void> {
+    await this.prisma.adminSession.deleteMany({ where: { expiresAt: { lt: new Date(Date.now()) } } });
   }
 
   async logout(token: string): Promise<{ ok: true }> {

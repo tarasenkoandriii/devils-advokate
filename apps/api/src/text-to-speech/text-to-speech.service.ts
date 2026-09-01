@@ -16,14 +16,18 @@
 // одинаковые фразы" (буквально ТЗ). Одинаковая фраза для разных
 // пользователей переиспользует один и тот же сгенерированный звук.
 
-import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsentService } from '../consent/consent.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentType } from '@prisma/client';
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 const ELEVENLABS_API_KEY_REF = 'ELEVENLABS_API_KEY';
+// Пункт [rate-limits]: маркер расхода ElevenLabs в AuditLogEntry.
+const TTS_USAGE_ACTION = 'tts.synthesized';
+
 const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // ElevenLabs preset-голос "Bella", разумный дефолт без выбора пользователя
 // Аудит интеграции ElevenLabs (продолжение аудита AssemblyAI, 2026-08-30) —
 // сверено с рабочей реализацией в соседнем проекте (caller-id) и живой
@@ -54,6 +58,22 @@ export class TextToSpeechService {
     private readonly secrets: SecretsService,
   ) {}
 
+  private async assertUnderDailyTtsLimit(userId: string): Promise<void> {
+    const raw = Number(process.env.TTS_CALLS_PER_USER_PER_DAY ?? '100');
+    const limit = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 100;
+    if (limit === 0) return;
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const count = await this.prisma.auditLogEntry.count({
+      where: { actorId: userId, action: TTS_USAGE_ACTION, createdAt: { gte: since } },
+    });
+    if (count >= limit) {
+      throw new HttpException(
+        `Достигнут суточный лимит озвучки (${limit}/сутки). Попробуйте позже.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
   async synthesize(userId: string, text: string, voiceId?: string): Promise<SynthesizeResult> {
     if (!text.trim()) {
       throw new BadRequestException('text не может быть пустым');
@@ -71,8 +91,19 @@ export class TextToSpeechService {
       return { audioBase64: cached.audioBase64, cached: true };
     }
 
+    // Пункт [rate-limits] 2026-09-01 — суточный потолок синтеза на
+    // пользователя. Проверяется ТОЛЬКО на cache-miss: попадание в кэш
+    // ничего не стоит и не считается. Учёт — существующей моделью
+    // AuditLogEntry (actorId + action + createdAt), новая таблица ради
+    // счётчика не заводится (тот же принцип, что у Vision OCR — счёт
+    // по уже существующим записям).
+    await this.assertUnderDailyTtsLimit(userId);
+
     const apiKey = await this.secrets.resolve(ELEVENLABS_API_KEY_REF);
     const audioBase64 = await this.callElevenLabs(text.trim(), resolvedVoiceId, apiKey);
+    await this.prisma.auditLogEntry.create({
+      data: { actorId: userId, action: TTS_USAGE_ACTION, resource: 'TtsCache', resourceId: textHash },
+    });
 
     // Гонка: если два одновременных запроса с одинаковым текстом
     // проскочили проверку кэша раньше, чем оба успели создать запись,
@@ -93,11 +124,11 @@ export class TextToSpeechService {
   private async callElevenLabs(text: string, voiceId: string, apiKey: string): Promise<string> {
     let response: Response;
     try {
-      response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
         body: JSON.stringify({ text, model_id: DEFAULT_MODEL_ID, output_format: OUTPUT_FORMAT }),
-      });
+      }, 30_000); // [external-timeouts]: синтез аудио дольше дефолтных 15с
     } catch {
       throw new BadGatewayException('ElevenLabs недоступен — сетевая ошибка');
     }

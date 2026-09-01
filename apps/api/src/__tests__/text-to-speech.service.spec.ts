@@ -1,11 +1,19 @@
+let fakeTtsUsageCount = 0; // [rate-limits]
+const usageLog: any[] = [];
+
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
-import { BadGatewayException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ForbiddenException, HttpException } from '@nestjs/common';
 
 function createFakePrisma() {
   const cache: any[] = [];
   return {
     _getCache() { return cache; },
     _seedCache(c: any) { cache.push(c); },
+    auditLogEntry: {
+      // [rate-limits]: учёт расхода ElevenLabs + суточный потолок.
+      create: async ({ data }: any) => { usageLog.push(data); return data; },
+      count: async () => fakeTtsUsageCount,
+    },
     ttsCache: {
       findUnique: async ({ where }: any) => cache.find((c) => c.textHash === where.textHash) ?? null,
       create: async ({ data }: any) => {
@@ -140,6 +148,25 @@ async function run() {
     await svc.synthesize(USER_ID, 'Текст для синтеза');
     assertEqual(capturedBody.model_id, 'eleven_flash_v2_5', 'документація ElevenLabs прямо рекомендує Flash v2.5 для real-time (озвучка репліки в живому спарингу) — Multilingual v2 оптимізований під якість/аудіокниги, не латентність; український підтримується в обох');
     assertEqual(capturedBody.output_format, 'mp3_44100_128', 'явний output_format замість неявного дефолту провайдера');
+  });
+
+  test('[rate-limits] 2026-09-01: суточный потолок — 429 на cache-miss; кэш-хит проходит при исчерпанном лимите и не считается расходом', async () => {
+    (global as any).fetch = async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(4) });
+    const prisma = createFakePrisma();
+    const svc = new TextToSpeechService(prisma as any, createFakeConsentService() as any, createFakeSecrets() as any);
+
+    fakeTtsUsageCount = 0;
+    await svc.synthesize(USER_ID, 'Фраза в кэше');
+    const last = usageLog[usageLog.length - 1];
+    if (!last || last.action !== 'tts.synthesized') {
+      throw new Error('FAIL: реальный синтез должен записывать расход в AuditLogEntry');
+    }
+
+    fakeTtsUsageCount = 100; // лимит исчерпан
+    await assertThrowsAsync(() => svc.synthesize(USER_ID, 'Совсем новая фраза'), HttpException, 'новый синтез при исчерпанном лимите — 429');
+    const cached = await svc.synthesize(USER_ID, 'Фраза в кэше');
+    assertEqual(cached.cached, true, 'кэш-хит бесплатен — проходит и при исчерпанном лимите');
+    fakeTtsUsageCount = 0;
   });
 
   for (const [name, fn] of scenarios) {

@@ -40,6 +40,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConversationsService } from '../conversations/conversations.service';
+import { TranscriptionService } from '../conversations/transcription.service';
 import { AudioBlobService } from '../conversations/audio-blob.service';
 import { YouTubeSearchService } from '../media-review/youtube-search.service';
 import { MediaReviewService } from '../media-review/media-review.service';
@@ -53,6 +54,8 @@ import { MajorPurchaseService } from '../major-purchase/major-purchase.service';
 import { InvestmentOnboardingService, ExtractedInvestmentConfigDraft } from '../investment/investment-onboarding.service';
 import { InvestmentService } from '../investment/investment.service';
 import { InvestmentGroupService } from '../investment/investment-group.service';
+import { JobSearchOnboardingService, ExtractedJobSearchConfigDraft } from '../job-search/job-search-onboarding.service';
+import { JobSearchService } from '../job-search/job-search.service';
 import { DtpOnboardingService, ExtractedDtpConfigDraft } from '../dtp/dtp-onboarding.service';
 import { DtpService } from '../dtp/dtp.service';
 import { DtpV2Service } from '../dtp/dtp-v2.service';
@@ -175,6 +178,9 @@ export class AdminSandboxService {
     private readonly dtpOnboarding: DtpOnboardingService,
     private readonly dtp: DtpService,
     private readonly dtpV2: DtpV2Service,
+    private readonly jobSearchOnboarding: JobSearchOnboardingService,
+    private readonly jobSearch: JobSearchService,
+    private readonly transcription: TranscriptionService,
   ) {}
 
   /** Песочница — операторский инструмент: она расходует реальные
@@ -845,6 +851,26 @@ export class AdminSandboxService {
     return this.health.createConfig(operatorUserId, projectId, draft);
   }
 
+  /** Пункт [voice-note-ru] 2026-09-01 — голосовая заметка для языков,
+   * которых НЕТ в стриминге AssemblyAI (русский, украинский): браузер
+   * записывает клип, сюда приходит base64, дальше продовый async-путь
+   * (universal, ru/uk поддержаны). То же согласие, что у живого
+   * стриминга; аудио НЕ персистуется — буфер уходит в AssemblyAI и
+   * живёт только в этом вызове. Потолок ~4 МБ base64 — лимит тела
+   * запроса Vercel, хватает на несколько минут opus-записи. */
+  async sandboxVoiceNote(operatorUserId: string, base64Content: string, languageCode?: string) {
+    await this.assertOperator(operatorUserId);
+    if (!base64Content?.trim()) throw new BadRequestException('base64Content обязателен');
+    if (base64Content.length > 4_000_000) {
+      throw new BadRequestException('Запись слишком длинная (лимит ~3 МБ) — говорите короче или частями');
+    }
+    await this.consent.requireConsent(operatorUserId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
+    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
+    const audio = Buffer.from(base64Content, 'base64');
+    return this.transcription.transcribeShortNoteSync(apiKey, audio, languageCode);
+  }
+
   /** Пункт [sandbox-voice] — токен живой транскрипции для голосового
    * ввода квиза: ТОТ ЖЕ продовый mintTranscriptionToken, что у TMA
    * (короткоживущий, 5 минут, browser→AssemblyAI напрямую, аудио через
@@ -1215,6 +1241,74 @@ export class AdminSandboxService {
     await this.assertOperator(operatorUserId);
     if (!configId?.trim()) throw new BadRequestException('configId обязателен');
     return this.dtpV2.getSettlementProtocolDraft(operatorUserId, configId);
+  }
+
+  // ── Пункт [job-search] 2026-09-01 — седьмой домен в песочнице,
+  // сразу при создании домена (не отдельным этапом): ответы → extract
+  // (LLM) → конфиг → CV (LLM-черновик → утверждение человеком) →
+  // вакансии по ссылкам с локальных джоб-сайтов (safe-url-fetch) →
+  // AI-сверка с CV → детерминированная статистика. ──
+
+  async jsAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.jobSearchOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  async jsExtract(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.jobSearchOnboarding.extract(operatorUserId, conversationId);
+  }
+
+  async jsCreateConfig(operatorUserId: string, projectId: string, draft: ExtractedJobSearchConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.jobSearch.createConfig(operatorUserId, projectId, draft);
+  }
+
+  async jsCvDraft(operatorUserId: string, projectId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    const config = await this.jobSearch.generateCvDraft(operatorUserId, projectId);
+    return { cvText: config.cvText, cvDraft: config.cvDraft, cvDraftedAt: config.cvDraftedAt };
+  }
+
+  async jsCvReview(operatorUserId: string, projectId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    const config = await this.jobSearch.reviewCv(operatorUserId, projectId);
+    return { cvReviewedAt: config.cvReviewedAt };
+  }
+
+  async jsAddVacancy(operatorUserId: string, projectId: string, sourceUrl: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    if (!sourceUrl?.trim()) throw new BadRequestException('sourceUrl обязателен');
+    const v = await this.jobSearch.addVacancy(operatorUserId, projectId, sourceUrl);
+    // rawText не отдаётся целиком — длина и хост достаточны для стенда.
+    return { id: v.id, siteHost: v.siteHost, sourceUrl: v.sourceUrl, rawTextLength: v.rawText.length };
+  }
+
+  async jsMatchVacancy(operatorUserId: string, vacancyId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!vacancyId?.trim()) throw new BadRequestException('vacancyId обязателен');
+    const v = await this.jobSearch.matchVacancy(operatorUserId, vacancyId);
+    return {
+      id: v.id,
+      title: v.title,
+      locationMatch: v.locationMatch,
+      salaryMentioned: v.salaryMentioned,
+      matchBreakdown: v.matchBreakdown,
+      matchNotes: v.matchNotes,
+    };
+  }
+
+  async jsStatistics(operatorUserId: string, projectId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.jobSearch.getStatistics(operatorUserId, projectId);
   }
 
   // ── Пункт [sandbox-domain-conversations] 2026-09-01 — пять

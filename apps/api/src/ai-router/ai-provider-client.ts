@@ -20,6 +20,8 @@
  * протухает и менялся бы при каждом presign, делая inputHash
  * бесполезным для дедупликации (ТЗ §10.1). Разрешение в URI происходит
  * в момент вызова провайдера — MediaUriResolver ниже. */
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 export type MediaRef =
   | { source: 'youtube'; videoId: string }
   | { source: 'blob'; pathname: string; mimeType: string };
@@ -85,6 +87,26 @@ export function assertTextPrompt(userPrompt: string | ContentBlock[], providerLa
   throw new Error(`${providerLabel} provider does not support media content blocks`);
 }
 
+// Пункт [external-timeouts] 2026-09-01 — типизированная HTTP-ошибка
+// провайдера: роутеру нужен статус, чтобы не ретраить 4xx (неверный
+// ключ/запрос не станут верными со второй попытки), а тексту ошибки —
+// не потерять тело ответа.
+export class ProviderHttpError extends Error {
+  constructor(
+    public readonly providerLabel: string,
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ProviderHttpError';
+  }
+
+  /** Ретраить есть смысл только на перегрузке/сбое провайдера. */
+  get isRetryable(): boolean {
+    return this.status === 429 || this.status >= 500;
+  }
+}
+
 export interface AIProviderCompletionResult {
   text: string;
   raw: unknown; // сырой ответ провайдера — для дебага/AIInference.output, если потребуется
@@ -125,18 +147,24 @@ export class OpenAiCompatibleClient implements AIProviderClient {
       body.response_format = { type: 'json_object' };
     }
 
-    const response = await fetch(`${credentials.apiEndpoint}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${credentials.apiKey}`,
+    const response = await fetchWithTimeout(
+      `${credentials.apiEndpoint}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${credentials.apiKey}`,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      45_000, // [external-timeouts]: LLM-генерация дольше дефолтных 15с, но обязана уложиться до maxDuration
+    );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '<unreadable body>');
-      throw new Error(
+      throw new ProviderHttpError(
+        'OpenAI-compatible',
+        response.status,
         `OpenAI-compatible provider error: ${response.status} ${response.statusText} — ${errorText}`,
       );
     }
@@ -175,19 +203,25 @@ export class AnthropicClient implements AIProviderClient {
       ...(params.systemPrompt ? { system: params.systemPrompt } : {}),
     };
 
-    const response = await fetch(`${credentials.apiEndpoint}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': credentials.apiKey,
-        'anthropic-version': '2023-06-01',
+    const response = await fetchWithTimeout(
+      `${credentials.apiEndpoint}/v1/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': credentials.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    });
+      45_000, // [external-timeouts]
+    );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '<unreadable body>');
-      throw new Error(
+      throw new ProviderHttpError(
+        'Anthropic',
+        response.status,
         `Anthropic provider error: ${response.status} ${response.statusText} — ${errorText}`,
       );
     }

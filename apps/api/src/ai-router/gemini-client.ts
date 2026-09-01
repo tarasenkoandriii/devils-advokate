@@ -23,6 +23,8 @@
 //     ПОДКЛЕИВАЕТСЯ в начало текстового блока (см. submitBackground).
 // Расширять тело можно только через новый прогон diagnose-gemini.ts.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 import {
   AIProviderClient,
   AIProviderCompletionParams,
@@ -190,7 +192,7 @@ export class GeminiClient implements AIBackgroundProviderClient {
       input,
     };
 
-    const response = await fetch(`${credentials.apiEndpoint}/v1beta/interactions`, {
+    const response = await fetchWithTimeout(`${credentials.apiEndpoint}/v1beta/interactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -199,7 +201,7 @@ export class GeminiClient implements AIBackgroundProviderClient {
         'x-goog-api-key': credentials.apiKey,
       },
       body: JSON.stringify(body),
-    });
+    }, 30_000); // [external-timeouts]: постановка фоновой интеракции
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '<unreadable body>');
@@ -230,11 +232,12 @@ export class GeminiClient implements AIBackgroundProviderClient {
     externalId: string,
     credentials: { apiKey: string; apiEndpoint: string },
   ): Promise<BackgroundFetchResult> {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${credentials.apiEndpoint}/v1beta/interactions/${encodeURIComponent(externalId)}`,
       // Header-auth — как в подтверждённом submit (A1); отдельно GET не
       // диагностировался, но схема auth у поверхности одна.
       { method: 'GET', headers: { 'x-goog-api-key': credentials.apiKey } },
+      30_000, // [external-timeouts]
     );
 
     if (!response.ok) {

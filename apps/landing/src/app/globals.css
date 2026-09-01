@@ -1418,3 +1418,145 @@ p {
   overflow: hidden;
   border: 1px solid var(--border);
 }
+
+/* ── Пункт [job-landing] 2026-09-01 — страница /jobs ─────────────────
+ * Та же палитра и типографика, что у главной; собственного — только
+ * табы аудиторий, сетка шагов/карточек и подсветка «Честных границ»
+ * сигнатурной триадой (линия слева, не заливка). */
+
+.jobs-hero {
+  padding-top: 96px;
+  text-align: center;
+}
+
+.jobs-hero__badge {
+  display: inline-block;
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.jobs-hero__headline {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 5vw, 48px);
+  line-height: 1.15;
+  margin: 20px auto 12px;
+  max-width: 780px;
+}
+
+.jobs-hero__subheadline {
+  color: var(--text-muted);
+  max-width: 640px;
+  margin: 0 auto 28px;
+}
+
+.jobs-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.jobs-tabs__tab {
+  padding: 10px 22px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.jobs-tabs__tab--active,
+.jobs-tabs__tab:hover {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.jobs-steps {
+  list-style: none;
+  margin: 32px 0;
+  padding: 0;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.jobs-steps__item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+}
+
+.jobs-steps__num {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--signal-calm);
+  font-family: var(--font-display);
+}
+
+.jobs-steps__title {
+  font-size: 18px;
+  margin: 14px 0 8px;
+}
+
+.jobs-steps__desc,
+.jobs-points__desc {
+  color: var(--text-muted);
+  font-size: 15px;
+  margin: 0;
+}
+
+.jobs-points {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin: 28px 0;
+}
+
+.jobs-points__item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+}
+
+.jobs-points__item--boundary {
+  border-left: 3px solid var(--signal-caution);
+}
+
+.jobs-points__title {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.jobs-boundaries__intro {
+  color: var(--text-muted);
+  max-width: 560px;
+}
+
+.jobs-privacy__list {
+  color: var(--text-muted);
+  max-width: 720px;
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.jobs-final-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}

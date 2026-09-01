@@ -517,3 +517,41 @@ export function sandboxFlConsultationBreakdown(configId: string, conversationId:
 export function sandboxDtpConsultationBreakdown(configId: string, conversationId: string, advisorLabel?: string) {
   return apiPost<{ advisorId: string; consultationId: string; criteriaBreakdown: unknown }>('/admin/sandbox/dtp/consultation-breakdown', { configId, conversationId, advisorLabel });
 }
+
+// ── Sandbox: поиск работы (Пункт [job-search] 2026-09-01, седьмой домен) ──
+// CV (AI-черновик → утверждение) → вакансии по ссылкам с локальных
+// джоб-сайтов (без кроулинга — ссылки приносит человек) → AI-сверка с
+// CV → детерминированная статистика.
+import type { SandboxJsCv, SandboxJsDraft, SandboxJsStatistics, SandboxJsVacancyMatch } from './types';
+
+export function sandboxJsAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: true }>('/admin/sandbox/job-search/answer', { conversationId, text });
+}
+export function sandboxJsExtract(conversationId: string) {
+  return apiPost<SandboxJsDraft>('/admin/sandbox/job-search/extract', { conversationId });
+}
+export function sandboxJsConfig(projectId: string, draft: SandboxJsDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/job-search/config', { projectId, draft });
+}
+export function sandboxJsCvDraft(projectId: string) {
+  return apiPost<SandboxJsCv>('/admin/sandbox/job-search/cv-draft', { projectId });
+}
+export function sandboxJsCvReview(projectId: string) {
+  return apiPost<{ cvReviewedAt: string | null }>('/admin/sandbox/job-search/cv-review', { projectId });
+}
+export function sandboxJsVacancy(projectId: string, sourceUrl: string) {
+  return apiPost<{ id: string; siteHost: string; sourceUrl: string; rawTextLength: number }>('/admin/sandbox/job-search/vacancy', { projectId, sourceUrl });
+}
+export function sandboxJsVacancyMatch(vacancyId: string) {
+  return apiPost<SandboxJsVacancyMatch>('/admin/sandbox/job-search/vacancy-match', { vacancyId });
+}
+export function sandboxJsStatistics(projectId: string) {
+  return apiGet<SandboxJsStatistics>(`/admin/sandbox/job-search/statistics/${projectId}`);
+}
+
+// ── Sandbox: голосовая заметка ru/uk (Пункт [voice-note-ru] 2026-09-01) ──
+// Стриминг AssemblyAI не поддерживает русский/украинский — короткая
+// запись уходит async-путём (universal). Аудио у нас не персистуется.
+export function sandboxVoiceNote(base64Content: string, languageCode?: string) {
+  return apiPost<{ text: string; language: string | null }>('/admin/sandbox/voice-note', { base64Content, languageCode });
+}

@@ -20,8 +20,16 @@ export default function UsersPage() {
       return;
     }
     setExpanded((prev) => ({ ...prev, [user.id]: 'loading' }));
-    const detail = await getUserDetail(user.id);
-    setExpanded((prev) => ({ ...prev, [user.id]: detail }));
+    // [project-audit] 2026-09-01: без catch сбой оставлял строку в
+    // «Загрузка деталей…» навсегда — теперь строка сворачивается, а
+    // причина уходит в общий баннер ошибки.
+    try {
+      const detail = await getUserDetail(user.id);
+      setExpanded((prev) => ({ ...prev, [user.id]: detail }));
+    } catch (err) {
+      setExpanded((prev) => ({ ...prev, [user.id]: undefined }));
+      setError(err instanceof Error ? err.message : 'Не удалось загрузить детали пользователя');
+    }
   }
 
   async function load() {
@@ -39,14 +47,24 @@ export default function UsersPage() {
 
   async function toggleRestrict(user: AdminUserRow) {
     const note = noteDrafts[user.id];
-    const updated = await restrictUser(user.id, !user.isRestricted, user.isRestricted ? undefined : note);
-    setUsers((prev) => prev?.map((u) => (u.id === user.id ? { ...u, isRestricted: updated.isRestricted } : u)) ?? null);
+    // [project-audit] 2026-09-01: молчаливый несработавший клик по
+    // модерации хуже видимой ошибки — оператор думал, что ограничил.
+    try {
+      const updated = await restrictUser(user.id, !user.isRestricted, user.isRestricted ? undefined : note);
+      setUsers((prev) => prev?.map((u) => (u.id === user.id ? { ...u, isRestricted: updated.isRestricted } : u)) ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось изменить ограничение');
+    }
   }
 
   async function toggleBlock(user: AdminUserRow) {
     const note = blockNoteDrafts[user.id];
-    const updated = await blockUser(user.id, !user.isBlocked, user.isBlocked ? undefined : note);
-    setUsers((prev) => prev?.map((u) => (u.id === user.id ? { ...u, isBlocked: updated.isBlocked } : u)) ?? null);
+    try {
+      const updated = await blockUser(user.id, !user.isBlocked, user.isBlocked ? undefined : note);
+      setUsers((prev) => prev?.map((u) => (u.id === user.id ? { ...u, isBlocked: updated.isBlocked } : u)) ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось изменить блокировку');
+    }
   }
 
   if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;

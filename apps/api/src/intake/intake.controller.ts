@@ -7,8 +7,15 @@ import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SecretsService } from '../secrets/secrets.service';
 import { IntakeScenario, IntakeService } from './intake.service';
 import { safeSecretEqual } from '../common/timing-safe-equal';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
-class TextDto {
+export class TextDto {
+  // Пункт [validation] 2026-09-01: ответ квиза уходит в LLM-контекст —
+  // потолок держит и расход, и злоупотребление. 8000 — с запасом для
+  // длинной голосовой надиктовки.
+  @IsString()
+  @MinLength(1)
+  @MaxLength(8000)
   text!: string;
 }
 

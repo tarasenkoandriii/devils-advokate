@@ -79,6 +79,12 @@ const RESOLVERS: Record<string, Record<string, Resolver>> = {
     'onboarding-conversations': conversation,
     'pipeline-statuses': viaProjectId('candidatePipelineStatus'),
   },
+  // Пункт [job-search] 2026-09-01 — домен кандидата.
+  'job-search': {
+    'onboarding-conversations': conversation,
+    configs: viaConfig('jobSearchConfig'),
+    vacancies: viaEntityConfig('jobVacancy'),
+  },
   'client-reports': {
     '': viaProjectId('clientReport'), // /client-reports/:id/...
   },

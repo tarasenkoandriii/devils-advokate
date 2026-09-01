@@ -133,7 +133,7 @@ export function CycleMap({ locale }: { locale: Locale }) {
       <div className="container">
         <div className="cycle-map">
           <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="auto" role="img" aria-label="Devil's Advocate — карта можливостей">
-            <image href="/images/cycle-map/base.png" x={0} y={0} width={width} height={height} />
+            <image href="/images/cycle-map/base.webp" x={0} y={0} width={width} height={height} />
             {rendered?.map((s) =>
               s.renderLines.map((line, i) => (
                 <text

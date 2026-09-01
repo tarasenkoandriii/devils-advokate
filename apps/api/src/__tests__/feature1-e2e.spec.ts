@@ -65,6 +65,8 @@ function createSharedFakePrisma() {
     $transaction: async (ops: Promise<any>[]) => Promise.all(ops),
 
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
+      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       create: async ({ data }: any) => { const job = { id: nextId(), retryCount: 0, ...data }; aiJobs.set(job.id, job); return job; },
       update: async ({ where, data }: any) => {
         const job = aiJobs.get(where.id);

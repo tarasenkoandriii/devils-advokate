@@ -228,6 +228,13 @@ export class AdminSandboxController {
     return this.sandbox.mintTranscriptionToken(userId);
   }
 
+  // Пункт [voice-note-ru] 2026-09-01 — голосовая заметка для ru/uk
+  // (стриминг AssemblyAI эти языки не поддерживает).
+  @Post('voice-note')
+  async voiceNote(@CurrentUser() userId: string, @Body() dto: { base64Content: string; languageCode?: string }) {
+    return this.sandbox.sandboxVoiceNote(userId, dto.base64Content, dto.languageCode);
+  }
+
   @Post('health/lab-document')
   async healthLabDocument(@CurrentUser() userId: string, @Body() dto: { configId: string; base64Content: string }) {
     return this.sandbox.healthUploadLabDocument(userId, dto.configId, dto.base64Content);
@@ -526,6 +533,48 @@ export class AdminSandboxController {
   @Get('dtp/settlement-draft/:configId')
   async dtpSettlementDraft(@CurrentUser() userId: string, @Param('configId') configId: string) {
     return this.sandbox.dtpSettlementDraft(userId, configId);
+  }
+
+  // ── Пункт [job-search] 2026-09-01 — седьмой домен: CV + вакансии. ──
+
+  @Post('job-search/answer')
+  async jsAnswer(@CurrentUser() userId: string, @Body() dto: { conversationId: string; text: string }) {
+    return this.sandbox.jsAppendAnswer(userId, dto.conversationId, dto.text);
+  }
+
+  @Post('job-search/extract')
+  async jsExtract(@CurrentUser() userId: string, @Body() dto: { conversationId: string }) {
+    return this.sandbox.jsExtract(userId, dto.conversationId);
+  }
+
+  @Post('job-search/config')
+  async jsConfig(@CurrentUser() userId: string, @Body() dto: { projectId: string; draft: Record<string, unknown> }) {
+    return this.sandbox.jsCreateConfig(userId, dto.projectId, dto.draft as never);
+  }
+
+  @Post('job-search/cv-draft')
+  async jsCvDraft(@CurrentUser() userId: string, @Body() dto: { projectId: string }) {
+    return this.sandbox.jsCvDraft(userId, dto.projectId);
+  }
+
+  @Post('job-search/cv-review')
+  async jsCvReview(@CurrentUser() userId: string, @Body() dto: { projectId: string }) {
+    return this.sandbox.jsCvReview(userId, dto.projectId);
+  }
+
+  @Post('job-search/vacancy')
+  async jsVacancy(@CurrentUser() userId: string, @Body() dto: { projectId: string; sourceUrl: string }) {
+    return this.sandbox.jsAddVacancy(userId, dto.projectId, dto.sourceUrl);
+  }
+
+  @Post('job-search/vacancy-match')
+  async jsVacancyMatch(@CurrentUser() userId: string, @Body() dto: { vacancyId: string }) {
+    return this.sandbox.jsMatchVacancy(userId, dto.vacancyId);
+  }
+
+  @Get('job-search/statistics/:projectId')
+  async jsStatistics(@CurrentUser() userId: string, @Param('projectId') projectId: string) {
+    return this.sandbox.jsStatistics(userId, projectId);
   }
 
   // ── Пункт [sandbox-domain-conversations] 2026-09-01 — b-подэтапы:

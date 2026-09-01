@@ -41,6 +41,7 @@ function makePrisma(opts: { isOperator?: boolean; failCron?: boolean } = {}) {
       throw new Error(`unexpected sql: ${sql}`);
     }),
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
       groupBy: jest.fn(async () => [
         { status: 'COMPLETED', _count: { _all: 6 } },
         { status: 'FAILED', _count: { _all: 1 } },

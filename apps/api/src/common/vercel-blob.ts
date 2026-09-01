@@ -14,6 +14,8 @@
 // уже делалась для AssemblyAI/AI-провайдеров: контракт восстановлен
 // из документации, не подтверждён живым вызовом.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 const BLOB_API_HOST = 'https://blob.vercel-storage.com';
 
 export interface VercelBlobPutResult {
@@ -42,7 +44,7 @@ export async function putPublicBlob(
   const url = `${BLOB_API_HOST}/${pathname}`;
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithTimeout(url, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -50,7 +52,7 @@ export async function putPublicBlob(
         'x-access': 'public',
       },
       body,
-    });
+    }, 45_000); // [external-timeouts]: загрузка файла
   } catch (err) {
     throw new VercelBlobError(`Не удалось загрузить файл в Vercel Blob: ${err instanceof Error ? err.message : 'неизвестная ошибка сети'}`);
   }
@@ -82,7 +84,7 @@ export async function putPrivateBlob(
   const url = `${BLOB_API_HOST}/${pathname}`;
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithTimeout(url, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -90,7 +92,7 @@ export async function putPrivateBlob(
         'x-access': 'private',
       },
       body,
-    });
+    }, 45_000); // [external-timeouts]: загрузка файла
   } catch (err) {
     throw new VercelBlobError(`Не удалось загрузить файл в Vercel Blob: ${err instanceof Error ? err.message : 'неизвестная ошибка сети'}`);
   }
@@ -119,7 +121,7 @@ export async function putPrivateBlob(
  * результат поиска, только оставить blob до истечения TTL кэша. */
 export async function deleteBlob(token: string, blobUrl: string): Promise<void> {
   try {
-    await fetch(`${BLOB_API_HOST}/delete`, {
+    await fetchWithTimeout(`${BLOB_API_HOST}/delete`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,

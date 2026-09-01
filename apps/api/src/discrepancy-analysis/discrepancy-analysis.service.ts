@@ -56,6 +56,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SignalSeverity } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { SecretsService } from '../secrets/secrets.service';
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 // Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
 // Google Fact Check Tools API — четвёртый источник сверки §3.16 ТЗ
@@ -585,7 +586,7 @@ export class DiscrepancyAnalysisService {
 
     let response: Response;
     try {
-      response = await fetch(url.toString());
+      response = await fetchWithTimeout(url.toString());
     } catch {
       throw new BadGatewayException('Google Fact Check Tools API недоступен — попробуйте позже');
     }

@@ -25,6 +25,8 @@ function makeDeps() {
     _jobs: jobs,
     _rawQueries: rawQueries,
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
+      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       create: jest.fn(async ({ data }: any) => {
         const job = { id: `job-${++idCounter}`, retryCount: 0, ...data };
         jobs.set(job.id, job);

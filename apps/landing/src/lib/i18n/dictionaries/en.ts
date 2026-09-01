@@ -34,8 +34,8 @@ export const en: Dictionary = {
     },
     {
       icon: 'waveform-alert',
-      title: 'Lying or evading?',
-      description: 'Detects probable lies and evasions based on prior statements and documents.',
+      title: 'Contradicting the record?',
+      description: 'Finds discrepancies between what is said and prior statements or documents — with an exact source reference. The conclusions are yours to draw.',
       side: 'right',
     },
     {

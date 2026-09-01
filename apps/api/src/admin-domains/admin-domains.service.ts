@@ -15,6 +15,7 @@ export const DOMAIN_MODES: Record<string, ProjectMode> = {
   'interview-pool': ProjectMode.INTERVIEW_POOL,
   investment: ProjectMode.INVESTMENT,
   'major-purchase': ProjectMode.MAJOR_PURCHASE,
+  'job-search': ProjectMode.JOB_SEARCH, // Пункт [job-search] 2026-09-01
 };
 
 const CONFIG_RELATION: Record<ProjectMode, string | null> = {
@@ -25,6 +26,7 @@ const CONFIG_RELATION: Record<ProjectMode, string | null> = {
   INTERVIEW_POOL: 'interviewPoolConfig',
   INVESTMENT: 'investmentConfig',
   MAJOR_PURCHASE: 'majorPurchaseConfig',
+  JOB_SEARCH: 'jobSearchConfig', // Пункт [job-search] 2026-09-01
 };
 
 const DAY = 24 * 60 * 60 * 1000;

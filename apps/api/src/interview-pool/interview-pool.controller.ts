@@ -336,8 +336,9 @@ export class InterviewPoolShareController {
 
   @Post(':shareId/accept')
   @UseGuards(TelegramAuthGuard, ProjectFrozenGuard)
-  async accept(@CurrentUser() userId: string, @Param('shareId') shareId: string) {
-    return this.candidates.acceptShare(userId, shareId);
+  async accept(@CurrentUser() userId: string, @Param('shareId') shareId: string, @Body() dto: { token: string }) {
+    // [project-audit] 2026-09-01: токен ссылки обязателен — см. acceptShare.
+    return this.candidates.acceptShare(userId, shareId, dto?.token ?? '');
   }
 }
 

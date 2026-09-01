@@ -3,14 +3,30 @@ import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { DiscrepancyAnalysisService } from './discrepancy-analysis.service';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 class CheckAgainstUserSourceDto {
+  @IsString()
+  @MaxLength(64)
   segmentId!: string;
+
+  // Пункт [validation] 2026-09-01: URL уходит в safe-url-fetch —
+  // формат он проверит сам, здесь только вменяемая длина.
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
   url!: string;
 }
 
 class CheckAgainstFactCheckApiDto {
+  @IsString()
+  @MaxLength(64)
   segmentId!: string;
+
+  // claimText — query внешнего Fact Check API: одна реплика, не эссе.
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
   claimText!: string;
 }
 

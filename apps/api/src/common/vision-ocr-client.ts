@@ -14,6 +14,8 @@
 // середовищі розробки — той самий клас оговорки, що вже застосований
 // до Nominatim/sherpa-onnx та інших зовнішніх інтеграцій проєкту.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 const VISION_API_HOST = 'https://vision.googleapis.com/v1/images:annotate';
 
 export class OcrError extends Error {
@@ -38,11 +40,11 @@ export async function extractTextFromImage(base64Content: string, apiKey: string
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    });
+    }, 30_000); // [external-timeouts]: OCR изображения
   } catch (err) {
     throw new OcrError(`Vision API request failed: ${err instanceof Error ? err.message : String(err)}`);
   }

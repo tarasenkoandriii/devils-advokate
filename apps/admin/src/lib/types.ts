@@ -445,6 +445,41 @@ export interface SandboxDtpEvidence {
   capturedAt: string;
   accessLog: Array<{ action: string; at: string }>;
 }
+// Пункт [job-search] 2026-09-01 — седьмой домен: CV + вакансии.
+export interface SandboxJsDraft {
+  desiredRole: string;
+  city: string | null;
+  region: string | null;
+  salaryExpectation: number | null;
+  currency: string | null;
+  employmentFormat: string | null;
+  experienceSummary: string | null;
+  criteria: Array<{ text: string; category: string; isRequired: boolean; orderIndex: number }>;
+}
+export interface SandboxJsCv {
+  cvText: string | null;
+  cvDraft: unknown;
+  cvDraftedAt: string | null;
+}
+export interface SandboxJsVacancyMatch {
+  id: string;
+  title: string | null;
+  locationMatch: 'MATCHES' | 'DIFFERENT' | 'UNKNOWN' | null;
+  salaryMentioned: string | null;
+  matchBreakdown: unknown;
+  matchNotes: string | null;
+}
+export interface SandboxJsStatistics {
+  total: number;
+  matched: number;
+  bySite: Record<string, number>;
+  byLocationMatch: Record<string, number>;
+  withSalaryMentioned: number;
+  requiredCriteriaCount: number;
+  fullRequiredCoverage: number;
+  city: string | null;
+  region: string | null;
+}
 export interface SandboxHealthDraft {
   goalDescription: string;
   targetBudget: number | null;

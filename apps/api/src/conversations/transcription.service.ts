@@ -2,6 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SecretsService } from '../secrets/secrets.service';
 import { ASSEMBLYAI_WEBHOOK_HEADER, ASSEMBLYAI_WEBHOOK_SECRET_REF } from '../common/webhook/assemblyai-webhook.guard';
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 export interface AssemblyAiSubmitParams {
   audioUrl: string;
@@ -31,9 +32,12 @@ export interface AssemblyAiWebhookPayload {
 }
 
 export interface AssemblyAiTranscriptResult {
-  status: 'completed' | 'error';
+  // Реальный API отдаёт также 'queued'/'processing' до готовности —
+  // тип расширен Пунктом [voice-note-ru] (опрос короткой заметки).
+  status: 'completed' | 'error' | 'queued' | 'processing';
   id: string;
   error?: string;
+  text?: string; // полный текст без диаризации — то, что нужно короткой голосовой заметке
   language_code?: string;
   utterances?: Array<{
     speaker: string; // "A" | "B" | ... — буквенный лейбл диаризации AssemblyAI
@@ -89,7 +93,7 @@ export class TranscriptionService {
    * не polling: соответствует serverless-архитектуре (нет фонового
    * процесса, который мог бы поллить). */
   async submitJob(apiKey: string, params: AssemblyAiSubmitParams): Promise<AssemblyAiSubmitResult> {
-    const response = await fetch(`${this.baseUrl}/transcript`, {
+    const response = await fetchWithTimeout(`${this.baseUrl}/transcript`, {
       method: 'POST',
       headers: {
         Authorization: apiKey,
@@ -129,7 +133,7 @@ export class TranscriptionService {
    * дёрнуть это ПОСЛЕ получения вебхука — и для status="completed", и для
    * "error" (текст ошибки тоже не в вебхуке, а в этом ответе, поле error). */
   async getTranscriptResult(apiKey: string, transcriptId: string): Promise<AssemblyAiTranscriptResult> {
-    const response = await fetch(`${this.baseUrl}/transcript/${transcriptId}`, {
+    const response = await fetchWithTimeout(`${this.baseUrl}/transcript/${transcriptId}`, {
       headers: { Authorization: apiKey },
     });
 
@@ -183,12 +187,12 @@ export class TranscriptionService {
    * proxy-токен вместо проксирования байтов через наш бэкенд вообще.
    * Не решено в рамках этого прохода, честно зафиксировано. */
   async streamUpload(apiKey: string, fileStream: ReadableStream<Uint8Array>): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/upload`, {
+    const response = await fetchWithTimeout(`${this.baseUrl}/upload`, {
       method: 'POST',
       headers: { Authorization: apiKey },
       duplex: 'half',
       body: fileStream,
-    } as RequestInit);
+    } as RequestInit, 45_000); // [external-timeouts]: стрим аудио-буфера
 
     if (!response.ok) {
       const body = await response.text().catch(() => '<unreadable>');
@@ -199,5 +203,61 @@ export class TranscriptionService {
 
     const data = (await response.json()) as { upload_url: string };
     return data.upload_url;
+  }
+
+  /** Пункт [voice-note-ru] 2026-09-01 — синхронная транскрипция
+   * КОРОТКОЙ голосовой заметки (голосовой ввод квиза). Причина
+   * существования: AssemblyAI Streaming v3 поддерживает 18 языков БЕЗ
+   * русского и украинского — живой прогон голосового ввода на русском
+   * дал галлюцинацию английским/ивритом. Async-путь (/v2/transcript,
+   * universal) русский и украинский поддерживает — поэтому короткая
+   * заметка идёт им: upload → submit БЕЗ вебхука → опрос до ~40 с.
+   * Только для коротких записей (десятки секунд): длинная запись не
+   * уложится в maxDuration — для неё существует вебхучный путь.
+   * Аудио НЕ персистуется нигде у нас — буфер уходит напрямую в
+   * AssemblyAI и живёт только в этом вызове. */
+  async transcribeShortNoteSync(
+    apiKey: string,
+    audio: Buffer,
+    languageCode?: string,
+  ): Promise<{ text: string; language: string | null }> {
+    const uploadUrl = await this.streamUpload(apiKey, new Blob([new Uint8Array(audio)]).stream());
+
+    const response = await fetchWithTimeout(`${this.baseUrl}/transcript`, {
+      method: 'POST',
+      headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audio_url: uploadUrl,
+        speech_models: ['universal-3-5-pro', 'universal-2'],
+        // Явный язык, если пользователь выбрал; иначе автоопределение.
+        ...(languageCode ? { language_code: languageCode } : { language_detection: true }),
+        // Диаризация заметке не нужна (один говорящий) — быстрее.
+        speaker_labels: false,
+        redact_pii: false,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '<unreadable>');
+      throw new TranscriptionProviderError(
+        `AssemblyAI submit (voice note) failed: ${response.status} ${response.statusText} — ${body}`,
+      );
+    }
+    const { id } = (await response.json()) as { id: string };
+
+    // Опрос: короткая заметка обычно готова за 2-8 с; потолок ~40 с —
+    // заведомо меньше maxDuration 60, чтобы успеть отдать честную
+    // ошибку. Интервал нулевой в тестах (jest выставляет NODE_ENV).
+    const pollDelayMs = process.env.NODE_ENV === 'test' ? 0 : 1500;
+    for (let attempt = 0; attempt < 27; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+      const result = await this.getTranscriptResult(apiKey, id);
+      if (result.status === 'completed') {
+        return { text: result.text ?? '', language: result.language_code ?? null };
+      }
+      if (result.status === 'error') {
+        throw new TranscriptionProviderError(`AssemblyAI voice note ${id} failed: ${result.error ?? 'unknown error'}`);
+      }
+    }
+    throw new TranscriptionProviderError('Распознавание заметки не уложилось в отведённое время — попробуйте короче');
   }
 }

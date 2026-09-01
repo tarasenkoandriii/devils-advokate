@@ -306,7 +306,7 @@ export function PrivacyPolicyIllustrated({ dict }: { dict: Dictionary }) {
 
         <div className="privacy-policy-illustrated__image-wrap">
           <Image
-            src="/images/privacy-policy.png"
+            src="/images/privacy-policy.webp"
             alt={dict.privacyPolicy.title}
             width={1536}
             height={1024}

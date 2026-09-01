@@ -19,6 +19,8 @@ function createFakePrisma() {
       create: async ({ data }: any) => { const d = { id: nextId(), ...data }; detections.push(d); return d; },
     },
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
+      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       update: async ({ where, data }: any) => {
         const job = jobs.get(where.id);
         const merged = { ...job, ...data };

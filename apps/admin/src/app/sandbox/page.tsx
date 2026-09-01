@@ -82,6 +82,14 @@ import {
   sandboxIpAttachInterview,
   sandboxFlConsultationBreakdown,
   sandboxDtpConsultationBreakdown,
+  sandboxJsAnswer,
+  sandboxJsExtract,
+  sandboxJsConfig,
+  sandboxJsCvDraft,
+  sandboxJsCvReview,
+  sandboxJsVacancy,
+  sandboxJsVacancyMatch,
+  sandboxJsStatistics,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -111,6 +119,10 @@ import type {
   SandboxFlSettlementDraft,
   SandboxDtpDraft,
   SandboxDtpEvidence,
+  SandboxJsDraft,
+  SandboxJsCv,
+  SandboxJsVacancyMatch,
+  SandboxJsStatistics,
 } from '../../lib/types';
 import { VoiceTextInput } from '../../components/VoiceTextInput';
 
@@ -444,6 +456,31 @@ export default function SandboxPage() {
       setDtpError(errText(e));
     } finally {
       setDtpBusy(null);
+    }
+  }
+
+  // ── Пункт [job-search] 2026-09-01 — седьмой домен: поиск работы.
+  const [jsAnswerText, setJsAnswerText] = useState('');
+  const [jsDraft, setJsDraft] = useState<SandboxJsDraft | null>(null);
+  const [jsConfigDone, setJsConfigDone] = useState(false);
+  const [jsCv, setJsCv] = useState<SandboxJsCv | null>(null);
+  const [jsCvReviewed, setJsCvReviewed] = useState(false);
+  const [jsVacancyUrl, setJsVacancyUrl] = useState('');
+  const [jsVacancies, setJsVacancies] = useState<Array<{ id: string; siteHost: string }>>([]);
+  const [jsMatches, setJsMatches] = useState<SandboxJsVacancyMatch[]>([]);
+  const [jsStats, setJsStats] = useState<SandboxJsStatistics | null>(null);
+  const [jsBusy, setJsBusy] = useState<string | null>(null);
+  const [jsError, setJsError] = useState<string | null>(null);
+
+  async function withJs(action: string, fn: () => Promise<void>) {
+    setJsBusy(action);
+    setJsError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setJsError(errText(e));
+    } finally {
+      setJsBusy(null);
     }
   }
 
@@ -1199,7 +1236,7 @@ export default function SandboxPage() {
                 {intakeState.status !== 'DISPATCHED' && (
                   <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <select value={dispatchScenario} onChange={(e) => setDispatchScenario(e.target.value)}>
-                      {['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase'].map((s) => (
+                      {['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase', 'job-search'].map((s) => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
@@ -2445,6 +2482,195 @@ export default function SandboxPage() {
                           </div>
                         )}
                         {dtpError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{dtpError}</p>}
+                      </div>
+                    )}
+
+                    {/* Пункт [job-search] 2026-09-01 — седьмой домен:
+                        CV → вакансии по ссылкам (без кроулинга) →
+                        AI-сверка → статистика. */}
+                    {intakeState.chosenScenario === 'job-search' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг поиска работы</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Расскажите про роль, город, опыт и зарплатные ожидания — «Извлечь конфиг» —
+                          реальный LLM-вызов.
+                        </p>
+                        {!jsDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={jsAnswerText}
+                              onChange={(e) => setJsAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ (опыт, стек, город)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={jsBusy !== null || !jsAnswerText.trim()}
+                              onClick={() =>
+                                withJs('answer', async () => {
+                                  await sandboxJsAnswer(intakeState.conversationId as string, jsAnswerText);
+                                  setJsAnswerText('');
+                                })
+                              }
+                            >
+                              {jsBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={jsBusy !== null}
+                              onClick={() =>
+                                withJs('extract', async () => {
+                                  setJsDraft(await sandboxJsExtract(intakeState.conversationId as string));
+                                })
+                              }
+                            >
+                              {jsBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {jsDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>{jsDraft.desiredRole}</b>{(jsDraft.city || jsDraft.region) && <span className="muted"> · {jsDraft.city ?? ''}{jsDraft.region ? ` (${jsDraft.region})` : ''}</span>}</div>
+                            <div className="muted" style={{ fontSize: 13 }}>
+                              {jsDraft.salaryExpectation !== null ? <>ожидания: {jsDraft.salaryExpectation} {jsDraft.currency ?? ''}</> : 'зарплатные ожидания не названы'}
+                              {jsDraft.employmentFormat && <> · формат: {jsDraft.employmentFormat}</>}
+                            </div>
+                            <ul style={{ margin: '6px 0' }}>
+                              {jsDraft.criteria.map((c, i) => (
+                                <li key={i}>
+                                  <span className="badge badge-pending">{c.category}</span> {c.text}
+                                  {c.isRequired && <span className="muted"> · обязательный</span>}
+                                </li>
+                              ))}
+                            </ul>
+                            {!jsConfigDone ? (
+                              <button
+                                type="button"
+                                disabled={jsBusy !== null}
+                                onClick={() =>
+                                  withJs('config', async () => {
+                                    await sandboxJsConfig((intakeState.projectId ?? intakeState.dispatchedProjectId) as string, jsDraft);
+                                    setJsConfigDone(true);
+                                  })
+                                }
+                              >
+                                {jsBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span>
+                                <span className="muted"> — воронка job-search дошла до «С конфигом»</span>
+
+                                {/* CV: AI предлагает, человек утверждает. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>CV</b>
+                                  {!jsCv ? (
+                                    <div style={{ marginTop: 6 }}>
+                                      <button
+                                        type="button"
+                                        disabled={jsBusy !== null}
+                                        onClick={() =>
+                                          withJs('cv', async () => {
+                                            setJsCv(await sandboxJsCvDraft((intakeState.projectId ?? intakeState.dispatchedProjectId) as string));
+                                          })
+                                        }
+                                      >
+                                        {jsBusy === 'cv' ? 'Формируем…' : 'Сформировать CV (AI-черновик)'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ marginTop: 6 }}>
+                                      <pre style={{ maxHeight: 220, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap' }}>{jsCv.cvText ?? '(текст CV пуст)'}</pre>
+                                      {!jsCvReviewed ? (
+                                        <button
+                                          type="button"
+                                          disabled={jsBusy !== null}
+                                          onClick={() =>
+                                            withJs('cvreview', async () => {
+                                              await sandboxJsCvReview((intakeState.projectId ?? intakeState.dispatchedProjectId) as string);
+                                              setJsCvReviewed(true);
+                                            })
+                                          }
+                                        >
+                                          {jsBusy === 'cvreview' ? 'Утверждаем…' : 'Утвердить CV (человек утверждает)'}
+                                        </button>
+                                      ) : (
+                                        <span className="badge badge-ok">CV УТВЕРЖДЁН</span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Вакансии по ссылкам + AI-сверка + статистика. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Вакансии с локальных джоб-сайтов</b>
+                                  <p className="muted" style={{ margin: '4px 0 6px', fontSize: 12 }}>
+                                    Кроулинга нет намеренно (граница Пункта 40): откройте свой джоб-сайт,
+                                    скопируйте ссылки интересных вакансий — сервер скачает именно их
+                                    (SSRF-защита) и сверит с CV. Совпадение города/региона покажет сверка.
+                                  </p>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                    <input
+                                      type="text"
+                                      value={jsVacancyUrl}
+                                      onChange={(e) => setJsVacancyUrl(e.target.value)}
+                                      placeholder="https://… ссылка на вакансию"
+                                      style={{ flex: '1 1 320px' }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={jsBusy !== null || !jsVacancyUrl.trim() || !jsCv}
+                                      title={!jsCv ? 'Сначала сформируйте CV — сверка идёт с ним' : undefined}
+                                      onClick={() =>
+                                        withJs('vacancy', async () => {
+                                          const v = await sandboxJsVacancy((intakeState.projectId ?? intakeState.dispatchedProjectId) as string, jsVacancyUrl);
+                                          setJsVacancies((l) => [...l, { id: v.id, siteHost: v.siteHost }]);
+                                          setJsVacancyUrl('');
+                                          const m = await sandboxJsVacancyMatch(v.id);
+                                          setJsMatches((l) => [...l, m]);
+                                          setJsStats(await sandboxJsStatistics((intakeState.projectId ?? intakeState.dispatchedProjectId) as string));
+                                        })
+                                      }
+                                    >
+                                      {jsBusy === 'vacancy' ? 'Скачиваем и сверяем…' : 'Добавить и сверить с CV'}
+                                    </button>
+                                  </div>
+                                  {jsMatches.length > 0 && (
+                                    <div style={{ marginTop: 8 }}>
+                                      {jsMatches.map((m, i) => (
+                                        <div key={m.id} style={{ marginBottom: 8, border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '6px 10px', fontSize: 13 }}>
+                                          <b>{m.title ?? jsVacancies[i]?.siteHost ?? 'вакансия'}</b>{' '}
+                                          <span className={`badge ${m.locationMatch === 'MATCHES' ? 'badge-ok' : m.locationMatch === 'DIFFERENT' ? 'badge-bad' : 'badge-pending'}`}>
+                                            локация: {m.locationMatch === 'MATCHES' ? 'совпадает' : m.locationMatch === 'DIFFERENT' ? 'другая' : 'не названа'}
+                                          </span>
+                                          {m.salaryMentioned && <span className="muted"> · вилка: {m.salaryMentioned}</span>}
+                                          {m.matchNotes && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{m.matchNotes}</div>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {jsStats && (
+                                    <div style={{ fontSize: 13, marginTop: 6 }}>
+                                      <span className="badge badge-ok">СТАТИСТИКА</span>{' '}
+                                      вакансий: {jsStats.total} · сверено: {jsStats.matched} ·
+                                      локация совпала: {jsStats.byLocationMatch.MATCHES ?? 0} ·
+                                      с вилкой: {jsStats.withSalaryMentioned} ·
+                                      полное покрытие обязательных критериев: {jsStats.fullRequiredCoverage}
+                                      {Object.keys(jsStats.bySite).length > 0 && (
+                                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                                          по сайтам: {Object.entries(jsStats.bySite).map(([h, n]) => `${h}: ${n}`).join(' · ')}
+                                          {' '}(детерминированный подсчёт по собранному — не «весь рынок»)
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {jsError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{jsError}</p>}
                       </div>
                     )}
                   </div>

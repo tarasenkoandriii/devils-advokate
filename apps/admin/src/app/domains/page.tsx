@@ -12,7 +12,7 @@ import Link from 'next/link';
 import { getDomainsSummary, listAdminMediaReviewQueues } from '../../lib/endpoints';
 import type { DomainSummaryRow, AdminMediaReviewQueue } from '../../lib/types';
 
-const TITLES: Record<string, string> = { dtp: 'ДТП', 'family-law': 'Семейное право', health: 'Здоровье', 'interview-pool': 'Подбор персонала', investment: 'Инвестиции', 'major-purchase': 'Крупная покупка' };
+const TITLES: Record<string, string> = { dtp: 'ДТП', 'family-law': 'Семейное право', health: 'Здоровье', 'interview-pool': 'Подбор персонала', investment: 'Инвестиции', 'major-purchase': 'Крупная покупка', 'job-search': 'Поиск работы' };
 
 export default function DomainsPage() {
   const [rows, setRows] = useState<DomainSummaryRow[] | null>(null);

@@ -34,10 +34,11 @@ import { TELEGRAM_URL } from '../lib/telegram-url';
 //
 // Courtroom-иллюстрация — вернулась по прямому запросу, справа от
 // текста в главной hero-строке, с 6 callout-карточками ниже (переведены
-// из devils-advocate-hero-courtroom-front-phone-en.json). ЧЕСТНО: два
-// из шести биндингов (hero-001/002 "live-анализ речи", hero-007/008
-// "детекция лжи") описывают функциональность, которой в MVP v1 нет —
-// используются по прямому указанию как есть, не переписаны втихую.
+// из devils-advocate-hero-courtroom-front-phone-en.json). Пункт
+// [project-audit] 2026-09-01: биндинг «детекция лжи» (hero-007/008)
+// переформулирован в словарях в «расхождения с показаниями/
+// документами» — прежний текст прямо противоречил §7.4 продукта
+// (правка по запросу «исправления по аудиту», не втихую).
 //
 // Первая версия сажала callout-карточки колонками ПО БОКАМ той же
 // строки, что текст+картинка — при контейнере 1120px тексту оставалось
@@ -57,7 +58,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
 
       <div className="sticky-illustration sticky-illustration--top-left" aria-hidden="true">
         <Image
-          src="/images/hero-slogan.png"
+          src="/images/hero-slogan.webp"
           alt=""
           width={1536}
           height={1024}
@@ -69,7 +70,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
 
       <div className="sticky-illustration sticky-illustration--bottom-left" aria-hidden="true">
         <Image
-          src="/images/hero-hell.png"
+          src="/images/hero-hell.webp"
           alt=""
           width={1536}
           height={1024}
@@ -80,7 +81,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
 
       <div className="sticky-illustration sticky-illustration--bottom-right" aria-hidden="true">
         <Image
-          src="/images/hero-lawyer.png"
+          src="/images/hero-lawyer.webp"
           alt=""
           width={1672}
           height={941}
@@ -95,7 +96,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
          * sticky-illustration--top-left выше). */}
         <div className="mobile-only-illustration mobile-only-illustration--top" aria-hidden="true">
           <Image
-            src="/images/hero-slogan.png"
+            src="/images/hero-slogan.webp"
             alt=""
             width={1536}
             height={1024}
@@ -126,7 +127,7 @@ export function Hero({ dict, lang }: { dict: Dictionary; lang: Locale }) {
 
             <div className="hero__courtroom" aria-hidden="true">
               <Image
-                src="/images/hero-courtroom.png"
+                src="/images/hero-courtroom.webp"
                 alt=""
                 width={1536}
                 height={1024}

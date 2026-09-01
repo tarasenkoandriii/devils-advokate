@@ -113,6 +113,8 @@ function createFakePrisma() {
       },
     },
     aIJob: {
+      findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
+      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       findUnique: async ({ where }: any) => jobs.get(where.id) ?? null,
     },
     aIInference: {

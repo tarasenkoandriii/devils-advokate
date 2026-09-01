@@ -28,6 +28,8 @@
 // нет вообще (Reverse Image её тоже отдавал не всегда) — оставлено в
 // типе как честно всегда-`undefined`, а не выдумывается.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 const SERPAPI_HOST = 'https://serpapi.com/search';
 
 export interface SerpApiImageResult {
@@ -54,7 +56,7 @@ export async function reverseImageSearch(apiKey: string, publicImageUrl: string)
 
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch (err) {
     throw new SerpApiError(`Не удалось связаться с SerpApi: ${err instanceof Error ? err.message : 'неизвестная ошибка сети'}`);
   }

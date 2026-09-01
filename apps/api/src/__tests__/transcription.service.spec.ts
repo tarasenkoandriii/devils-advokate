@@ -197,6 +197,96 @@ async function run() {
     );
   });
 
+  // ── transcribeShortNoteSync() — Пункт [voice-note-ru] 2026-09-01 ──
+  // Синхронная транскрипция голосовой заметки через async-путь
+  // /v2/transcript (universal поддерживает ru/uk, которых НЕТ в
+  // стриминге v3 — из-за чего русская речь выходила англо-ивритской
+  // мешаниной). upload → submit БЕЗ вебхука → опрос до completed.
+
+  test('transcribeShortNoteSync(): upload → submit с language_code → опрос до completed; вебхук НЕ передаётся', async () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test'; // нулевая пауза опроса
+    const calls: { url: string; body?: any }[] = [];
+    let polls = 0;
+    (global as any).fetch = async (url: string, init: any) => {
+      calls.push({ url, body: init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined });
+      if (url.endsWith('/v2/upload')) return { ok: true, json: async () => ({ upload_url: 'https://cdn.assemblyai.com/upload/note-1' }) };
+      if (url.endsWith('/v2/transcript')) return { ok: true, json: async () => ({ id: 'tr-note-1' }) };
+      polls += 1;
+      return polls < 3
+        ? { ok: true, json: async () => ({ status: 'processing', id: 'tr-note-1' }) }
+        : { ok: true, json: async () => ({ status: 'completed', id: 'tr-note-1', text: 'привет, это заметка', language_code: 'ru' }) };
+    };
+    try {
+      const res = await svc.transcribeShortNoteSync('test-api-key', Buffer.from('fake-audio'), 'ru');
+      assertEqual(res, { text: 'привет, это заметка', language: 'ru' }, 'текст и язык из completed-результата');
+      const submit = calls.find((c) => c.url.endsWith('/v2/transcript'))!;
+      assertEqual(submit.body.language_code, 'ru', 'выбранный язык пробрасывается провайдеру как language_code');
+      assertEqual(submit.body.language_detection, undefined, 'автоопределение выключено, когда язык задан явно');
+      assertEqual(submit.body.speaker_labels, false, 'диаризация заметке не нужна — один говорящий, быстрее ответ');
+      assertEqual(submit.body.speech_models, ['universal-3-5-pro', 'universal-2'], 'та же явная пара моделей, что в основном submitJob');
+      assertEqual(submit.body.webhook_url, undefined, 'КЛЮЧЕВОЕ: без вебхука — результат забирается опросом, секрет вебхука не нужен');
+      assertEqual(polls, 3, 'processing-статусы переживаются опросом до completed');
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
+  });
+
+  test('transcribeShortNoteSync() без языка включает language_detection (режим «Автоопределение»)', async () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    let submitBody: any;
+    (global as any).fetch = async (url: string, init: any) => {
+      if (url.endsWith('/v2/upload')) return { ok: true, json: async () => ({ upload_url: 'https://cdn/u' }) };
+      if (url.endsWith('/v2/transcript')) {
+        submitBody = JSON.parse(init.body);
+        return { ok: true, json: async () => ({ id: 'tr-2' }) };
+      }
+      return { ok: true, json: async () => ({ status: 'completed', id: 'tr-2', text: 'hello', language_code: 'en' }) };
+    };
+    try {
+      const res = await svc.transcribeShortNoteSync('k', Buffer.from('a'));
+      assertEqual(submitBody.language_detection, true, 'без выбранного языка — автоопределение');
+      assertEqual(submitBody.language_code, undefined, 'language_code не передаётся при автоопределении');
+      assertEqual(res.language, 'en', 'определённый провайдером язык возвращается вызвавшему');
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
+  });
+
+  test('transcribeShortNoteSync() бросает TranscriptionProviderError при status=error и при исчерпании опроса', async () => {
+    const svc = new TranscriptionService({ resolve: async () => 'whsec-test' } as any);
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    try {
+      (global as any).fetch = async (url: string) => {
+        if (url.endsWith('/v2/upload')) return { ok: true, json: async () => ({ upload_url: 'https://cdn/u' }) };
+        if (url.endsWith('/v2/transcript')) return { ok: true, json: async () => ({ id: 'tr-3' }) };
+        return { ok: true, json: async () => ({ status: 'error', id: 'tr-3', error: 'audio too short' }) };
+      };
+      await assertThrowsAsync(
+        () => svc.transcribeShortNoteSync('k', Buffer.from('a'), 'uk'),
+        TranscriptionProviderError,
+        'status=error от провайдера — честная ошибка, не пустой текст',
+      );
+
+      (global as any).fetch = async (url: string) => {
+        if (url.endsWith('/v2/upload')) return { ok: true, json: async () => ({ upload_url: 'https://cdn/u' }) };
+        if (url.endsWith('/v2/transcript')) return { ok: true, json: async () => ({ id: 'tr-4' }) };
+        return { ok: true, json: async () => ({ status: 'processing', id: 'tr-4' }) };
+      };
+      await assertThrowsAsync(
+        () => svc.transcribeShortNoteSync('k', Buffer.from('a'), 'ru'),
+        TranscriptionProviderError,
+        'вечный processing — ошибка по потолку опроса, не бесконечное ожидание',
+      );
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
+  });
+
   for (const [name, fn] of scenarios) {
     try {
       await fn();

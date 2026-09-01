@@ -9,14 +9,15 @@ import { HealthModule } from '../health/health.module';
 import { InterviewPoolModule } from '../interview-pool/interview-pool.module';
 import { InvestmentModule } from '../investment/investment.module';
 import { MajorPurchaseModule } from '../major-purchase/major-purchase.module';
+import { JobSearchModule } from '../job-search/job-search.module';
 import { IntakeService } from './intake.service';
 import { IntakeController } from './intake.controller';
 
-// ТЗ domain-ui-and-voice-intake §2 — квиз зависит от ВСЕХ шести доменных
+// ТЗ domain-ui-and-voice-intake §2 — квиз зависит от ВСЕХ доменных
 // онбордингов (replay ответов), поэтому импортирует их модули, а не
 // наоборот: домены о квизе не знают.
 @Module({
-  imports: [TelegramAuthModule, SecretsModule, AIRouterModule, ProjectsModule, DtpModule, FamilyLawModule, HealthModule, InterviewPoolModule, InvestmentModule, MajorPurchaseModule],
+  imports: [TelegramAuthModule, SecretsModule, AIRouterModule, ProjectsModule, DtpModule, FamilyLawModule, HealthModule, InterviewPoolModule, InvestmentModule, MajorPurchaseModule, JobSearchModule],
   providers: [IntakeService],
   controllers: [IntakeController],
   exports: [IntakeService],

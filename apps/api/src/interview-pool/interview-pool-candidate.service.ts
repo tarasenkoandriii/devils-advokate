@@ -161,12 +161,21 @@ export class InterviewPoolCandidateService {
    * ОДИН конкретний shareId з preview (не весь пакет одразу) — новий
    * CandidateProfile, копія на момент прийняття, НЕ live-посилання на
    * оригінал. */
-  async acceptShare(userId: string, shareId: string) {
+  async acceptShare(userId: string, shareId: string, token: string) {
     const share = await this.prisma.candidateShare.findUnique({
       where: { id: shareId },
       include: { sourceCandidate: true },
     });
-    if (!share || share.expiresAt < new Date()) {
+    // Пункт [project-audit] 2026-09-01 (IDOR из отчёта аудита): раньше
+    // хватало одного shareId — внутреннего cuid, который не является
+    // секретом (мелькает в ответах API и логах). Теперь принятие
+    // требует ещё и токен ссылки — то, что получатель реально получил
+    // в deep-link'е. Несовпадение неотличимо от несуществующей ссылки
+    // (не раскрываем, что shareId существует).
+    if (!share || !token?.trim() || (share.shareToken !== token && share.batchToken !== token)) {
+      throw new NotFoundException('Посилання недійсне або прострочене');
+    }
+    if (share.expiresAt < new Date()) {
       throw new NotFoundException('Посилання недійсне або прострочене');
     }
     if (share.acceptedAt) {

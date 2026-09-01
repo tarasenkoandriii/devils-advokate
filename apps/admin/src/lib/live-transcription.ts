@@ -98,6 +98,12 @@ export function connectLiveTranscription(
   mediaStream: MediaStream,
   onTranscript: (update: TranscriptUpdate) => void,
   onError: (message: string) => void,
+  // Пункт [voice-note-ru] 2026-09-01: пин языка стриминга. ВАЖНО:
+  // стриминг v3 поддерживает 18 языков БЕЗ русского/украинского —
+  // для них этот транспорт не годится вовсе (галлюцинации чужими
+  // языками), используйте async-путь короткой заметки. Массив
+  // кодируется JSON'ом в query — формат из спецификации API.
+  options?: { languageCodes?: string[] },
 ): LiveTranscriptionHandle {
   // Финальный аудит 2026-08-30 (продолжение) — WS URL не задавал speech_model
   // и mode вообще. Живая документация AssemblyAI по этому конкретному параметру
@@ -113,8 +119,11 @@ export function connectLiveTranscription(
   // очередь. Точное имя параметра/значения — сверить с
   // /docs/streaming/select-the-speech-model перед следующим релизом, если
   // AssemblyAI выпустит новую модель речи.
+  const languageParam = options?.languageCodes?.length
+    ? `&language_codes=${encodeURIComponent(JSON.stringify(options.languageCodes))}`
+    : '';
   const ws = new WebSocket(
-    `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&mode=balanced&speaker_labels=true&token=${encodeURIComponent(token)}`,
+    `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&mode=balanced&speaker_labels=true${languageParam}&token=${encodeURIComponent(token)}`,
   );
 
   const source = audioContext.createMediaStreamSource(mediaStream);

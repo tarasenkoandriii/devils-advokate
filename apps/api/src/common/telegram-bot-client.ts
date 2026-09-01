@@ -15,6 +15,8 @@
 // не проверен вызовом против реального бота в этой среде — та же
 // оговорка, что у остальных внешних интеграций проекта.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 const TELEGRAM_API_HOST = 'https://api.telegram.org';
 
 export class TelegramSendError extends Error {
@@ -29,7 +31,7 @@ export async function sendTelegramMessage(botToken: string, chatId: string, text
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text }),

@@ -37,6 +37,11 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const dict = getDictionary(params.lang);
   return {
+    // Аудит [landing-audit] 2026-09-01: без metadataBase Next не может
+    // построить абсолютные URL для OG/Twitter-картинок — часть
+    // краулеров относительные игнорирует. Fallback совпадает с
+    // sitemap.ts.
+    metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com'),
     title: dict.meta.title,
     description: dict.meta.description,
     alternates: {
@@ -53,13 +58,13 @@ export async function generateMetadata({
       // Telegram/Twitter/LinkedIn отдавал превью без картинки — для
       // лендинга, у которого расшаривание и есть основная функция, это
       // прямая потеря конверсии.
-      images: ['/images/hero-courtroom.png'],
+      images: ['/images/og.jpg'],
     },
     twitter: {
       card: 'summary_large_image',
       title: dict.meta.title,
       description: dict.meta.description,
-      images: ['/images/hero-courtroom.png'],
+      images: ['/images/og.jpg'],
     },
   };
 }

@@ -212,14 +212,19 @@ describe('InterviewPoolCandidateService', () => {
     const token = deepLink.split('share_')[1];
     const [preview] = await service.previewShare(token);
 
-    const accepted = await service.acceptShare('u2', preview.shareId);
+    // [project-audit] 2026-09-01: одного shareId (внутрішній cuid) вже
+    // недостатньо — потрібен токен з deep-link (фікс IDOR зі звіту).
+    await expect(service.acceptShare('u2', preview.shareId, 'wrong-token')).rejects.toThrow(NotFoundException);
+    await expect(service.acceptShare('u2', preview.shareId, '')).rejects.toThrow(NotFoundException);
+
+    const accepted = await service.acceptShare('u2', preview.shareId, token);
 
     expect(accepted.id).not.toBe(candidate.id);
     expect(accepted.ownerUserId).toBe('u2');
     expect(accepted.displayName).toBe('Кандидат');
 
     // Повторне прийняття того самого посилання — відхиляється
-    await expect(service.acceptShare('u2', preview.shareId)).rejects.toThrow(BadRequestException);
+    await expect(service.acceptShare('u2', preview.shareId, token)).rejects.toThrow(BadRequestException);
   });
 
   it('чужий кандидат (не власник, не член команди) — NotFoundException при спробі поділитись', async () => {

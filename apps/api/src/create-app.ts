@@ -9,9 +9,11 @@
 // продакшн, поэтому единая точка создания.
 
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication, ExpressAdapter } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/api-exception.filter';
+import { StringQueryGuardPipe } from './common/string-query-guard.pipe';
 
 export interface CreateAppOptions {
   /** Существующий Express-инстанс — обязателен для serverless
@@ -30,6 +32,21 @@ export async function createNestApp(options: CreateAppOptions = {}): Promise<Nes
 
   // Единый формат ошибок { success: false, error } — см. api-exception.filter.ts.
   app.useGlobalFilters(new ApiExceptionFilter());
+
+  // Пункт [validation] 2026-09-01 (из отчёта аудита «ValidationPipe не
+  // используется нигде»). Два глобальных pipe'а:
+  // 1. StringQueryGuardPipe — string-параметр в query/param обязан быть
+  //    строкой: закрывает инъекцию Prisma-операторов через
+  //    `?field[not]=x` (Express разбирает это в объект) одним местом
+  //    для всех 31 @Query-параметра.
+  // 2. ValidationPipe — исполняет class-validator-декораторы на DTO.
+  //    БЕЗ whitelist НАМЕРЕННО: большинство DTO проекта пока без
+  //    декораторов, whitelist:true молча вырезал бы у них ВСЕ поля и
+  //    положил бы весь API; вместо этого декораторы добавляются
+  //    точечно, начиная с высокорисковых (лимиты длины текста в
+  //    AI/TTS, URL, публичные POST) — недекорированные DTO проходят
+  //    как раньше.
+  app.useGlobalPipes(new StringQueryGuardPipe(), new ValidationPipe({ transform: true }));
 
   // CORS — параметризован через переменную окружения, не открыт всем
   // подряд. TMA — веб-страница внутри Telegram WebView на собственном

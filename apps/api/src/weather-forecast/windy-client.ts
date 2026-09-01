@@ -35,6 +35,7 @@
 // данные по факту есть, просто в другой форме, чем у Open-Meteo.
 
 import { WEATHER_CODE_LABELS, type Coordinates, type ForecastResult } from './open-meteo-client';
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 const WINDY_API_URL = 'https://api.windy.com/api/point-forecast/v2';
 const WINDY_MODEL = 'icon';
@@ -84,7 +85,7 @@ export async function getWindyForecast(
 ): Promise<ForecastResult> {
   let response: Response;
   try {
-    response = await fetch(WINDY_API_URL, {
+    response = await fetchWithTimeout(WINDY_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

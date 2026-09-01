@@ -11,7 +11,8 @@
 // не сделано на этом проходе: реальный интеграционный прогон против
 // настоящих API-ключей (сеть отключена в среде разработки).
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -23,6 +24,7 @@ import {
   requiresMedia,
   selectProviderClient,
   EXTERNAL_INTERACTION_MAX_WAIT_MS,
+  ProviderHttpError,
 } from './ai-provider-client';
 import { MediaUriResolverService } from './media-uri-resolver.service';
 import { isBackgroundCapable, GeminiApiError } from './gemini-client';
@@ -180,18 +182,21 @@ export class AIRouterService {
       );
     }
 
-    const prepared = await this.prepareJob(request);
+    const prepared = await this.prepareJob(request, true);
+    if (prepared.reused) {
+      return prepared.reused;
+    }
 
     try {
       return await this.attemptWithRetryAndFallback(
-        prepared.job.id,
+        prepared.job!.id,
         prepared.modelVersion,
         prepared.sanitizedRequest,
         prepared.maxRetries,
       );
     } catch (err) {
       await this.prisma.aIJob.update({
-        where: { id: prepared.job.id },
+        where: { id: prepared.job!.id },
         data: { status: AIJobStatus.FAILED, completedAt: new Date() },
       });
       throw err;
@@ -219,20 +224,20 @@ export class AIRouterService {
     };
 
     await this.prisma.aIJob.update({
-      where: { id: prepared.job.id },
+      where: { id: prepared.job!.id },
       data: {
         pendingRequest: payload as never,
         leaseExpiresAt: new Date(Date.now() + QUEUED_LEASE_MS),
       },
     });
 
-    return { jobId: prepared.job.id };
+    return { jobId: prepared.job!.id };
   }
 
   /** Общий пролог execute()/enqueue() — ТЗ §4.4 требует именно общий
    * метод, а не копию: копия проверки в каждой точке — способ
    * разъехаться, уже дважды стоивший дыр (см. ConsentService). */
-  private async prepareJob(request: AIRouterRequest) {
+  private async prepareJob(request: AIRouterRequest, allowReuse = false) {
     // Согласие на внешний AI — для любых вызовов.
     await this.consent.requireConsent(request.userId, ConsentType.EXTERNAL_AI, request.projectId);
 
@@ -268,6 +273,38 @@ export class AIRouterService {
     const inputHash = this.hashInput(sanitizedRequest);
     const maxRetries = sanitizedRequest.maxRetries ?? 2;
 
+    // Пункт [idempotency] 2026-09-01 (продуктовое решение владельца:
+    // «реализовать идемпотентность AI-вызовов» — поле inputHash
+    // писалось с implementation-ready §7 и не читалось никогда).
+    // Идемпотентность здесь — защита от ПОВТОРНОЙ ОТПРАВКИ того же
+    // запроса (двойной клик, сетевой ретрай клиента, двойной cron), а
+    // не вечный кэш ответов: окно короткое (env
+    // AI_IDEMPOTENCY_WINDOW_MINUTES, дефолт 10; 0 = выключено), чтобы
+    // осознанное «перегенерировать» позже давало свежий вывод
+    // (temperature>0 — вариативность выхода задумана). Действует ТОЛЬКО
+    // для синхронного execute(): у асинхронной полосы (enqueue) маппинг
+    // jobId→сущность строго 1:1 (media-review, паралингвистика) —
+    // переиспользование джобы ломало бы обработчики завершения.
+    // Проверка ДО суточного лимита: переиспользование бесплатно и
+    // лимит не тратит. Совпадение требует ТОГО ЖЕ пользователя
+    // (requestUserId) — кросс-пользовательского переиспользования нет.
+    if (allowReuse) {
+      const reused = await this.findReusableResult(sanitizedRequest, inputHash);
+      if (reused) {
+        return { reused, job: null, modelVersion: null, sanitizedRequest, maxRetries } as const;
+      }
+    }
+
+    // Пункт [rate-limits] 2026-09-01 (из отчёта аудита «глобального
+    // rate-limiting нет») — суточный потолок AI-вызовов НА ПОЛЬЗОВАТЕЛЯ
+    // одним местом для всех фич: prepareJob проходят и execute(), и
+    // enqueue(). Счёт по БД (aIJob.requestUserId + createdAt) — тот же
+    // паттерн, что дневной лимит Vision OCR; in-memory в serverless
+    // бессмысленен (каждый инстанс свой). Потолок из env, дефолт 300 —
+    // заведомо выше честного дневного использования одного человека,
+    // но останавливает скрипт, жгущий бюджет. 0 = выключено.
+    await this.assertUnderDailyAiLimit(sanitizedRequest.userId);
+
     const job = await this.prisma.aIJob.create({
       data: {
         inputHash,
@@ -298,7 +335,7 @@ export class AIRouterService {
       });
     }
 
-    return { job, modelVersion, sanitizedRequest, maxRetries };
+    return { reused: null, job, modelVersion, sanitizedRequest, maxRetries };
   }
 
   /** Пункт [multimodal] §10.2 — скан промпта, который может быть
@@ -393,6 +430,12 @@ export class AIRouterService {
       include: {
         modelVersion: { include: { model: { include: { provider: true } } } },
       },
+      // Пункт [project-audit] 2026-09-01: findFirst без orderBy отдаёт
+      // строки в порядке, который Postgres не гарантирует, — при двух
+      // активных capability выбор модели был недетерминирован. Старейшая
+      // запись — стабильный дефолт: «первая настроенная выигрывает»,
+      // смена приоритета — деактивацией старой записи, явным действием.
+      orderBy: { createdAt: 'asc' },
     });
     if (!capability) {
       throw new AIRouterNoCapableModelError(taskType);
@@ -425,6 +468,21 @@ export class AIRouterService {
           where: { id: jobId },
           data: { retryCount: { increment: 1 } },
         });
+        // Пункт [external-timeouts] 2026-09-01 — из отчёта аудита
+        // («ретраи без бэкоффа, включая ретраи на 401/400»):
+        // 4xx-ошибка провайдера не станет успехом со второй попытки —
+        // выходим сразу (fallback-ветка ниже сохраняется: другой
+        // провайдер может принять тот же запрос).
+        if (err instanceof ProviderHttpError && !err.isRetryable) {
+          break;
+        }
+        // Экспоненциальная пауза между попытками (500мс, 1с, 2с…) —
+        // мгновенный повтор в перегруженный провайдер лишь усугубляет
+        // 429. Нулевая в тестах (jest выставляет NODE_ENV=test).
+        if (attempt < maxRetries) {
+          const backoffMs = process.env.NODE_ENV === 'test' ? 0 : 500 * 2 ** (attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
       }
     }
 
@@ -935,9 +993,59 @@ export class AIRouterService {
     };
   }
 
+  /** Пункт [idempotency] 2026-09-01 — свежий COMPLETED-результат того
+   * же пользователя с тем же inputHash внутри окна. validateOutput
+   * вызвавшего прогоняется и по переиспользуемому тексту — если новый
+   * вызов строже прежнего, честно идём за свежим выводом. */
+  private async findReusableResult(request: AIRouterRequest, inputHash: string): Promise<AIRouterResult | null> {
+    const rawMinutes = Number(process.env.AI_IDEMPOTENCY_WINDOW_MINUTES ?? '10');
+    const minutes = Number.isFinite(rawMinutes) && rawMinutes >= 0 ? rawMinutes : 10;
+    if (minutes === 0) return null;
+
+    const since = new Date(Date.now() - minutes * 60 * 1000);
+    const done = await this.prisma.aIJob.findFirst({
+      where: {
+        inputHash,
+        requestUserId: request.userId,
+        status: AIJobStatus.COMPLETED,
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: { inferences: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+    const inference = done?.inferences?.[0];
+    if (!done || !inference) return null;
+    if (request.validateOutput && !request.validateOutput(inference.output)) return null;
+
+    this.logger.log(`Idempotent reuse: job ${done.id} for identical request within window`);
+    return { jobId: done.id, aiInferenceId: inference.id, text: inference.output };
+  }
+
+  private async assertUnderDailyAiLimit(userId: string): Promise<void> {
+    const raw = Number(process.env.AI_CALLS_PER_USER_PER_DAY ?? '300');
+    const limit = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 300;
+    if (limit === 0) return; // явное отключение
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const count = await this.prisma.aIJob.count({
+      where: { requestUserId: userId, createdAt: { gte: since } },
+    });
+    if (count >= limit) {
+      // 429, не Forbidden: лимит временной, не правовой — клиент может
+      // повторить завтра; текст без цифр внутренних счётчиков.
+      throw new HttpException(
+        `Достигнут суточный лимит AI-вызовов (${limit}/сутки). Попробуйте позже.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
   private hashInput(request: AIRouterRequest): string {
-    // Простой детерминированный хэш для идемпотентности (implementation-ready §7)
-    // — не криптографический, только для дедупликации повторных запросов.
+    // Пункт [idempotency] 2026-09-01: хэш поднят с самодельного
+    // 32-битного до sha256 — раньше он был просто меткой (нигде не
+    // читался), теперь по нему ВОЗВРАЩАЕТСЯ готовый результат, и
+    // коллизия означала бы чужой ответ пользователю. В хэш входят ВСЕ
+    // поля, влияющие на выход (промпты, потолок токенов, температура,
+    // jsonMode, версия промпта) — не только текст.
     //
     // Пункт [multimodal] §10.1: для ContentBlock[] хэш стабилен ИМЕННО
     // потому, что блоки несут MediaRef (videoId/pathname), а не
@@ -948,11 +1056,11 @@ export class AIRouterService {
       taskType: request.taskType,
       systemPrompt: request.systemPrompt,
       userPrompt: request.userPrompt,
+      maxTokens: request.maxTokens,
+      temperature: request.temperature,
+      jsonMode: request.jsonMode,
+      promptVersionId: request.promptVersionId,
     });
-    let hash = 0;
-    for (let i = 0; i < raw.length; i++) {
-      hash = (hash * 31 + raw.charCodeAt(i)) | 0;
-    }
-    return `h${hash}`;
+    return createHash('sha256').update(raw).digest('hex');
   }
 }

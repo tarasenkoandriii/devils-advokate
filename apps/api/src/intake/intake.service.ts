@@ -15,6 +15,7 @@ import { HealthOnboardingService } from '../health/health-onboarding.service';
 import { InterviewPoolOnboardingService } from '../interview-pool/interview-pool-onboarding.service';
 import { InvestmentOnboardingService } from '../investment/investment-onboarding.service';
 import { MajorPurchaseOnboardingService } from '../major-purchase/major-purchase-onboarding.service';
+import { JobSearchOnboardingService } from '../job-search/job-search-onboarding.service';
 
 export const INTAKE_TASK_TYPE = 'intake-classify';
 /** Порог уверенности, ниже которого — UNIVERSAL (ТЗ §2.2 п.4; тест на границу). */
@@ -24,7 +25,7 @@ export const INTAKE_MAX_FOLLOW_UPS = 3;
 /** Сессии без dispatch дольше этого — ABANDONED (ТЗ §2.2 п.7). */
 export const INTAKE_ABANDON_AFTER_MS = 24 * 60 * 60 * 1000;
 
-export const INTAKE_SCENARIOS = ['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase'] as const;
+export const INTAKE_SCENARIOS = ['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase', 'job-search'] as const;
 export type IntakeScenario = (typeof INTAKE_SCENARIOS)[number];
 
 export interface IntakeAnswer { question: string | null; text: string; at: string }
@@ -40,6 +41,7 @@ export const INTAKE_DEFAULT_SYSTEM_PROMPT = `Ты — модуль первич�
 - "interview-pool" — подбор персонала: вакансия, собеседования, кандидаты.
 - "investment" — инвестиционные предложения, советники, доходность, комиссии.
 - "major-purchase" — покупка жилья или автомобиля: варианты, встречи с продавцами.
+- "job-search" — человек сам ищет работу: составить резюме, оценить вакансии, куда откликаться.
 - "UNIVERSAL" — любой другой спор, переговоры или решение.
 Отвечай ТОЛЬКО JSON без пояснений:
 {"scenario": string, "confidence": number 0..1, "followUpQuestion": string|null,
@@ -79,6 +81,7 @@ export class IntakeService {
     private readonly interviewPool: InterviewPoolOnboardingService,
     private readonly investment: InvestmentOnboardingService,
     private readonly majorPurchase: MajorPurchaseOnboardingService,
+    private readonly jobSearch: JobSearchOnboardingService,
   ) {}
 
   private async findOwnedSession(userId: string, sessionId: string) {
@@ -240,6 +243,7 @@ export class IntakeService {
       case 'interview-pool': return this.interviewPool;
       case 'investment': return this.investment;
       case 'major-purchase': return this.majorPurchase;
+      case 'job-search': return this.jobSearch;
     }
   }
 

@@ -18,6 +18,7 @@ import { InvestmentModule } from '../investment/investment.module';
 import { InterviewPoolModule } from '../interview-pool/interview-pool.module';
 import { FamilyLawModule } from '../family-law/family-law.module';
 import { DtpModule } from '../dtp/dtp.module';
+import { JobSearchModule } from '../job-search/job-search.module';
 
 // Пункт [admin-sandbox] 2026-08-31: модуль НЕ содержит собственной
 // бизнес-логики цепочки — только переиспользует сервисы, которые уже
@@ -43,6 +44,7 @@ import { DtpModule } from '../dtp/dtp.module';
     InterviewPoolModule, // Пункт [sandbox-interview-pool] 2026-09-01 — этап 3 доменного покрытия
     FamilyLawModule, // Пункт [sandbox-family-law] 2026-09-01 — этап 4 доменного покрытия
     DtpModule, // Пункт [sandbox-dtp] 2026-09-01 — этап 5 доменного покрытия
+    JobSearchModule, // Пункт [job-search] 2026-09-01 — седьмой домен
   ],
   controllers: [AdminSandboxController],
   providers: [AdminSandboxService],

@@ -18,6 +18,7 @@
 import { BadGatewayException, ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 const YOUTUBE_API_KEY_REF = 'YOUTUBE_API_KEY';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
@@ -81,7 +82,7 @@ export class YouTubeSearchService {
 
     let searchResponse: Response;
     try {
-      searchResponse = await fetch(searchUrl.toString());
+      searchResponse = await fetchWithTimeout(searchUrl.toString());
     } catch {
       throw new BadGatewayException('YouTube Data API недоступний — спробуйте пізніше');
     }
@@ -120,7 +121,7 @@ export class YouTubeSearchService {
 
     let durationByVideoId = new Map<string, number | null>();
     try {
-      const videosResponse = await fetch(videosUrl.toString());
+      const videosResponse = await fetchWithTimeout(videosUrl.toString());
       if (videosResponse.ok) {
         const videosData = (await videosResponse.json()) as {
           items?: Array<{ id: string; contentDetails: { duration: string } }>;

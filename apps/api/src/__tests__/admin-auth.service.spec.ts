@@ -55,7 +55,11 @@ function createFakePrisma() {
       deleteMany: async ({ where }: any) => {
         const before = sessions.length;
         for (let i = sessions.length - 1; i >= 0; i--) {
-          if (sessions[i].token === where.token) sessions.splice(i, 1);
+          // [project-audit]: мок понимает и удаление по токену (logout),
+          // и чистку просроченных (pruneExpiredSessions при логине).
+          const bySessionToken = where.token !== undefined && sessions[i].token === where.token;
+          const byExpiry = where.expiresAt?.lt !== undefined && sessions[i].expiresAt < where.expiresAt.lt;
+          if (bySessionToken || byExpiry) sessions.splice(i, 1);
         }
         return { count: before - sessions.length };
       },
@@ -122,6 +126,19 @@ describe('AdminAuthService', () => {
     const sessions = prisma._getSessions();
     expect(sessions.length).toBe(2); // две сессии
     expect(sessions[0].userId).toBe(sessions[1].userId); // но один и тот же пользователь
+  });
+
+  it('[project-audit] 2026-09-01: логин чистит просроченные сессии (раньше таблица росла бесконечно)', async () => {
+    const prisma = createFakePrisma();
+    const service = makeService(prisma);
+    // Просроченная сессия «из прошлого» относительно замоканного now.
+    prisma._getSessions().push({ id: 's-old', token: 'old', userId: 'u-x', expiresAt: new Date(Date.now() - 1000) });
+
+    await service.loginWithTelegram(VALID_PAYLOAD);
+
+    const sessions = prisma._getSessions();
+    expect(sessions.find((s: any) => s.token === 'old')).toBeUndefined(); // просроченная удалена
+    expect(sessions.length).toBe(1); // осталась только свежая
   });
 
   it('logout удаляет сессию по token', async () => {

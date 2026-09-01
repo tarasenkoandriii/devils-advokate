@@ -11,6 +11,8 @@
 // геолокации/названию", буквально ТЗ) и расширил PlaceDetails полями
 // openingHours/photoReferences для карточки заведения-партнёра.
 
+import { fetchWithTimeout } from '../common/fetch-with-timeout';
+
 export interface PlaceCandidate {
   placeId: string;
   name: string;
@@ -67,7 +69,7 @@ export async function searchNearestByDistance(
   const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&rankby=distance&type=${encodeURIComponent(placeType)}&key=${apiKey}`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch {
     throw new Error('Google Places недоступен — сетевая ошибка');
   }
@@ -96,7 +98,7 @@ export async function searchNearbyVenues(
   const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=1500&type=${encodeURIComponent(placeType)}&key=${apiKey}`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch {
     throw new Error('Google Places недоступен — сетевая ошибка');
   }
@@ -122,7 +124,7 @@ export async function searchByText(query: string, apiKey: string, latitude?: num
   const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}${locationParam}&key=${apiKey}`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch {
     throw new Error('Google Places недоступен — сетевая ошибка');
   }
@@ -145,7 +147,7 @@ export async function getPlaceDetails(placeId: string, apiKey: string): Promise<
   const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=${fields}&key=${apiKey}`;
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetchWithTimeout(url);
   } catch {
     throw new Error('Google Places недоступен — сетевая ошибка');
   }
