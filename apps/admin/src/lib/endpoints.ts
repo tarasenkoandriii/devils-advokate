@@ -345,3 +345,12 @@ export function sandboxDiagnoseQueueItem(itemId: string) {
 export function sandboxFactCheck(conversationId: string) {
   return apiPost<SandboxFactCheck>(`/admin/sandbox/fact-check/${conversationId}`, {});
 }
+
+// ── БД-состояние (Пункт [db-state] 2026-09-01) ──
+// pg_cron расписание + лог запусков + ответы pg_net + сводка ai_jobs —
+// то, что раньше пробивалось руками в SQL Editor Supabase.
+import type { AdminDbState } from './types';
+
+export function getAdminDbState() {
+  return apiGet<AdminDbState>('/admin/db-state');
+}

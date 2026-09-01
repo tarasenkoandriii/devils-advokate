@@ -83,6 +83,7 @@ import { AdminSandboxModule } from './admin-sandbox/admin-sandbox.module';
 import { MediaReviewModule } from './media-review/media-review.module';
 import { IntakeModule } from './intake/intake.module';
 import { AdminDomainsModule } from './admin-domains/admin-domains.module';
+import { AdminDbStateModule } from './admin-db-state/admin-db-state.module';
 import { MajorPurchaseModule } from './major-purchase/major-purchase.module';
 import { InterviewPoolModule } from './interview-pool/interview-pool.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
@@ -188,6 +189,7 @@ import { DtpModule } from './dtp/dtp.module';
     MediaReviewModule,
     IntakeModule, // ТЗ domain-ui-and-voice-intake §2 — голосовой квиз на входе
     AdminDomainsModule, // ТЗ domain-ui-and-voice-intake §1.4 — операторский обзор доменов/intake/media-review
+    AdminDbStateModule, // Пункт [db-state] 2026-09-01 — вкладка «БД»: pg_cron/pg_net/ai_jobs без ручного SQL
     MajorPurchaseModule,
     InterviewPoolModule,
     AuditLogModule,

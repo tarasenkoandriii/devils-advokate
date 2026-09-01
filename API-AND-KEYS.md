@@ -86,6 +86,7 @@
 | `SCHEDULER_DISPATCH_SECRET` | `x-dispatch-secret` для трёх pg_cron-эндпоинтов | нужна, если используются фоновые задания |
 | `API_PUBLIC_BASE_URL` | собственный публичный адрес API для вебхуков | нужна для расшифровки |
 | `AI_JOB_DISPATCH_SECRET` | `x-dispatch-secret` воркера асинхронной AI-полосы (`/internal/ai-jobs/submit|poll|reap`, три pg_cron-джобы — `pg_cron_ai_jobs.sql`) | нужна для мультимодального анализа: без воркера джобы остаются в QUEUED и падают по lease |
+| `MEDIA_REVIEW_MAX_DURATION_SECONDS` | потолок длительности YouTube-ролика для автоматического разбора, в секундах (перекрывает дефолт 1200 = 20 мин); невалидное значение молча игнорируется | опциональна — рычаг бюджета: длительность напрямую определяет расход токенов провайдера (~300 ток/с видео) |
 | `PORT` | локальный запуск | на Vercel не нужна |
 
 ---
@@ -222,6 +223,8 @@ ngrok http 3000          # или: cloudflared tunnel --url http://localhost:300
 3. **Credentials → Create credentials → API key** (годится и тот же ключ, если разрешить оба API).
 
 Используется только `claims:search` — поиск по уже опубликованным фактчекам аккредитованных изданий, не произвольный веб-поиск. OAuth не нужен: он требуется лишь для публикации собственных фактчеков (ClaimReview), чего проект не делает. Ответы кешируются на 24 часа.
+
+> **Грабли живого прогона 2026-09-01 — ограничения ключа.** Все Google-ключи этого проекта (`YOUTUBE_API_KEY`, `FACT_CHECK_TOOLS_API_KEY`, `GOOGLE_VISION_API_KEY`) вызываются **С СЕРВЕРА** (Vercel-функции). Серверный запрос не шлёт заголовок `Referer`, поэтому ключ с ограничением **Application restrictions → Websites** отдаёт на каждый вызов `403 API_KEY_HTTP_REFERRER_BLOCKED` («Requests from referer \<empty\> are blocked»). Ограничение «IP addresses» тоже не годится — исходящие IP Vercel динамические. Правильно: **Application restrictions = None**, а защита — через **API restrictions → Restrict key** (отметить ровно те API, что нужны: YouTube Data API v3, Fact Check Tools API, Cloud Vision API). Если браузерный ключ с referrer-ограничением нужен для чего-то ещё — заведите отдельный серверный ключ.
 
 ### 2.4 Готовый `.env` для этой цепочки
 

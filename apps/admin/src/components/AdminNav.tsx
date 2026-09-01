@@ -38,6 +38,9 @@ export function AdminNav() {
     // (цепочка YouTube-разбора) от имени самого оператора. isOperator,
     // а не отдельный флаг: песочница тратит реальные деньги и квоты.
     { href: '/sandbox', label: 'Sandbox', visible: me.isOperator },
+    // Пункт [db-state] 2026-09-01: read-only зеркало pg_cron/pg_net/
+    // ai_jobs — «чтобы не пробивать руками в базе каждый раз».
+    { href: '/db', label: 'БД', visible: me.isOperator },
   ];
 
   const visibleItems = items.filter((i) => i.visible);

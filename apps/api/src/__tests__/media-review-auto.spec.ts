@@ -11,6 +11,7 @@ import {
   parseMediaReviewOutput,
   timecodeToMs,
   MEDIA_REVIEW_MAX_DURATION_SECONDS,
+  resolveMaxDurationSeconds,
 } from '../media-review/media-review-auto.service';
 import { MediaReviewService } from '../media-review/media-review.service';
 
@@ -204,6 +205,34 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
 
     expect(aiRouter.enqueue).not.toHaveBeenCalled();
     expect(prisma._store.items.get('item-1').autoAnalysisError).toContain('минут');
+  });
+
+  it('[duration-limit-env]: env MEDIA_REVIEW_MAX_DURATION_SECONDS перекрывает дефолт; мусор в env падает на дефолт', async () => {
+    const prisma = makeFakePrisma();
+    const aiRouter = { enqueue: jest.fn(async () => ({ jobId: 'job-1' })), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    prisma._store.items.set('item-1', { id: 'item-1' });
+
+    try {
+      // Потолок опущен до 60 сек — 90-секундный ролик отклоняется,
+      // хотя дефолтные 1200 сек его пропустили бы.
+      process.env.MEDIA_REVIEW_MAX_DURATION_SECONDS = '60';
+      await svc.tryEnqueueAnalysis(
+        'user-1',
+        { id: 'q1', projectId: 'p1' },
+        { id: 'item-1', youtubeVideoId: 'v', title: 't', durationSeconds: 90, publishedAt: null, createdAt: new Date() },
+      );
+      expect(aiRouter.enqueue).not.toHaveBeenCalled();
+      expect(prisma._store.items.get('item-1').autoAnalysisError).toContain('1 минут');
+
+      // Невалидное значение не роняет постановку — молча дефолт 1200.
+      process.env.MEDIA_REVIEW_MAX_DURATION_SECONDS = 'not-a-number';
+      expect(resolveMaxDurationSeconds()).toBe(MEDIA_REVIEW_MAX_DURATION_SECONDS);
+      process.env.MEDIA_REVIEW_MAX_DURATION_SECONDS = '-5';
+      expect(resolveMaxDurationSeconds()).toBe(MEDIA_REVIEW_MAX_DURATION_SECONDS);
+    } finally {
+      delete process.env.MEDIA_REVIEW_MAX_DURATION_SECONDS;
+    }
   });
 
   it('неизвестная длительность — тоже отказ: лимит стоимости проверить нечем', async () => {

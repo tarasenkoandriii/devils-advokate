@@ -23,13 +23,30 @@ import {
 
 export const MEDIA_PUBLIC_REVIEW_TASK_TYPE = 'media-public-review';
 
-/** §6.5 — 20 минут. Не круглое число на глаз: ~300 токенов/сек видео
- * по полной ставке (media_resolution в Interactions API не подтверждён,
- * считаем без скидки) ⇒ ~360 000 токенов на ролик — в контекст с
- * запасом; 8-часовой суточный free-tier лимит даёт ~24 таких ролика в
- * сутки НА ВЕСЬ ПРОДУКТ (не на пользователя, §9.3). Длительность —
- * единственный доступный нам рычаг стоимости. */
+/** §6.5 — 20 минут ПО УМОЛЧАНИЮ. Не круглое число на глаз: ~300
+ * токенов/сек видео по полной ставке (media_resolution в Interactions
+ * API не подтверждён, считаем без скидки) ⇒ ~360 000 токенов на ролик —
+ * в контекст с запасом; 8-часовой суточный free-tier лимит даёт ~24
+ * таких ролика в сутки НА ВЕСЬ ПРОДУКТ (не на пользователя, §9.3).
+ * Длительность — единственный доступный нам рычаг стоимости. */
 export const MEDIA_REVIEW_MAX_DURATION_SECONDS = 1200;
+
+/** Пункт [duration-limit-env] 2026-09-01 (из «на потом» Пункта
+ * [sandbox-cycle-2]) — потолок перекрывается переменной окружения
+ * MEDIA_REVIEW_MAX_DURATION_SECONDS: после перехода на Tier 1 лимит —
+ * рычаг бюджета владельца, менять его редеплоем кода неудобно.
+ * Читается на КАЖДОЙ проверке, не при старте модуля — на Vercel
+ * изменение env и так пересобирает функцию, но в тестах и локально
+ * позднее чтение позволяет менять значение без перезапуска.
+ * Невалидное значение (не число, ноль, отрицательное) молча падает
+ * на дефолт — неправильно настроенный env не должен ронять постановку
+ * разбора. */
+export function resolveMaxDurationSeconds(): number {
+  const raw = process.env.MEDIA_REVIEW_MAX_DURATION_SECONDS;
+  if (!raw) return MEDIA_REVIEW_MAX_DURATION_SECONDS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : MEDIA_REVIEW_MAX_DURATION_SECONDS;
+}
 
 /** §8.1 — дефолтный промпт; ACTIVE-версия из PromptRegistry
  * (promptId = taskType) перекрывает его, ровно как у intake-classify. */
@@ -175,11 +192,12 @@ export class MediaReviewAutoService implements OnModuleInit {
   ): Promise<void> {
     // §6.5: длительность известна ДО вызова из метаданных YouTube —
     // отказ сразу, а не после неудачного (и оплаченного) вызова.
-    if ((item.durationSeconds ?? 0) > MEDIA_REVIEW_MAX_DURATION_SECONDS) {
+    const maxDurationSeconds = resolveMaxDurationSeconds();
+    if ((item.durationSeconds ?? 0) > maxDurationSeconds) {
       await this.prisma.mediaReviewQueueItem.update({
         where: { id: item.id },
         data: {
-          autoAnalysisError: `Ролик длиннее ${MEDIA_REVIEW_MAX_DURATION_SECONDS / 60} минут — автоматический разбор ограничен по стоимости; загрузите файл вручную либо выберите фрагмент короче`,
+          autoAnalysisError: `Ролик длиннее ${Math.round(maxDurationSeconds / 60)} минут — автоматический разбор ограничен по стоимости; загрузите файл вручную либо выберите фрагмент короче`,
         },
       });
       return;

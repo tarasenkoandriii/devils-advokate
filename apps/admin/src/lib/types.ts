@@ -327,6 +327,50 @@ export interface SandboxDiagnosis {
     providerError: string | null;
   } | null;
 }
+// Пункт [db-state] 2026-09-01 — вкладка «БД»: секция либо данные, либо
+// { error } (локальная БД без pg_cron/pg_net — честная ошибка секции,
+// не пустая страница).
+export type DbStateSection<T> = T | { error: string };
+export interface DbStateCronJob {
+  jobname: string;
+  schedule: string;
+  active: boolean;
+}
+export interface DbStateCronRun {
+  jobname: string;
+  status: string;
+  returnMessage: string | null;
+  startTime: string | null;
+  endTime: string | null;
+}
+export interface DbStateHttpResponse {
+  statusCode: number | null;
+  content: string | null;
+  timedOut: boolean | null;
+  errorMsg: string | null;
+  created: string;
+}
+export interface DbStateAiJobs {
+  byStatus: Record<string, number>;
+  recent: Array<{
+    id: string;
+    taskType: string | null;
+    status: string;
+    retryCount: number;
+    submitted: boolean;
+    leaseExpiresAt: string | null;
+    note: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+export interface AdminDbState {
+  generatedAt: string;
+  cronJobs: DbStateSection<DbStateCronJob[]>;
+  cronRuns: DbStateSection<DbStateCronRun[]>;
+  httpResponses: DbStateSection<DbStateHttpResponse[]>;
+  aiJobs: DbStateSection<DbStateAiJobs>;
+}
 export interface SandboxFactCheck {
   language: string | null;
   checkedSegments: number;
