@@ -45,6 +45,9 @@ import { YouTubeSearchService } from '../media-review/youtube-search.service';
 import { MediaReviewService } from '../media-review/media-review.service';
 import { MediaReviewAutoService } from '../media-review/media-review-auto.service';
 import { AIRouterService } from '../ai-router/ai-router.service';
+import { IntakeService, IntakeScenario } from '../intake/intake.service';
+import { HealthOnboardingService, ExtractedHealthConfigDraft } from '../health/health-onboarding.service';
+import { HealthService } from '../health/health.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 import { TurningPointsService } from '../turning-points/turning-points.service';
@@ -64,6 +67,11 @@ const SANDBOX_CONSENT_TYPES: ConsentType[] = [
   ConsentType.RECORDING,
   ConsentType.EPHEMERAL_SERVER,
   ConsentType.EXTERNAL_AI,
+  // Пункт [sandbox-health] 2026-09-01: dispatch intake-квиза в домен
+  // здоровья требует отдельного согласия на медицинские данные (§3.5
+  // health-ТЗ) — без него прогон падал бы на createProject. Согласие
+  // выдаётся ОПЕРАТОРСКОМУ аккаунту той же кнопкой, что остальные.
+  ConsentType.HEALTH_DATA,
 ];
 
 export interface SandboxCheckItem {
@@ -121,6 +129,9 @@ export class AdminSandboxService {
     private readonly mediaReview: MediaReviewService,
     private readonly mediaReviewAuto: MediaReviewAutoService,
     private readonly aiRouter: AIRouterService,
+    private readonly intake: IntakeService,
+    private readonly healthOnboarding: HealthOnboardingService,
+    private readonly health: HealthService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
@@ -256,6 +267,20 @@ export class AdminSandboxService {
       detail: (await this.secretPresent('AI_JOB_DISPATCH_SECRET'))
         ? undefined
         : 'без него pg_cron-джобы ai-jobs-* не пройдут аутентификацию — см. prisma/manual-migrations/pg_cron_ai_jobs.sql',
+    });
+
+    // Пункт [sandbox-health]: домен здоровья — OCR лабораторных
+    // документов идёт через Cloud Vision. Без ключа работает весь
+    // остальной домен (онбординг → extract → config), отказывает
+    // только загрузка лабдокументов — это и написано в detail.
+    const visionPresent = await this.secretPresent('GOOGLE_VISION_API_KEY');
+    items.push({
+      key: 'vision',
+      label: 'GOOGLE_VISION_API_KEY (здоровье: OCR лабораторных документов)',
+      ok: visionPresent,
+      detail: visionPresent
+        ? undefined
+        : 'включите Cloud Vision API в том же проекте Google Cloud и добавьте ключ; без него домен здоровья работает, кроме загрузки лабдокументов',
     });
 
     // 6. LLM-ключи (шаг 8: анализ) — нужен хотя бы один.
@@ -633,6 +658,9 @@ export class AdminSandboxService {
           segments,
           signals,
           durationSeconds: (i.durationSeconds as number | null | undefined) ?? null,
+          channelName: (i.channelName as string | null | undefined) ?? null,
+          publishedAt: (i.publishedAt as Date | null | undefined) ?? null,
+          addedAt: (i.createdAt as Date | null | undefined) ?? null,
           conversationStatus,
           job,
         };
@@ -687,6 +715,64 @@ export class AdminSandboxService {
         })),
       })),
     };
+  }
+
+  // ── Пункт [sandbox-intake] 2026-09-01 — прогон intake-квиза ──
+  //
+  // Тот же принцип, что у остальной песочницы: продовый IntakeService
+  // от имени самого оператора, без обходов. Классификация — живой
+  // LLM-вызов (тратит реальные токены), dispatch создаёт НАСТОЯЩИЙ
+  // проект выбранного домена на аккаунте оператора — именно он
+  // оживляет воронку на странице «Сценарии».
+
+  async intakeStart(operatorUserId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!text?.trim()) throw new BadRequestException('Опишите ситуацию — текст пуст');
+    return this.intake.start(operatorUserId, text);
+  }
+
+  async intakeAnswer(operatorUserId: string, sessionId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!sessionId?.trim()) throw new BadRequestException('sessionId обязателен');
+    if (!text?.trim()) throw new BadRequestException('Ответ пуст');
+    return this.intake.answer(operatorUserId, sessionId, text);
+  }
+
+  async intakeDispatch(
+    operatorUserId: string,
+    sessionId: string,
+    scenario: IntakeScenario,
+    contractType?: 'PRENUP' | 'DIVORCE_SETTLEMENT',
+  ) {
+    await this.assertOperator(operatorUserId);
+    if (!sessionId?.trim()) throw new BadRequestException('sessionId обязателен');
+    return this.intake.dispatch(operatorUserId, sessionId, scenario, { contractType });
+  }
+
+  // ── Пункт [sandbox-health] — продолжение онбординга здоровья ──
+  //
+  // После dispatch intake-квиза в health воронка стоит на «онбординг»:
+  // чтобы колонка «С конфигом» на «Сценариях» сдвинулась, нужны ответы
+  // → extract → config. Всё продовыми сервисами домена, от имени
+  // оператора, без обходов (extract — реальный LLM-вызов).
+
+  async healthAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.healthOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  async healthExtract(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.healthOnboarding.extract(operatorUserId, conversationId);
+  }
+
+  async healthCreateConfig(operatorUserId: string, projectId: string, draft: ExtractedHealthConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.health.createConfig(operatorUserId, projectId, draft);
   }
 
   /** Пункт [progress-diagnose] — автоматический анализ «а не сбой ли

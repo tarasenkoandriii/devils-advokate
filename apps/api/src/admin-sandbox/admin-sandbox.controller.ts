@@ -59,6 +59,38 @@ class RetryQueueItemDto {
   itemId!: string;
 }
 
+class IntakeStartDto {
+  text!: string;
+}
+
+class IntakeAnswerDto {
+  sessionId!: string;
+  text!: string;
+}
+
+class IntakeDispatchDto {
+  sessionId!: string;
+  scenario!: string;
+  contractType?: 'PRENUP' | 'DIVORCE_SETTLEMENT';
+}
+
+class HealthAnswerDto {
+  conversationId!: string;
+  text!: string;
+}
+
+class HealthExtractDto {
+  conversationId!: string;
+}
+
+class HealthConfigDto {
+  projectId!: string;
+  goalDescription!: string;
+  targetBudget?: number | null;
+  currency?: string | null;
+  criteria!: Array<{ text: string; category: string; isRequired: boolean; orderIndex: number }>;
+}
+
 @Controller('admin/sandbox')
 @UseGuards(AdminSessionGuard)
 @UseInterceptors(ApiResponseInterceptor)
@@ -151,6 +183,41 @@ export class AdminSandboxController {
   @Post('queue/diagnose')
   async diagnoseQueueItem(@CurrentUser() userId: string, @Body() dto: RetryQueueItemDto) {
     return this.sandbox.diagnoseQueueItem(userId, dto.itemId);
+  }
+
+  @Post('intake/start')
+  async intakeStart(@CurrentUser() userId: string, @Body() dto: IntakeStartDto) {
+    return this.sandbox.intakeStart(userId, dto.text);
+  }
+
+  @Post('intake/answer')
+  async intakeAnswer(@CurrentUser() userId: string, @Body() dto: IntakeAnswerDto) {
+    return this.sandbox.intakeAnswer(userId, dto.sessionId, dto.text);
+  }
+
+  @Post('intake/dispatch')
+  async intakeDispatch(@CurrentUser() userId: string, @Body() dto: IntakeDispatchDto) {
+    return this.sandbox.intakeDispatch(userId, dto.sessionId, dto.scenario as never, dto.contractType);
+  }
+
+  @Post('health/answer')
+  async healthAnswer(@CurrentUser() userId: string, @Body() dto: HealthAnswerDto) {
+    return this.sandbox.healthAppendAnswer(userId, dto.conversationId, dto.text);
+  }
+
+  @Post('health/extract')
+  async healthExtract(@CurrentUser() userId: string, @Body() dto: HealthExtractDto) {
+    return this.sandbox.healthExtract(userId, dto.conversationId);
+  }
+
+  @Post('health/config')
+  async healthConfig(@CurrentUser() userId: string, @Body() dto: HealthConfigDto) {
+    return this.sandbox.healthCreateConfig(userId, dto.projectId, {
+      goalDescription: dto.goalDescription,
+      targetBudget: dto.targetBudget ?? null,
+      currency: dto.currency ?? null,
+      criteria: dto.criteria as never,
+    });
   }
 
   @Post('fact-check/:conversationId')

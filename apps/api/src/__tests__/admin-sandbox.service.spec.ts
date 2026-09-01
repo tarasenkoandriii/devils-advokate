@@ -100,13 +100,23 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     })),
     pollRunning: jest.fn(async () => ({ completed: 0, failed: 0, waiting: 1 })),
   };
+  const intake = {
+    start: jest.fn(async () => ({ id: 'is-1', status: 'IN_PROGRESS', nextQuestion: 'Кто виноват?', decision: null })),
+    answer: jest.fn(async () => ({ id: 'is-1', status: 'IN_PROGRESS', nextQuestion: null, decision: { scenario: 'dtp', confidence: 0.9 } })),
+    dispatch: jest.fn(async () => ({ id: 'is-1', status: 'DISPATCHED', projectId: 'proj-dtp', conversationId: 'conv-dtp' })),
+  };
+  const healthOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-1' })),
+    extract: jest.fn(async () => ({ goalDescription: 'операция на колене', targetBudget: null, currency: null, criteria: [] })),
+  };
+  const health = { createConfig: jest.fn(async () => ({ id: 'hc-1' })) };
   const manipulation = { detect: jest.fn(async () => ({ kind: 'manip' })) };
   const discrepancy = {
     detect: jest.fn(async () => ({ kind: 'disc' })),
     factCheckConversationSegments: jest.fn(async () => ({ language: 'ru', checkedSegments: 1, totalSegments: 1, results: [] })),
   };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, manipulation, discrepancy, turningPoints };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, manipulation, discrepancy, turningPoints };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -120,6 +130,9 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.mediaReview as any,
     deps.mediaReviewAuto as any,
     deps.aiRouter as any,
+    deps.intake as any,
+    deps.healthOnboarding as any,
+    deps.health as any,
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
@@ -188,7 +201,7 @@ describe('AdminSandboxService.grantOwnConsents', () => {
 
     const res = await svc.grantOwnConsents(OPERATOR);
 
-    expect(res.granted.sort()).toEqual(['EPHEMERAL_SERVER', 'EXTERNAL_AI']);
+    expect(res.granted.sort()).toEqual(['EPHEMERAL_SERVER', 'EXTERNAL_AI', 'HEALTH_DATA']);
     expect(res.alreadyHad).toEqual(['RECORDING']);
     for (const call of (deps.consent.grant as jest.Mock).mock.calls) {
       expect(call[0].source).toBe('admin-sandbox');
@@ -455,6 +468,51 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     expect(d.steps.some((s) => s.includes('АНОМАЛИЯ'))).toBe(true);
 
     await expect(svc.diagnoseQueueItem(REGULAR, 'item-1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('intake-квиз: start/answer/dispatch делегируются продовому IntakeService от имени оператора; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.intakeStart(OPERATOR, 'в меня въехала машина');
+    expect(deps.intake.start).toHaveBeenCalledWith(OPERATOR, 'в меня въехала машина');
+    await svc.intakeAnswer(OPERATOR, 'is-1', 'виновник признал вину');
+    expect(deps.intake.answer).toHaveBeenCalledWith(OPERATOR, 'is-1', 'виновник признал вину');
+    const res = await svc.intakeDispatch(OPERATOR, 'is-1', 'dtp' as never);
+    expect(deps.intake.dispatch).toHaveBeenCalledWith(OPERATOR, 'is-1', 'dtp', { contractType: undefined });
+    expect(res.projectId).toBe('proj-dtp');
+
+    // Пустой текст — отказ до единого LLM-вызова (реальные токены).
+    await expect(svc.intakeStart(OPERATOR, '  ')).rejects.toBeInstanceOf(BadRequestException);
+    expect(deps.intake.start).toHaveBeenCalledTimes(1);
+
+    await expect(svc.intakeStart(REGULAR, 'x')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.intakeDispatch(REGULAR, 'is-1', 'dtp' as never)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('health-цепочка (ответ → extract → config) делегируется продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.healthAppendAnswer(OPERATOR, 'conv-h', 'бюджет до 200 тысяч');
+    expect(deps.healthOnboarding.appendAnswer).toHaveBeenCalledWith(OPERATOR, 'conv-h', 'бюджет до 200 тысяч');
+
+    const draft = await svc.healthExtract(OPERATOR, 'conv-h');
+    expect(deps.healthOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-h');
+    expect(draft.goalDescription).toContain('колене');
+
+    const config = await svc.healthCreateConfig(OPERATOR, 'proj-h', draft as never);
+    expect(deps.health.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-h', draft);
+    expect(config.id).toBe('hc-1');
+
+    await expect(svc.healthExtract(REGULAR, 'conv-h')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('согласия песочницы включают HEALTH_DATA — без него dispatch в health падал бы на createProject', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+    const res = await svc.grantOwnConsents(OPERATOR);
+    expect(res.granted).toContain('HEALTH_DATA');
   });
 
   it('fact-check делегируется сервису; не-оператору — отказ', async () => {

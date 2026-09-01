@@ -288,7 +288,7 @@ export function sandboxTranscribe(conversationId: string, languageCode?: string)
 // Кнопка «Разобрать» у результата поиска. Скачивания ролика здесь НЕТ
 // намеренно (ТЗ медиа-разбора §2.2): элемент очереди хранит метаданные,
 // файл приносит сам оператор.
-import type { SandboxAnalysis, SandboxDiagnosis, SandboxFactCheck, SandboxQueue, SandboxYouTubeResult } from './types';
+import type { SandboxAnalysis, SandboxDiagnosis, SandboxFactCheck, SandboxHealthDraft, SandboxIntakeState, SandboxQueue, SandboxYouTubeResult } from './types';
 
 export function sandboxAddToQueue(video: SandboxYouTubeResult) {
   return apiPost<{ queueId: string; itemId: string }>('/admin/sandbox/queue/items', {
@@ -311,6 +311,24 @@ export function sandboxRetryQueueItem(itemId: string) {
 }
 export function getSandboxAnalysis(conversationId: string) {
   return apiGet<SandboxAnalysis>(`/admin/sandbox/analysis/${conversationId}`);
+}
+export function sandboxIntakeStart(text: string) {
+  return apiPost<SandboxIntakeState>('/admin/sandbox/intake/start', { text });
+}
+export function sandboxIntakeAnswer(sessionId: string, text: string) {
+  return apiPost<SandboxIntakeState>('/admin/sandbox/intake/answer', { sessionId, text });
+}
+export function sandboxIntakeDispatch(sessionId: string, scenario: string, contractType?: string) {
+  return apiPost<SandboxIntakeState>('/admin/sandbox/intake/dispatch', { sessionId, scenario, contractType });
+}
+export function sandboxHealthAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: boolean }>('/admin/sandbox/health/answer', { conversationId, text });
+}
+export function sandboxHealthExtract(conversationId: string) {
+  return apiPost<SandboxHealthDraft>('/admin/sandbox/health/extract', { conversationId });
+}
+export function sandboxHealthConfig(projectId: string, draft: SandboxHealthDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/health/config', { projectId, ...draft });
 }
 export function sandboxDiagnoseQueueItem(itemId: string) {
   return apiPost<SandboxDiagnosis>('/admin/sandbox/queue/diagnose', { itemId });

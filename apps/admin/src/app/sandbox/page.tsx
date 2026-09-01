@@ -33,6 +33,12 @@ import {
   getSandboxAnalysis,
   sandboxFactCheck,
   sandboxDiagnoseQueueItem,
+  sandboxIntakeStart,
+  sandboxIntakeAnswer,
+  sandboxIntakeDispatch,
+  sandboxHealthAnswer,
+  sandboxHealthExtract,
+  sandboxHealthConfig,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -45,6 +51,8 @@ import type {
   SandboxAnalysis,
   SandboxFactCheck,
   SandboxDiagnosis,
+  SandboxIntakeState,
+  SandboxHealthDraft,
 } from '../../lib/types';
 
 function formatDuration(seconds: number | null): string {
@@ -189,6 +197,54 @@ export default function SandboxPage() {
     getSandboxAnalysis(conversationId)
       .then((a) => setAnalyses((m) => ({ ...m, [conversationId]: a })))
       .catch(() => setAnalyses((m) => ({ ...m, [conversationId]: 'error' })));
+  }
+
+  // ── Intake-квиз (Шаг 3): живой классификатор + dispatch в домен ──
+  const [intakeText, setIntakeText] = useState('');
+  const [intakeState, setIntakeState] = useState<SandboxIntakeState | null>(null);
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeError, setIntakeError] = useState<string | null>(null);
+  const [dispatchScenario, setDispatchScenario] = useState<string>('');
+  const [contractType, setContractType] = useState<'PRENUP' | 'DIVORCE_SETTLEMENT'>('PRENUP');
+
+  const INTAKE_PRESETS: Array<{ label: string; text: string }> = [
+    { label: 'Пример: ДТП', text: 'Вчера на перекрёстке в меня въехала машина. Виновник вину признал, но страховая занижает сумму ремонта почти вдвое. Хочу понять, как добиться полной выплаты.' },
+    { label: 'Пример: инвестиции', text: 'Знакомый советник предлагает вложить 500 тысяч в фонд с гарантированной доходностью 30% годовых и комиссией 2% за вход. Звучит слишком хорошо, хочу проверить его аргументы.' },
+    { label: 'Пример: здоровье', text: 'Врач настаивает на операции на колене, но я сомневаюсь — хочу подготовиться ко второму мнению: какие вопросы задать по анализам и снимку МРТ.' },
+  ];
+
+  async function handleIntake(action: () => Promise<SandboxIntakeState>) {
+    setIntakeBusy(true);
+    setIntakeError(null);
+    try {
+      const state = await action();
+      setIntakeState(state);
+      if (state.decision) setDispatchScenario(state.decision.scenario);
+      setIntakeText('');
+    } catch (e) {
+      setIntakeError(errText(e));
+    } finally {
+      setIntakeBusy(false);
+    }
+  }
+
+  // ── Продолжение онбординга здоровья после dispatch (Шаг 3) ──
+  const [healthAnswerText, setHealthAnswerText] = useState('');
+  const [healthDraft, setHealthDraft] = useState<SandboxHealthDraft | null>(null);
+  const [healthConfigId, setHealthConfigId] = useState<string | null>(null);
+  const [healthBusy, setHealthBusy] = useState<string | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  async function withHealth(action: string, fn: () => Promise<void>) {
+    setHealthBusy(action);
+    setHealthError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setHealthError(errText(e));
+    } finally {
+      setHealthBusy(null);
+    }
   }
 
   // Диагностика зависшего PROCESSING: живой статус у провайдера +
@@ -625,6 +681,14 @@ export default function SandboxPage() {
               </summary>
 
               <div style={{ padding: '10px 0 4px 4px', fontSize: 13 }}>
+                <div className="muted" style={{ marginBottom: 4 }}>
+                  {/* Метаданные ролика — из YouTube (получены при поиске,
+                      само видео проект не скачивал). */}
+                  {item.durationSeconds !== null && <>длительность {formatDuration(item.durationSeconds)}{' · '}</>}
+                  {item.channelName && <>канал {item.channelName}{' · '}</>}
+                  {item.publishedAt && <>опубликован {new Date(item.publishedAt).toLocaleDateString('ru-RU')}{' · '}</>}
+                  {item.addedAt && <>добавлен в очередь {new Date(item.addedAt).toLocaleString('ru-RU', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })}</>}
+                </div>
                 <div className="muted" style={{ marginBottom: 6 }}>
                   <a href={`https://www.youtube.com/watch?v=${item.youtubeVideoId}`} target="_blank" rel="noreferrer">
                     открыть на YouTube
@@ -739,6 +803,209 @@ export default function SandboxPage() {
           <button type="button" onClick={loadQueue} style={{ marginTop: 10 }}>Обновить</button>
         </div>
       )}
+
+      {/* ── 3. Intake-квиз — маршрутизация во все домены ── */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <h2 style={{ marginTop: 0 }}>Шаг 3 — intake-квиз (маршрутизация доменов)</h2>
+        <p className="muted">
+          Продовый вход в доменные сценарии: описание ситуации → живая классификация LLM (реальные
+          токены) → до 3 уточняющих вопросов → передача в выбранный домен. Dispatch создаёт
+          настоящий проект на вашем аккаунте — воронка на странице «Сценарии» оживёт этим прогоном.
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          {INTAKE_PRESETS.map((p) => (
+            <button key={p.label} type="button" onClick={() => setIntakeText(p.text)} disabled={intakeBusy}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <textarea
+          value={intakeText}
+          onChange={(e) => setIntakeText(e.target.value)}
+          placeholder={intakeState?.nextQuestion ? 'Ваш ответ на уточняющий вопрос…' : 'Опишите ситуацию своими словами…'}
+          rows={3}
+          style={{ width: '100%', boxSizing: 'border-box' }}
+        />
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+          {(!intakeState || intakeState.status !== 'IN_PROGRESS' || !intakeState.nextQuestion) && (
+            <button
+              type="button"
+              disabled={intakeBusy || !intakeText.trim()}
+              onClick={() => handleIntake(() => sandboxIntakeStart(intakeText))}
+            >
+              {intakeBusy ? 'Классифицируем…' : 'Начать квиз'}
+            </button>
+          )}
+          {intakeState?.nextQuestion && intakeState.status === 'IN_PROGRESS' && (
+            <button
+              type="button"
+              disabled={intakeBusy || !intakeText.trim()}
+              onClick={() => handleIntake(() => sandboxIntakeAnswer(intakeState.id, intakeText))}
+            >
+              {intakeBusy ? 'Классифицируем…' : 'Ответить'}
+            </button>
+          )}
+          {intakeState && <span className="muted" style={{ fontSize: 12 }}>сессия <code>{intakeState.id}</code> · уточнений осталось: {intakeState.followUpsLeft}</span>}
+        </div>
+        {intakeError && <p style={{ color: 'var(--signal-critical)', marginTop: 8 }}>{intakeError}</p>}
+
+        {intakeState && (
+          <div style={{ marginTop: 12, fontSize: 13 }}>
+            {intakeState.answers.map((a, i) => (
+              <div key={i} style={{ marginBottom: 4 }}>
+                {a.question && <div className="muted">квиз: {a.question}</div>}
+                <div>— {a.text}</div>
+              </div>
+            ))}
+            {intakeState.nextQuestion && intakeState.status === 'IN_PROGRESS' && (
+              <p style={{ marginTop: 8 }}><b>Уточняющий вопрос:</b> {intakeState.nextQuestion}</p>
+            )}
+            {intakeState.decision && (
+              <div style={{ marginTop: 8, border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '8px 10px' }}>
+                <div>
+                  <b>Решение:</b> {intakeState.decision.scenario}{' '}
+                  <span className="muted">
+                    (предложено {intakeState.decision.suggestedScenario}, уверенность {Math.round(intakeState.decision.confidence * 100)}%
+                    {intakeState.decision.belowThreshold ? ' — ниже порога, сведено к UNIVERSAL' : ''})
+                  </span>
+                </div>
+                {intakeState.extracted && (
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    вопрос: {intakeState.extracted.question}
+                    {intakeState.extracted.goal && <> · цель: {intakeState.extracted.goal}</>}
+                    {intakeState.extracted.facts.length > 0 && <> · факты: {intakeState.extracted.facts.join('; ')}</>}
+                  </div>
+                )}
+                {intakeState.status !== 'DISPATCHED' && (
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select value={dispatchScenario} onChange={(e) => setDispatchScenario(e.target.value)}>
+                      {['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    {dispatchScenario === 'family-law' && (
+                      <select value={contractType} onChange={(e) => setContractType(e.target.value as 'PRENUP' | 'DIVORCE_SETTLEMENT')}>
+                        <option value="PRENUP">PRENUP</option>
+                        <option value="DIVORCE_SETTLEMENT">DIVORCE_SETTLEMENT</option>
+                      </select>
+                    )}
+                    <button
+                      type="button"
+                      disabled={intakeBusy}
+                      onClick={() =>
+                        handleIntake(() =>
+                          sandboxIntakeDispatch(
+                            intakeState.id,
+                            dispatchScenario,
+                            dispatchScenario === 'family-law' ? contractType : undefined,
+                          ),
+                        )
+                      }
+                    >
+                      {intakeBusy ? 'Передаём…' : 'Передать в сценарий'}
+                    </button>
+                  </div>
+                )}
+                {intakeState.status === 'DISPATCHED' && (
+                  <div style={{ marginTop: 8 }}>
+                    <span className="badge badge-ok">DISPATCHED</span>{' '}
+                    в {intakeState.chosenScenario} · проект <code>{intakeState.projectId ?? intakeState.dispatchedProjectId}</code>
+                    {intakeState.conversationId && <> · онбординг-разговор <code>{intakeState.conversationId}</code></>}
+                    <div className="muted" style={{ marginTop: 4 }}>
+                      Воронка обновилась — смотрите страницу «Сценарии» (колонки «Всего»/«С конфигом»).
+                    </div>
+
+                    {/* Продолжение онбординга здоровья: ответы → extract →
+                        config. Именно config двигает колонку «С конфигом». */}
+                    {intakeState.chosenScenario === 'health' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг здоровья</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Ответы квиза уже перенесены в разговор. Добавьте недостающее (бюджет, что
+                          беспокоит в рисках) и нажмите «Извлечь конфиг» — реальный LLM-вызов.
+                        </p>
+                        {!healthDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={healthAnswerText}
+                              onChange={(e) => setHealthAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ (необязательно)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={healthBusy !== null || !healthAnswerText.trim()}
+                              onClick={() =>
+                                withHealth('answer', async () => {
+                                  await sandboxHealthAnswer(intakeState.conversationId as string, healthAnswerText);
+                                  setHealthAnswerText('');
+                                })
+                              }
+                            >
+                              {healthBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={healthBusy !== null}
+                              onClick={() =>
+                                withHealth('extract', async () => {
+                                  setHealthDraft(await sandboxHealthExtract(intakeState.conversationId as string));
+                                })
+                              }
+                            >
+                              {healthBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {healthDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>Черновик конфига:</b> {healthDraft.goalDescription}</div>
+                            {healthDraft.targetBudget !== null && (
+                              <div className="muted">бюджет: {healthDraft.targetBudget} {healthDraft.currency ?? ''}</div>
+                            )}
+                            <ul style={{ margin: '6px 0' }}>
+                              {healthDraft.criteria.map((c, i) => (
+                                <li key={i}>
+                                  <span className="badge badge-pending">{c.category}</span> {c.text}
+                                  {c.isRequired && <span className="muted"> · обязательный</span>}
+                                </li>
+                              ))}
+                            </ul>
+                            {!healthConfigId ? (
+                              <button
+                                type="button"
+                                disabled={healthBusy !== null}
+                                onClick={() =>
+                                  withHealth('config', async () => {
+                                    const res = await sandboxHealthConfig(
+                                      (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                      healthDraft,
+                                    );
+                                    setHealthConfigId(res.id);
+                                  })
+                                }
+                              >
+                                {healthBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span> <code>{healthConfigId}</code>
+                                <span className="muted"> — воронка health дошла до «С конфигом»</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {healthError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{healthError}</p>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ── 2. Транскрибация ── */}
       <div className="card" style={{ marginBottom: 20 }}>

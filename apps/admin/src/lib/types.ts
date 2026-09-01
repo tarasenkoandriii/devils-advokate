@@ -237,6 +237,9 @@ export interface SandboxQueueItem {
   signals: number;
   /** Длительность ролика из метаданных YouTube — основа оценки времени разбора. */
   durationSeconds: number | null;
+  channelName: string | null;
+  publishedAt: string | null;
+  addedAt: string | null;
   /** Статус Conversation — вторая ось прогресса (TRANSCRIBING/ANALYZING/…). */
   conversationStatus: string | null;
   /** Факты о джобе для PROCESSING (провайдер прогресса не отдаёт —
@@ -284,6 +287,26 @@ export interface FactCheckSegmentResult {
   startMs: number;
   text: string;
   matches: FactCheckMatch[];
+}
+export interface SandboxIntakeState {
+  id: string;
+  status: string;
+  answers: Array<{ question: string | null; text: string; at: string }>;
+  followUpsAsked: number;
+  followUpsLeft: number;
+  nextQuestion: string | null;
+  decision: { scenario: string; suggestedScenario: string; confidence: number; belowThreshold: boolean } | null;
+  extracted: { question: string; goal: string | null; facts: string[]; contractType: string | null } | null;
+  chosenScenario: string | null;
+  dispatchedProjectId: string | null;
+  projectId?: string;
+  conversationId?: string | null;
+}
+export interface SandboxHealthDraft {
+  goalDescription: string;
+  targetBudget: number | null;
+  currency: string | null;
+  criteria: Array<{ text: string; category: string; isRequired: boolean; orderIndex: number }>;
 }
 export interface SandboxDiagnosis {
   verdict: string;
