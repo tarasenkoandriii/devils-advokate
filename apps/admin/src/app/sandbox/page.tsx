@@ -252,16 +252,35 @@ export default function SandboxPage() {
       return { percent: 5, label: 'подготовка' };
     }
 
-    const expectedSec = 120 + (item.durationSeconds ?? 60) * 1.2;
+    // Короткие ролики Gemini считает ≈ в реальном времени, но длинные
+    // фоновая очередь держит непропорционально дольше (замечено на
+    // 10-минутных дебатах) — коэффициент 2 и базовые 3 минуты на такты
+    // крона и очередь.
+    const expectedSec = 180 + (item.durationSeconds ?? 60) * 2;
     let percent = Math.min(95, Math.round((elapsedSec / expectedSec) * 100));
     let label: string;
     if (item.job.status === 'QUEUED' || !item.job.submitted) {
       percent = Math.min(percent, 10);
-      label = 'в очереди на постановку (~1 мин)';
-    } else if (elapsedSec > expectedSec * 2) {
-      // Сильно дольше ожидания — честно говорим, что оценка исчерпана:
-      // либо перегруз провайдера (ретраи), либо джобу закроет сторожевая.
-      label = 'дольше ожидаемого — идут ретраи либо сработает сторожевая (до 2 ч)';
+      label =
+        item.job.retryCount > 0
+          ? `повторная постановка (попытка ${item.job.retryCount + 1})`
+          : 'в очереди на постановку (~1 мин)';
+    } else if (elapsedSec > expectedSec) {
+      // Оценка по времени исчерпана — дальше говорим ФАКТАМИ из БД,
+      // а не гаданием: заметка воркера различает «ретраи на
+      // перегрузе» и «просто долго считает», сторожевая — с точным
+      // временем вместо «до 2 ч».
+      const watchdog =
+        item.job.leaseExpiresAt
+          ? `сторожевая через ~${Math.max(1, Math.round((new Date(item.job.leaseExpiresAt).getTime() - Date.now()) / 60000))} мин`
+          : 'сторожевая до 2 ч';
+      if (item.job.note && item.job.note.includes('ожидание')) {
+        label = `провайдер отвечает ошибками, идут ретраи опроса · ${watchdog}`;
+      } else if (item.job.retryCount > 0) {
+        label = `повторная постановка (попытка ${item.job.retryCount + 1}) · ${watchdog}`;
+      } else {
+        label = `фоновая очередь Google держит дольше обычного · ${watchdog}`;
+      }
     } else {
       label = `считается у Gemini, ~${Math.max(1, Math.round((expectedSec - elapsedSec) / 60))} мин осталось`;
     }

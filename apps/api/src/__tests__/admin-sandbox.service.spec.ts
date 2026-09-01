@@ -45,6 +45,9 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
         status: 'RUNNING',
         createdAt: new Date('2026-09-01T00:00:00Z'),
         externalInteractionId: 'int-1',
+        retryCount: 0,
+        partialResult: null,
+        leaseExpiresAt: new Date('2026-09-01T02:00:00Z'),
       })),
     },
   };
@@ -374,7 +377,14 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     const res = await svc.getSandboxQueue(OPERATOR);
     const item = res.queue!.items[0];
     expect(item.durationSeconds).toBe(300);
-    expect(item.job).toEqual({ status: 'RUNNING', startedAt: new Date('2026-09-01T00:00:00Z'), submitted: true });
+    expect(item.job).toEqual({
+      status: 'RUNNING',
+      startedAt: new Date('2026-09-01T00:00:00Z'),
+      submitted: true,
+      retryCount: 0,
+      note: null,
+      leaseExpiresAt: new Date('2026-09-01T02:00:00Z'),
+    });
   });
 
   it('«Повторить» делегируется продовому retryAnalysis с userId оператора; не-оператору — отказ', async () => {

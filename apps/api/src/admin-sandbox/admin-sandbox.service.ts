@@ -587,14 +587,38 @@ export class AdminSandboxService {
         // провайдер прогресса НЕ отдаёт, поэтому наружу идут ФАКТЫ
         // (фаза джобы + когда поставлена + длительность ролика), а
         // оценка процента — на клиенте и честно помечена как «≈».
-        let job: { status: string; startedAt: Date; submitted: boolean } | null = null;
+        let job: {
+          status: string;
+          startedAt: Date;
+          submitted: boolean;
+          retryCount: number;
+          /** Последняя заметка воркера (транзиентные ошибки опроса,
+           * причина рекью) — различает «считается» и «ретраи». */
+          note: string | null;
+          /** Точный момент срабатывания сторожевой — вместо «до 2 ч». */
+          leaseExpiresAt: Date | null;
+        } | null = null;
         if (i.aiJobId && i.status === 'PROCESSING') {
           const j = await this.prisma.aIJob.findUnique({
             where: { id: i.aiJobId as string },
-            select: { status: true, createdAt: true, externalInteractionId: true },
+            select: {
+              status: true,
+              createdAt: true,
+              externalInteractionId: true,
+              retryCount: true,
+              partialResult: true,
+              leaseExpiresAt: true,
+            },
           });
           if (j) {
-            job = { status: j.status, startedAt: j.createdAt, submitted: j.externalInteractionId != null };
+            job = {
+              status: j.status,
+              startedAt: j.createdAt,
+              submitted: j.externalInteractionId != null,
+              retryCount: j.retryCount,
+              note: j.partialResult ? j.partialResult.slice(0, 200) : null,
+              leaseExpiresAt: j.leaseExpiresAt,
+            };
           }
         }
         return {

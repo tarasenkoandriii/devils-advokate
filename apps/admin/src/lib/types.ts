@@ -241,7 +241,14 @@ export interface SandboxQueueItem {
   conversationStatus: string | null;
   /** Факты о джобе для PROCESSING (провайдер прогресса не отдаёт —
    * процент оценивается на клиенте и помечается как «≈»). */
-  job: { status: string; startedAt: string; submitted: boolean } | null;
+  job: {
+    status: string;
+    startedAt: string;
+    submitted: boolean;
+    retryCount: number;
+    note: string | null;
+    leaseExpiresAt: string | null;
+  } | null;
 }
 export interface SandboxQueue {
   id: string;
