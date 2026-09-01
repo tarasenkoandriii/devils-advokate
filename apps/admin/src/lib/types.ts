@@ -282,6 +282,14 @@ export interface FactCheckMatch {
   url: string | null;
   reviewDate: string | null;
 }
+// Пункт [fact-check-ai-fallback] 2026-09-01 — гипотеза модели с
+// веб-поиском, когда база фактчеков промолчала. НЕ рейтинг фактчекера.
+export interface AiFactCheckHypothesis {
+  verdict: 'SUPPORTED' | 'CONTRADICTED' | 'DISPUTED' | 'UNVERIFIABLE';
+  confidence: number;
+  rationale: string;
+  sources: string[];
+}
 export interface FactCheckSegmentResult {
   segmentId: string;
   startMs: number;
@@ -291,6 +299,7 @@ export interface FactCheckSegmentResult {
    * этому сегменту (null = поиск прошёл). Раньше сбой выглядел как
    * «совпадений: 0» — маскировал невключённый API. */
   error: string | null;
+  ai: AiFactCheckHypothesis | null;
 }
 export interface SandboxIntakeState {
   id: string;
@@ -305,6 +314,136 @@ export interface SandboxIntakeState {
   dispatchedProjectId: string | null;
   projectId?: string;
   conversationId?: string | null;
+}
+// Пункт [sandbox-major-purchase] 2026-09-01 — этап 1 доменного покрытия.
+export interface SandboxMpDraft {
+  goalDescription: string;
+  budgetMin: number | null;
+  budgetMax: number | null;
+  currency: string | null;
+  financingMethod: string | null;
+  timeline: string | null;
+  criteria: Array<{ text: string; isRequired: boolean; orderIndex: number }>;
+}
+export interface SandboxMpComparison {
+  criteria: Array<{ id: string; text: string; isRequired: boolean }>;
+  variants: Array<{
+    id: string;
+    label: string;
+    askingPrice: number | null;
+    currency: string | null;
+    placeName: string | null;
+    placeAddress: string | null;
+    comparisonCount: number;
+    latestConclusion: string | null;
+    criteriaBreakdown: unknown | null;
+  }>;
+}
+// Пункт [sandbox-investment] 2026-09-01 — этап 2 доменного покрытия.
+export interface SandboxInvDraft {
+  goalDescription: string;
+  targetBudget: number | null;
+  currency: string | null;
+  criteria: Array<{ text: string; category: string; isRequired: boolean; orderIndex: number }>;
+}
+export interface SandboxInvComparison {
+  criteria: Array<{ id: string; text: string; isRequired: boolean }>;
+  opportunities: Array<{
+    id: string;
+    label: string;
+    advisorName: string | null;
+    advisorCompany: string | null;
+    meetingsCount: number;
+    comparisonCount: number;
+    latestBreakdown: unknown | null;
+  }>;
+}
+export interface SandboxInvGroupSmoke {
+  groupId: string;
+  groupName: string;
+  inviteTokenIssued: boolean;
+  inviteExpiresAt: string;
+  rejoinIdempotent: boolean;
+  pledgedAmount: number;
+  myGroupsCount: number;
+  notes: string;
+}
+// Пункт [sandbox-interview-pool] 2026-09-01 — этап 3 доменного покрытия.
+export interface SandboxIpDraft {
+  jobTitle: string;
+  extendedDescription: string;
+  salaryRange: string | null;
+  employmentLoad: string | null;
+  workArrangement: string | null;
+  officeLocation: string | null;
+  employmentFormat: string | null;
+  perks: string[];
+  genderRequirement: string;
+  ageRequirement: string;
+  minAge: number | null;
+  maxAge: number | null;
+  isPhysicallyDemanding: boolean;
+  interviewStages: Array<{ name: string; orderIndex: number; isTestAssignment: boolean; interviewerRole: string | null }>;
+  complianceFlags: Array<{ category: string; quotedText: string }>;
+}
+export interface SandboxIpQuestionnaireItem {
+  text: string;
+  category: string | null;
+  orderIndex: number;
+  isRequired: boolean;
+}
+export interface SandboxIpRelevance {
+  snapshotId: string | null;
+  entries: Array<{ candidate: string; attentionPoints: string[]; followUpRequestsDraft: string[] }>;
+  note: string | null;
+}
+export interface SandboxIpSummaryReport {
+  reportId: string;
+  content: {
+    funnel: { totalCandidates: number; byStage: Record<string, number> };
+    entries: Array<{ candidateProfileId: string; displayName: string; stage: string; coverageScore: number }>;
+  };
+}
+export interface SandboxIpTeamSmoke {
+  teamId: string;
+  teamName: string;
+  inviteTokenIssued: boolean;
+  rejoinIdempotent: boolean;
+  myTeamsCount: number;
+  notes: string;
+}
+// Пункт [sandbox-family-law] 2026-09-01 — этап 4 доменного покрытия.
+export interface SandboxFlDraft {
+  goalDescription: string;
+  targetBudget: number | null;
+  currency: string | null;
+  criteria: Array<{ text: string; category: string; isRequired: boolean; orderIndex: number }>;
+}
+export interface SandboxFlBudget {
+  lineItems: Array<{ id: string; category: string; direction: string; amount: number; currency: string | null; description: string | null }>;
+  byCurrency: Array<{ currency: string; totalExpense: number; totalCoverage: number; netBudget: number }>;
+  targetBudget: number | null;
+  currency: string | null;
+}
+export interface SandboxFlSettlementDraft {
+  text: string;
+  generatedAt: string;
+  disclaimer: string;
+}
+// Пункт [sandbox-dtp] 2026-09-01 — этап 5 доменного покрытия.
+export interface SandboxDtpDraft {
+  goalDescription: string;
+  targetBudget: number | null;
+  currency: string | null;
+  occurredAt: string | null;
+  criteria: Array<{ text: string; category: string; isRequired: boolean; orderIndex: number }>;
+}
+export interface SandboxDtpEvidence {
+  evidenceId: string;
+  fileHash: string;
+  mediaType: string;
+  capturedAt: string;
+  accessLog: Array<{ action: string; at: string }>;
 }
 export interface SandboxHealthDraft {
   goalDescription: string;
@@ -375,5 +514,9 @@ export interface SandboxFactCheck {
   language: string | null;
   checkedSegments: number;
   totalSegments: number;
+  apiKeyPresent: boolean;
+  aiFallbackUsed: boolean;
+  aiCheckedSegments: number;
+  aiError: string | null;
   results: FactCheckSegmentResult[];
 }

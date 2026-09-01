@@ -262,10 +262,13 @@ export function sandboxAnalyze(conversationId: string, kind: 'manipulation' | 'd
 }
 
 // ── Sandbox: загрузка реального аудио/видео (вторая итерация 2026-08-31) ──
-export function createSandboxUploadConversation(isVideo: boolean, durationSeconds?: number) {
+export function createSandboxUploadConversation(isVideo: boolean, durationSeconds?: number, targetProjectId?: string) {
   return apiPost<{ projectId: string; conversationId: string }>('/admin/sandbox/upload-conversation', {
     isVideo,
     durationSeconds,
+    // Пункт [sandbox-domain-conversations]: загрузка в доменный проект
+    // (b-подэтапы). Пусто = песочный проект, как раньше.
+    targetProjectId,
   });
 }
 export function getSandboxUploadToken(conversationId: string, pathname: string) {
@@ -353,4 +356,164 @@ import type { AdminDbState } from './types';
 
 export function getAdminDbState() {
   return apiGet<AdminDbState>('/admin/db-state');
+}
+
+// ── Sandbox: крупная покупка (Пункт [sandbox-major-purchase] 2026-09-01) ──
+// Этап 1 доменного покрытия: ответы → чек-лист (AI) → extract (AI) →
+// конфиг → варианты → сравнительная таблица. Всё продовыми сервисами.
+import type { SandboxMpComparison, SandboxMpDraft } from './types';
+
+export function sandboxMpAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: true }>('/admin/sandbox/major-purchase/answer', { conversationId, text });
+}
+export function sandboxMpChecklist(conversationId: string, category: 'REAL_ESTATE' | 'VEHICLE') {
+  return apiPost<{ items: string[] }>('/admin/sandbox/major-purchase/checklist', { conversationId, category });
+}
+export function sandboxMpExtract(conversationId: string, category: 'REAL_ESTATE' | 'VEHICLE') {
+  return apiPost<SandboxMpDraft>('/admin/sandbox/major-purchase/extract', { conversationId, category });
+}
+export function sandboxMpConfig(projectId: string, category: 'REAL_ESTATE' | 'VEHICLE', draft: SandboxMpDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/major-purchase/config', { projectId, category, ...draft });
+}
+export function sandboxMpVariant(configId: string, label: string, askingPrice?: number, currency?: string) {
+  return apiPost<{ id: string; label: string }>('/admin/sandbox/major-purchase/variant', { configId, label, askingPrice, currency });
+}
+export function sandboxMpComparison(configId: string) {
+  return apiGet<SandboxMpComparison>(`/admin/sandbox/major-purchase/comparison/${configId}`);
+}
+
+// ── Sandbox: инвестиции (Пункт [sandbox-investment] 2026-09-01) ──
+// Этап 2 доменного покрытия: extract → конфиг → возможность → сравнение
+// с источником (сырой текст, без AI-оценки — продовая граница §3.2) →
+// таблица (без score/rank). Плюс смоук групповой механики одним аккаунтом.
+import type { SandboxInvComparison, SandboxInvDraft, SandboxInvGroupSmoke } from './types';
+
+export function sandboxInvAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: true }>('/admin/sandbox/investment/answer', { conversationId, text });
+}
+export function sandboxInvExtract(conversationId: string) {
+  return apiPost<SandboxInvDraft>('/admin/sandbox/investment/extract', { conversationId });
+}
+export function sandboxInvConfig(projectId: string, draft: SandboxInvDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/investment/config', { projectId, ...draft });
+}
+export function sandboxInvOpportunity(configId: string, label: string, advisorName?: string, advisorCompany?: string) {
+  return apiPost<{ id: string; label: string }>('/admin/sandbox/investment/opportunity', { configId, label, advisorName, advisorCompany });
+}
+export function sandboxInvSourceComparison(opportunityId: string, sourceUrl: string) {
+  return apiPost<{ id: string; sourceUrl: string; sourceTextLength: number; sourceTextPreview: string }>('/admin/sandbox/investment/source-comparison', { opportunityId, sourceUrl });
+}
+export function sandboxInvComparison(configId: string) {
+  return apiGet<SandboxInvComparison>(`/admin/sandbox/investment/comparison/${configId}`);
+}
+export function sandboxInvGroupSmoke(pledgedAmount?: number) {
+  return apiPost<SandboxInvGroupSmoke>('/admin/sandbox/investment/group-smoke', { pledgedAmount });
+}
+
+// ── Sandbox: подбор персонала (Пункт [sandbox-interview-pool] 2026-09-01) ──
+// Этап 3 доменного покрытия: extract (с compliance-флагами) → конфиг →
+// анкета (AI-черновик → фиксация) → кандидат → релевантность → отчёт.
+import type { SandboxIpDraft, SandboxIpQuestionnaireItem, SandboxIpRelevance, SandboxIpSummaryReport, SandboxIpTeamSmoke } from './types';
+
+export function sandboxIpAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: true }>('/admin/sandbox/interview-pool/answer', { conversationId, text });
+}
+export function sandboxIpExtract(conversationId: string) {
+  return apiPost<SandboxIpDraft>('/admin/sandbox/interview-pool/extract', { conversationId });
+}
+export function sandboxIpConfig(projectId: string, draft: SandboxIpDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/interview-pool/config', { projectId, draft });
+}
+export function sandboxIpQuestionnaireDraft(projectId: string) {
+  return apiPost<{ items: SandboxIpQuestionnaireItem[] }>('/admin/sandbox/interview-pool/questionnaire-draft', { projectId });
+}
+export function sandboxIpQuestionnaireFix(projectId: string, items: SandboxIpQuestionnaireItem[]) {
+  return apiPost<{ count: number }>('/admin/sandbox/interview-pool/questionnaire-fix', { projectId, items });
+}
+export function sandboxIpCandidate(projectId: string, displayName: string, resumeText?: string) {
+  return apiPost<{ candidateProfileId: string; statusId: string; stage: string }>('/admin/sandbox/interview-pool/candidate', { projectId, displayName, resumeText });
+}
+export function sandboxIpRelevance(projectId: string) {
+  return apiPost<SandboxIpRelevance>('/admin/sandbox/interview-pool/relevance', { projectId });
+}
+export function sandboxIpSummaryReport(projectId: string) {
+  return apiPost<SandboxIpSummaryReport>('/admin/sandbox/interview-pool/summary-report', { projectId });
+}
+export function sandboxIpTeamSmoke() {
+  return apiPost<SandboxIpTeamSmoke>('/admin/sandbox/interview-pool/team-smoke', {});
+}
+
+// ── Sandbox: семейное право (Пункт [sandbox-family-law] 2026-09-01) ──
+// Этап 4 доменного покрытия: extract → конфиг → стороны → активы →
+// бюджет → черновик протокола урегулирования (с дисклеймером §3.6).
+import type { SandboxFlBudget, SandboxFlDraft, SandboxFlSettlementDraft } from './types';
+
+export function sandboxFlAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: true }>('/admin/sandbox/family-law/answer', { conversationId, text });
+}
+export function sandboxFlExtract(conversationId: string) {
+  return apiPost<SandboxFlDraft>('/admin/sandbox/family-law/extract', { conversationId });
+}
+export function sandboxFlConfig(projectId: string, draft: SandboxFlDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/family-law/config', { projectId, ...draft });
+}
+export function sandboxFlParty(configId: string, role: 'SELF' | 'SPOUSE', displayName?: string) {
+  return apiPost<{ id: string; role: string }>('/admin/sandbox/family-law/party', { configId, role, displayName });
+}
+export function sandboxFlAsset(configId: string, assetType: string, estimatedValue?: number, currency?: string, isMaritalProperty?: boolean) {
+  return apiPost<{ id: string }>('/admin/sandbox/family-law/asset', { configId, assetType, estimatedValue, currency, isMaritalProperty });
+}
+export function sandboxFlBudgetItem(configId: string, category: string, direction: string, amount: number, currency?: string) {
+  return apiPost<SandboxFlBudget>('/admin/sandbox/family-law/budget-item', { configId, category, direction, amount, currency });
+}
+export function sandboxFlSettlementDraft(configId: string) {
+  return apiGet<SandboxFlSettlementDraft>(`/admin/sandbox/family-law/settlement-draft/${configId}`);
+}
+
+// ── Sandbox: ДТП (Пункт [sandbox-dtp] 2026-09-01) ──
+// Этап 5 доменного покрытия: extract → конфиг → участники → вина →
+// доказательства (chain of custody: sha256 сервером + журнал доступа) →
+// черновик протокола. По доказательствам НИКОГДА нет AI (§3.1/3.4).
+import type { SandboxDtpDraft, SandboxDtpEvidence } from './types';
+
+export function sandboxDtpAnswer(conversationId: string, text: string) {
+  return apiPost<{ ok: true }>('/admin/sandbox/dtp/answer', { conversationId, text });
+}
+export function sandboxDtpExtract(conversationId: string) {
+  return apiPost<SandboxDtpDraft>('/admin/sandbox/dtp/extract', { conversationId });
+}
+export function sandboxDtpConfig(projectId: string, draft: SandboxDtpDraft) {
+  return apiPost<{ id: string }>('/admin/sandbox/dtp/config', { projectId, ...draft });
+}
+export function sandboxDtpParticipant(configId: string, role: 'SELF' | 'OTHER_PARTY' | 'THIRD_PARTY', displayName?: string, hasFledScene?: boolean) {
+  return apiPost<{ id: string; role: string }>('/admin/sandbox/dtp/participant', { configId, role, displayName, hasFledScene });
+}
+export function sandboxDtpFault(configId: string, source: string, statusText: string, isOfficial?: boolean) {
+  return apiPost<{ id: string }>('/admin/sandbox/dtp/fault', { configId, source, statusText, isOfficial });
+}
+export function sandboxDtpEvidence(configId: string, base64Content: string, contentType: string) {
+  return apiPost<SandboxDtpEvidence>('/admin/sandbox/dtp/evidence', { configId, base64Content, contentType });
+}
+export function sandboxDtpSettlementDraft(configId: string) {
+  return apiGet<SandboxFlSettlementDraft>(`/admin/sandbox/dtp/settlement-draft/${configId}`);
+}
+
+// ── Sandbox: b-подэтапы (Пункт [sandbox-domain-conversations] 2026-09-01) ──
+// Разговор, загруженный в доменный проект (Шаг 2 с целевым проектом),
+// привязывается к встрече/консультации/интервью + продовый AI-разбор.
+
+export function sandboxMpMeetingConclusion(variantId: string, conversationId: string) {
+  return apiPost<{ meetingId: string; conclusionDraft: string | null; criteriaBreakdown: unknown }>('/admin/sandbox/major-purchase/meeting-conclusion', { variantId, conversationId });
+}
+export function sandboxInvMeetingBreakdown(opportunityId: string, conversationId: string) {
+  return apiPost<{ meetingId: string; criteriaBreakdown: unknown }>('/admin/sandbox/investment/meeting-breakdown', { opportunityId, conversationId });
+}
+export function sandboxIpAttachInterview(projectId: string, conversationId: string) {
+  return apiPost<{ statusId: string; stageName: string; note: string }>('/admin/sandbox/interview-pool/attach-interview', { projectId, conversationId });
+}
+export function sandboxFlConsultationBreakdown(configId: string, conversationId: string, advisorLabel?: string) {
+  return apiPost<{ advisorId: string; consultationId: string; criteriaBreakdown: unknown }>('/admin/sandbox/family-law/consultation-breakdown', { configId, conversationId, advisorLabel });
+}
+export function sandboxDtpConsultationBreakdown(configId: string, conversationId: string, advisorLabel?: string) {
+  return apiPost<{ advisorId: string; consultationId: string; criteriaBreakdown: unknown }>('/admin/sandbox/dtp/consultation-breakdown', { configId, conversationId, advisorLabel });
 }

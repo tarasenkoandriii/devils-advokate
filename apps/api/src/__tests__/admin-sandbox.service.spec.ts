@@ -30,6 +30,16 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     project: {
       findFirst: jest.fn(async (): Promise<{ id: string } | null> => null),
       create: jest.fn(async ({ data }: any) => ({ id: 'proj-sandbox', ...data })),
+      // [sandbox-domain-conversations]: доменный проект принадлежит
+      // оператору; чужой ловится тестом ниже.
+      findUnique: jest.fn(async ({ where }: any) => ({ id: where.id, ownerId: OPERATOR })),
+    },
+    interviewPoolConfig: {
+      findUnique: jest.fn(async () => ({ id: 'pc-1', interviewStages: [{ id: 'stage-1', name: 'Тех. интервью' }] })),
+    },
+    candidatePipelineStatus: {
+      findFirst: jest.fn(async () => ({ id: 'st-1', projectId: 'proj-p' })),
+      findUnique: jest.fn(async () => ({ id: 'st-1', projectId: 'proj-p' })),
     },
     transcript: {
       // Итог разбора для очереди: 2 сегмента, 1 сигнал суммарно.
@@ -123,7 +133,104 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
     factCheckConversationSegments: jest.fn(async () => ({ language: 'ru', checkedSegments: 1, totalSegments: 1, results: [] })),
   };
   const turningPoints = { detect: jest.fn(async () => ({ kind: 'tp' })) };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints };
+  // Пункт [sandbox-major-purchase] 2026-09-01 — этап 1 доменного покрытия.
+  const majorPurchaseOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-1' })),
+    getChecklist: jest.fn(async () => ['Проверить VIN', 'История ДТП']),
+    extract: jest.fn(async () => ({ goalDescription: 'Octavia до 20к', budgetMin: null, budgetMax: 20000, currency: 'USD', financingMethod: null, timeline: null, criteria: [{ text: 'не бита', isRequired: true, orderIndex: 0 }] })),
+  };
+  const majorPurchase = {
+    createConfig: jest.fn(async () => ({ id: 'mpc-1' })),
+    createVariant: jest.fn(async () => ({ id: 'var-1', label: 'Octavia 2019' })),
+    getComparisonTable: jest.fn(async () => ({ criteria: [], variants: [] })),
+    createMeeting: jest.fn(async () => ({ id: 'meet-1' })),
+    generateConclusion: jest.fn(async () => ({ id: 'meet-1', conclusionDraft: 'взять на заметку: торг уместен', criteriaBreakdown: [{ criterionId: 'c1', covered: 'yes' }] })),
+  };
+  // Пункт [sandbox-investment] 2026-09-01 — этап 2 доменного покрытия.
+  const investmentOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-i' })),
+    extract: jest.fn(async () => ({ goalDescription: 'Проверить фонд Х', targetBudget: 500000, currency: 'UAH', criteria: [{ text: 'гарантия доходности', category: 'RETURN_GUARANTEE', isRequired: true, orderIndex: 0 }] })),
+  };
+  const investment = {
+    createConfig: jest.fn(async () => ({ id: 'ic-1' })),
+    createOpportunity: jest.fn(async () => ({ id: 'opp-1', label: 'Фонд Х' })),
+    addSourceComparison: jest.fn(async () => ({ id: 'src-1', sourceUrl: 'https://example.com/fund', sourceText: 'x'.repeat(1000) })),
+    getComparisonTable: jest.fn(async () => ({ criteria: [], opportunities: [] })),
+    createMeeting: jest.fn(async () => ({ id: 'imeet-1' })),
+    generateBreakdown: jest.fn(async () => ({ id: 'imeet-1', criteriaBreakdown: [{ criterionId: 'ic-c1', coverage: 'covered' }] })),
+  };
+  const investmentGroups = {
+    createGroup: jest.fn(async () => ({ id: 'grp-1', name: 'Песочная группа' })),
+    createInviteLink: jest.fn(async () => ({ deepLink: 't.me/x', token: 'tok-1', expiresAt: new Date() })),
+    joinGroup: jest.fn(async () => ({ id: 'mem-1', role: 'OWNER' })),
+    setPledge: jest.fn(async () => ({ id: 'mem-1', pledgedAmount: 50000 })),
+    listMyGroups: jest.fn(async () => [{ id: 'grp-1' }]),
+  };
+  // Пункт [sandbox-interview-pool] 2026-09-01 — этап 3 доменного покрытия.
+  const poolOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-p' })),
+    extract: jest.fn(async () => ({ jobTitle: 'Бариста', extendedDescription: 'Кофейня', salaryRange: null, employmentLoad: null, workArrangement: null, officeLocation: null, employmentFormat: null, perks: [], genderRequirement: 'NONE', ageRequirement: 'NONE', minAge: null, maxAge: null, isPhysicallyDemanding: false, interviewStages: [], complianceFlags: [{ category: 'AGE', quotedText: 'до 35 лет' }] })),
+  };
+  const pool = {
+    createConfig: jest.fn(async () => ({ id: 'pc-1' })),
+    generateQuestionnaireDraft: jest.fn(async () => [{ text: 'Опыт с кофе?', category: null, orderIndex: 0, isRequired: true }]),
+    fixQuestionnaire: jest.fn(async () => [{ id: 'q-1' }]),
+    addCandidate: jest.fn(async () => ({ id: 'st-1', stage: 'SCHEDULED' })),
+    recordStageProgress: jest.fn(async () => ({ id: 'prog-1', completedAt: new Date('2026-09-01T12:00:00Z') })),
+  };
+  const poolCandidates = {
+    createCandidate: jest.fn(async () => ({ id: 'cand-1' })),
+  };
+  const poolRelevance = {
+    regenerate: jest.fn(async () => ({ id: 'snap-1', entries: [] })),
+  };
+  const poolReports = {
+    generateSummaryReport: jest.fn(async () => ({ id: 'rep-1', content: { funnel: { totalCandidates: 1, byStage: {} }, entries: [] } })),
+  };
+  const poolTeams = {
+    createTeam: jest.fn(async () => ({ id: 'team-1', name: 'Песочная команда' })),
+    createInviteLink: jest.fn(async () => ({ deepLink: 't.me/x', token: 'ttok-1', expiresAt: new Date() })),
+    joinTeam: jest.fn(async () => ({ id: 'tm-1', role: 'OWNER' })),
+    listMyTeams: jest.fn(async () => [{ id: 'team-1' }]),
+  };
+  // Пункт [sandbox-family-law] 2026-09-01 — этап 4 доменного покрытия.
+  const familyLawOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-f' })),
+    extract: jest.fn(async () => ({ goalDescription: 'Раздел имущества без суда', targetBudget: 100000, currency: 'UAH', criteria: [{ text: 'квартира остаётся детям', category: 'ASSET_DIVISION', isRequired: true, orderIndex: 0 }] })),
+  };
+  const familyLaw = {
+    createConfig: jest.fn(async () => ({ id: 'flc-1' })),
+    createAdvisor: jest.fn(async () => ({ id: 'adv-1' })),
+    createConsultation: jest.fn(async () => ({ id: 'cons-1' })),
+    generateBreakdown: jest.fn(async () => ({ id: 'cons-1', criteriaBreakdown: [{ criterionId: 'fl-c1', coverage: 'covered' }] })),
+  };
+  const familyLawV2 = {
+    createParty: jest.fn(async () => ({ id: 'party-1', role: 'SELF' })),
+    createAsset: jest.fn(async () => ({ id: 'asset-1' })),
+    createBudgetLineItem: jest.fn(async () => ({ id: 'bli-1' })),
+    getBudget: jest.fn(async () => ({ lineItems: [], byCurrency: [{ currency: 'UAH', totalExpense: 50000, totalCoverage: 0, netBudget: 50000 }], targetBudget: 100000, currency: 'UAH' })),
+    getSettlementProtocolDraft: jest.fn(async () => ({ text: 'Це чернетка-компіляція... НЕ юридично завершений документ', generatedAt: new Date().toISOString(), disclaimer: 'НЕ юридично завершений документ' })),
+  };
+  // Пункт [sandbox-dtp] 2026-09-01 — этап 5 доменного покрытия.
+  const dtpOnboarding = {
+    appendAnswer: jest.fn(async () => ({ id: 'seg-d' })),
+    extract: jest.fn(async () => ({ goalDescription: 'Полная выплата от страховой', targetBudget: null, currency: null, occurredAt: '2026-08-30', criteria: [{ text: 'вина установлена протоколом', category: 'FAULT_DETERMINATION', isRequired: true, orderIndex: 0 }] })),
+  };
+  const dtp = {
+    createConfig: jest.fn(async () => ({ id: 'dc-1' })),
+    createEvidence: jest.fn(async () => ({ id: 'ev-1', fileHash: 'a'.repeat(64), mediaType: 'PHOTO', capturedAt: new Date('2026-09-01T10:00:00Z') })),
+    createAdvisor: jest.fn(async () => ({ id: 'dadv-1' })),
+    createConsultation: jest.fn(async () => ({ id: 'dcons-1' })),
+    generateBreakdown: jest.fn(async () => ({ id: 'dcons-1', criteriaBreakdown: [{ criterionId: 'd-c1', coverage: 'covered' }] })),
+  };
+  const dtpV2 = {
+    createParticipant: jest.fn(async () => ({ id: 'pt-1', role: 'SELF' })),
+    createFaultDetermination: jest.fn(async () => ({ id: 'fd-1' })),
+    logEvidenceAccess: jest.fn(async () => undefined),
+    getEvidenceAccessLog: jest.fn(async () => [{ action: 'VIEWED_METADATA', occurredAt: new Date('2026-09-01T10:00:01Z') }]),
+    getSettlementProtocolDraft: jest.fn(async () => ({ text: 'чернетка... НЕ юридично завершений документ', generatedAt: new Date().toISOString(), disclaimer: 'x' })),
+  };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints, majorPurchaseOnboarding, majorPurchase, investmentOnboarding, investment, investmentGroups, poolOnboarding, pool, poolCandidates, poolRelevance, poolReports, poolTeams, familyLawOnboarding, familyLaw, familyLawV2, dtpOnboarding, dtp, dtpV2 };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -144,6 +251,23 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
+    deps.majorPurchaseOnboarding as any,
+    deps.majorPurchase as any,
+    deps.investmentOnboarding as any,
+    deps.investment as any,
+    deps.investmentGroups as any,
+    deps.poolOnboarding as any,
+    deps.pool as any,
+    deps.poolCandidates as any,
+    deps.poolRelevance as any,
+    deps.poolReports as any,
+    deps.poolTeams as any,
+    deps.familyLawOnboarding as any,
+    deps.familyLaw as any,
+    deps.familyLawV2 as any,
+    deps.dtpOnboarding as any,
+    deps.dtp as any,
+    deps.dtpV2 as any,
   );
 }
 
@@ -198,6 +322,11 @@ describe('AdminSandboxService.getStatus', () => {
     expect(byKey['llm'].ok).toBe(false);
     expect(byKey['seed'].ok).toBe(true);
     expect(byKey['consents'].ok).toBe(false); // hasActiveConsent → false
+    // Аудит [fact-check-audit]: ключ факт-чека появился в чеклисте;
+    // ok всегда true (опционален — без него режим AI-гипотез), но
+    // detail различает режимы.
+    expect(byKey['fact-check'].ok).toBe(true);
+    expect(byKey['fact-check'].detail).toMatch(/AI-гипотез/);
   });
 });
 
@@ -524,6 +653,217 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     await expect(svc.healthUploadLabDocument(REGULAR, 'hc-1', 'x')).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('major-purchase-цикл (ответ → чек-лист → extract → config → вариант → таблица) делегируется продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.mpAppendAnswer(OPERATOR, 'conv-mp', 'бюджет до 20 тысяч долларов');
+    expect(deps.majorPurchaseOnboarding.appendAnswer).toHaveBeenCalledWith(OPERATOR, 'conv-mp', 'бюджет до 20 тысяч долларов');
+
+    const checklist = await svc.mpChecklist(OPERATOR, 'conv-mp', 'VEHICLE' as never);
+    expect(deps.majorPurchaseOnboarding.getChecklist).toHaveBeenCalledWith(OPERATOR, 'conv-mp', 'VEHICLE');
+    expect(checklist.items).toContain('Проверить VIN');
+
+    const draft = await svc.mpExtract(OPERATOR, 'conv-mp', 'VEHICLE' as never);
+    expect(deps.majorPurchaseOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-mp', 'VEHICLE');
+
+    const config = await svc.mpCreateConfig(OPERATOR, 'proj-mp', 'VEHICLE' as never, draft as never);
+    expect(deps.majorPurchase.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-mp', 'VEHICLE', draft);
+    expect(config.id).toBe('mpc-1');
+
+    await svc.mpAddVariant(OPERATOR, 'mpc-1', 'Octavia 2019', 18500, 'USD');
+    expect(deps.majorPurchase.createVariant).toHaveBeenCalledWith(OPERATOR, 'mpc-1', 'Octavia 2019', 18500, 'USD');
+
+    await svc.mpComparisonTable(OPERATOR, 'mpc-1');
+    expect(deps.majorPurchase.getComparisonTable).toHaveBeenCalledWith(OPERATOR, 'mpc-1');
+
+    await expect(svc.mpExtract(REGULAR, 'conv-mp', 'VEHICLE' as never)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.mpAddVariant(REGULAR, 'mpc-1', 'x')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('investment-цикл (ответ → extract → config → возможность → источник → таблица) и смоук групп делегируются продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.invAppendAnswer(OPERATOR, 'conv-i', 'фонд обещает 30% годовых');
+    expect(deps.investmentOnboarding.appendAnswer).toHaveBeenCalledWith(OPERATOR, 'conv-i', 'фонд обещает 30% годовых');
+
+    const draft = await svc.invExtract(OPERATOR, 'conv-i');
+    expect(deps.investmentOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-i');
+
+    const config = await svc.invCreateConfig(OPERATOR, 'proj-i', draft as never);
+    expect(deps.investment.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-i', draft);
+    expect(config.id).toBe('ic-1');
+
+    await svc.invAddOpportunity(OPERATOR, 'ic-1', 'Фонд Х', 'Иван');
+    expect(deps.investment.createOpportunity).toHaveBeenCalledWith(OPERATOR, 'ic-1', 'Фонд Х', 'Иван', undefined);
+
+    // Сырой текст источника НЕ возвращается целиком — только длина и превью.
+    const src = await svc.invSourceComparison(OPERATOR, 'opp-1', 'https://example.com/fund');
+    expect(deps.investment.addSourceComparison).toHaveBeenCalledWith(OPERATOR, 'opp-1', 'https://example.com/fund');
+    expect(src.sourceTextLength).toBe(1000);
+    expect(src.sourceTextPreview).toHaveLength(400);
+    expect((src as Record<string, unknown>).sourceText).toBeUndefined();
+
+    await svc.invComparisonTable(OPERATOR, 'ic-1');
+    expect(deps.investment.getComparisonTable).toHaveBeenCalledWith(OPERATOR, 'ic-1');
+
+    // Смоук групп: создать → инвайт → повторный вход своим токеном → pledge.
+    const smoke = await svc.invGroupSmoke(OPERATOR, 50000);
+    expect(deps.investmentGroups.createGroup).toHaveBeenCalledTimes(1);
+    expect(deps.investmentGroups.joinGroup).toHaveBeenCalledWith(OPERATOR, 'tok-1');
+    expect(deps.investmentGroups.setPledge).toHaveBeenCalledWith(OPERATOR, 'grp-1', 50000);
+    expect(smoke.rejoinIdempotent).toBe(true);
+    expect(smoke.notes).toContain('не имперсонирует');
+
+    await expect(svc.invExtract(REGULAR, 'conv-i')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.invGroupSmoke(REGULAR, 1)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('interview-pool-цикл (extract с compliance-флагами → config → анкета draft/fix → кандидат → релевантность → отчёт) делегируется продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const draft = await svc.ipExtract(OPERATOR, 'conv-p');
+    expect(deps.poolOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-p');
+    expect(draft.complianceFlags[0]).toMatchObject({ category: 'AGE' }); // флаг доходит до оператора, не вычищается
+
+    await svc.ipCreateConfig(OPERATOR, 'proj-p', draft as never);
+    expect(deps.pool.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-p', draft);
+
+    // Анкета: два ОТДЕЛЬНЫХ шага — AI предлагает, человек утверждает.
+    const q = await svc.ipQuestionnaireDraft(OPERATOR, 'proj-p');
+    expect(deps.pool.generateQuestionnaireDraft).toHaveBeenCalledWith(OPERATOR, 'proj-p');
+    expect(deps.pool.fixQuestionnaire).not.toHaveBeenCalled();
+    const fixed = await svc.ipFixQuestionnaire(OPERATOR, 'proj-p', q.items as never);
+    expect(deps.pool.fixQuestionnaire).toHaveBeenCalledWith(OPERATOR, 'proj-p', q.items);
+    expect(fixed.count).toBe(1);
+
+    const cand = await svc.ipAddCandidate(OPERATOR, 'proj-p', 'Анна', 'бариста 3 года');
+    expect(deps.poolCandidates.createCandidate).toHaveBeenCalledWith(OPERATOR, 'Анна', undefined, 'бариста 3 года');
+    expect(deps.pool.addCandidate).toHaveBeenCalledWith(OPERATOR, 'proj-p', 'cand-1', false); // reuseHistory=false — дефолт продукта
+    expect(cand.statusId).toBe('st-1');
+
+    // Релевантность без завершённых собеседований — честно пустой
+    // снимок с пояснением, не сбой.
+    const rel = await svc.ipRelevance(OPERATOR, 'proj-p');
+    expect(rel.entries).toEqual([]);
+    expect(rel.note).toMatch(/завершённых собеседований/);
+
+    const rep = await svc.ipSummaryReport(OPERATOR, 'proj-p');
+    expect(rep.reportId).toBe('rep-1');
+
+    const team = await svc.ipTeamSmoke(OPERATOR);
+    expect(deps.poolTeams.joinTeam).toHaveBeenCalledWith(OPERATOR, 'ttok-1');
+    expect(team.rejoinIdempotent).toBe(true);
+
+    await expect(svc.ipExtract(REGULAR, 'conv-p')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.ipTeamSmoke(REGULAR)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('family-law-цикл (extract → config → сторона → актив → бюджет → черновик протокола с дисклеймером) делегируется продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const draft = await svc.flExtract(OPERATOR, 'conv-f');
+    expect(deps.familyLawOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-f');
+
+    const config = await svc.flCreateConfig(OPERATOR, 'proj-f', draft as never);
+    expect(deps.familyLaw.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-f', draft);
+    expect(config.id).toBe('flc-1');
+
+    await svc.flAddParty(OPERATOR, 'flc-1', 'SELF', 'Андрей');
+    expect(deps.familyLawV2.createParty).toHaveBeenCalledWith(OPERATOR, 'flc-1', 'SELF', 'Андрей');
+
+    await svc.flAddAsset(OPERATOR, 'flc-1', 'квартира', 2500000, 'UAH', true);
+    // позиционные undefined — description/ownerId в панель не выведены.
+    expect(deps.familyLawV2.createAsset).toHaveBeenCalledWith(OPERATOR, 'flc-1', 'квартира', undefined, undefined, true, 2500000, 'UAH');
+
+    const budget = await svc.flAddBudgetItem(OPERATOR, 'flc-1', 'LEGAL_FEES', 'EXPENSE', 50000, 'UAH');
+    expect(deps.familyLawV2.createBudgetLineItem).toHaveBeenCalledWith(OPERATOR, 'flc-1', 'LEGAL_FEES', 'EXPENSE', 50000, 'UAH');
+    expect(budget.byCurrency[0].netBudget).toBe(50000); // сразу свежий свод, без второй кнопки
+
+    // «Жемчужина»: черновик протокола приходит С продовым дисклеймером
+    // «не юридический документ» — песочница его не срезает.
+    const settlement = await svc.flSettlementDraft(OPERATOR, 'flc-1');
+    expect(settlement.text).toMatch(/НЕ юридично/);
+
+    await expect(svc.flExtract(REGULAR, 'conv-f')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.flSettlementDraft(REGULAR, 'flc-1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('dtp-цикл (extract → config → участник → вина → доказательство с журналом доступа → черновик протокола) делегируется продовым сервисам; не-оператору — отказ', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const draft = await svc.dtpExtract(OPERATOR, 'conv-d');
+    expect(deps.dtpOnboarding.extract).toHaveBeenCalledWith(OPERATOR, 'conv-d');
+
+    await svc.dtpCreateConfig(OPERATOR, 'proj-d', draft as never);
+    expect(deps.dtp.createConfig).toHaveBeenCalledWith(OPERATOR, 'proj-d', draft);
+
+    await svc.dtpAddParticipant(OPERATOR, 'dc-1', 'SELF');
+    expect(deps.dtpV2.createParticipant).toHaveBeenCalledWith(OPERATOR, 'dc-1', 'SELF', undefined, undefined);
+
+    await svc.dtpFault(OPERATOR, 'dc-1', 'POLICE', 'виновник признал вину', true);
+    expect(deps.dtpV2.createFaultDetermination).toHaveBeenCalledWith(OPERATOR, 'dc-1', 'POLICE', 'виновник признал вину', expect.any(String), true);
+
+    // Доказательство: PHOTO без аудио и без гео (не требовать LOCATION
+    // ради смоука), сразу запись в журнал и его чтение.
+    const ev = await svc.dtpUploadEvidence(OPERATOR, 'dc-1', 'aGVsbG8=', 'image/jpeg');
+    expect(deps.dtp.createEvidence).toHaveBeenCalledWith(OPERATOR, 'dc-1', 'PHOTO', false, 'aGVsbG8=', 'image/jpeg', expect.any(String));
+    expect(deps.dtpV2.logEvidenceAccess).toHaveBeenCalledWith(OPERATOR, 'ev-1', 'VIEWED_METADATA');
+    expect(ev.fileHash).toBe('a'.repeat(64));
+    expect(ev.accessLog[0]).toMatchObject({ action: 'VIEWED_METADATA' });
+
+    const settlement = await svc.dtpSettlementDraft(OPERATOR, 'dc-1');
+    expect(settlement.text).toMatch(/НЕ юридично/);
+
+    await expect(svc.dtpExtract(REGULAR, 'conv-d')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.dtpUploadEvidence(REGULAR, 'dc-1', 'x', 'image/jpeg')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('[sandbox-domain-conversations]: загрузка в доменный проект + пять b-подэтапов делегируются продовым сервисам', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    // Загрузка с targetProjectId идёт в указанный проект (владение
+    // проверено через project.findUnique), песочный не создаётся.
+    const up = await svc.createUploadConversation(OPERATOR, false, 60, 'proj-mp');
+    expect(up.projectId).toBe('proj-mp');
+    expect(deps.prisma.project.create).not.toHaveBeenCalled();
+
+    // Чужой проект — отказ (мок вернёт ownerId!==REGULAR для запроса от REGULAR? — тут проверяем ветку «не владелец»)
+    (deps.prisma.project.findUnique as jest.Mock).mockResolvedValueOnce({ id: 'p-x', ownerId: 'someone-else' });
+    await expect(svc.createUploadConversation(OPERATOR, false, 60, 'p-x')).rejects.toThrow(/не найден или принадлежит/);
+
+    // 1b: встреча + заключение.
+    const mp = await svc.mpMeetingConclusion(OPERATOR, 'var-1', 'conv-rec');
+    expect(deps.majorPurchase.createMeeting).toHaveBeenCalledWith(OPERATOR, 'var-1', 'conv-rec', expect.any(String));
+    expect(deps.majorPurchase.generateConclusion).toHaveBeenCalledWith(OPERATOR, 'meet-1');
+    expect(mp.conclusionDraft).toContain('торг');
+
+    // 2b: встреча + нейтральный разбор.
+    await svc.invMeetingBreakdown(OPERATOR, 'opp-1', 'conv-rec');
+    expect(deps.investment.generateBreakdown).toHaveBeenCalledWith(OPERATOR, 'imeet-1');
+
+    // 3b: привязка интервью — первая стадия + первый кандидат, completedAt задан.
+    const ip = await svc.ipAttachInterview(OPERATOR, 'proj-p', 'conv-rec');
+    expect(deps.pool.recordStageProgress).toHaveBeenCalledWith(OPERATOR, 'st-1', 'stage-1', 'conv-rec', expect.any(String));
+    expect(ip.note).toMatch(/упрощение песочницы/);
+
+    // 4b/5b: советник → консультация → разбор.
+    await svc.flConsultationBreakdown(OPERATOR, 'flc-1', 'Юрист', 'conv-rec');
+    expect(deps.familyLaw.createConsultation).toHaveBeenCalledWith(OPERATOR, 'adv-1', 'conv-rec', expect.any(String));
+    expect(deps.familyLaw.generateBreakdown).toHaveBeenCalledWith(OPERATOR, 'cons-1');
+    await svc.dtpConsultationBreakdown(OPERATOR, 'dc-1', '', 'conv-rec');
+    expect(deps.dtp.createAdvisor).toHaveBeenCalledWith(OPERATOR, 'dc-1', 'Песочный юрист'); // пустой label → дефолт
+    expect(deps.dtp.generateBreakdown).toHaveBeenCalledWith(OPERATOR, 'dcons-1');
+
+    await expect(svc.mpMeetingConclusion(REGULAR, 'var-1', 'c')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.ipAttachInterview(REGULAR, 'proj-p', 'c')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('согласия песочницы включают HEALTH_DATA — без него dispatch в health падал бы на createProject', async () => {
     const deps = makeDeps();
     const svc = makeService(deps);
@@ -544,7 +884,9 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     const deps = makeDeps();
     const svc = makeService(deps);
     const res = await svc.factCheckConversation(OPERATOR, 'conv-1');
-    expect(deps.discrepancy.factCheckConversationSegments).toHaveBeenCalledWith('conv-1');
+    // [fact-check-ai-fallback]: userId оператора передаётся дальше —
+    // AI-фоллбек внутри требует владельца вызова (согласия/биллинг).
+    expect(deps.discrepancy.factCheckConversationSegments).toHaveBeenCalledWith(OPERATOR, 'conv-1');
     expect(res.checkedSegments).toBe(1);
     await expect(svc.factCheckConversation(REGULAR, 'conv-1')).rejects.toBeInstanceOf(ForbiddenException);
   });

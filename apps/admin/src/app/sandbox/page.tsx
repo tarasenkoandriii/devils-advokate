@@ -41,6 +41,47 @@ import {
   sandboxHealthConfig,
   sandboxHealthLabDocument,
   sandboxHealthLabVerify,
+  sandboxMpAnswer,
+  sandboxMpChecklist,
+  sandboxMpExtract,
+  sandboxMpConfig,
+  sandboxMpVariant,
+  sandboxMpComparison,
+  sandboxInvAnswer,
+  sandboxInvExtract,
+  sandboxInvConfig,
+  sandboxInvOpportunity,
+  sandboxInvSourceComparison,
+  sandboxInvComparison,
+  sandboxInvGroupSmoke,
+  sandboxIpAnswer,
+  sandboxIpExtract,
+  sandboxIpConfig,
+  sandboxIpQuestionnaireDraft,
+  sandboxIpQuestionnaireFix,
+  sandboxIpCandidate,
+  sandboxIpRelevance,
+  sandboxIpSummaryReport,
+  sandboxIpTeamSmoke,
+  sandboxFlAnswer,
+  sandboxFlExtract,
+  sandboxFlConfig,
+  sandboxFlParty,
+  sandboxFlAsset,
+  sandboxFlBudgetItem,
+  sandboxFlSettlementDraft,
+  sandboxDtpAnswer,
+  sandboxDtpExtract,
+  sandboxDtpConfig,
+  sandboxDtpParticipant,
+  sandboxDtpFault,
+  sandboxDtpEvidence,
+  sandboxDtpSettlementDraft,
+  sandboxMpMeetingConclusion,
+  sandboxInvMeetingBreakdown,
+  sandboxIpAttachInterview,
+  sandboxFlConsultationBreakdown,
+  sandboxDtpConsultationBreakdown,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -55,6 +96,21 @@ import type {
   SandboxDiagnosis,
   SandboxIntakeState,
   SandboxHealthDraft,
+  SandboxMpDraft,
+  SandboxMpComparison,
+  SandboxInvDraft,
+  SandboxInvComparison,
+  SandboxInvGroupSmoke,
+  SandboxIpDraft,
+  SandboxIpQuestionnaireItem,
+  SandboxIpRelevance,
+  SandboxIpSummaryReport,
+  SandboxIpTeamSmoke,
+  SandboxFlDraft,
+  SandboxFlBudget,
+  SandboxFlSettlementDraft,
+  SandboxDtpDraft,
+  SandboxDtpEvidence,
 } from '../../lib/types';
 import { VoiceTextInput } from '../../components/VoiceTextInput';
 
@@ -252,6 +308,145 @@ export default function SandboxPage() {
     }
   }
 
+  // ── Пункт [sandbox-major-purchase] 2026-09-01 — этап 1 доменного
+  // покрытия: крупная покупка после dispatch. Ответы → чек-лист (AI)
+  // → extract (AI) → конфиг → варианты → сравнительная таблица.
+  const [mpCategory, setMpCategory] = useState<'REAL_ESTATE' | 'VEHICLE'>('VEHICLE');
+  const [mpAnswerText, setMpAnswerText] = useState('');
+  const [mpChecklistItems, setMpChecklistItems] = useState<string[] | null>(null);
+  const [mpDraft, setMpDraft] = useState<SandboxMpDraft | null>(null);
+  const [mpConfigId, setMpConfigId] = useState<string | null>(null);
+  const [mpVariantLabel, setMpVariantLabel] = useState('');
+  const [mpVariantPrice, setMpVariantPrice] = useState('');
+  const [mpComparison, setMpComparison] = useState<SandboxMpComparison | null>(null);
+  const [mpBusy, setMpBusy] = useState<string | null>(null);
+  const [mpError, setMpError] = useState<string | null>(null);
+
+  async function withMp(action: string, fn: () => Promise<void>) {
+    setMpBusy(action);
+    setMpError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setMpError(errText(e));
+    } finally {
+      setMpBusy(null);
+    }
+  }
+
+  // ── Пункт [sandbox-investment] 2026-09-01 — этап 2 доменного
+  // покрытия: инвестиции после dispatch + смоук групп.
+  const [invAnswerText, setInvAnswerText] = useState('');
+  const [invDraft, setInvDraft] = useState<SandboxInvDraft | null>(null);
+  const [invConfigId, setInvConfigId] = useState<string | null>(null);
+  const [invOppLabel, setInvOppLabel] = useState('');
+  const [invOppAdvisor, setInvOppAdvisor] = useState('');
+  const [invOppId, setInvOppId] = useState<string | null>(null);
+  const [invSourceUrl, setInvSourceUrl] = useState('');
+  const [invSourceResult, setInvSourceResult] = useState<{ sourceUrl: string; sourceTextLength: number; sourceTextPreview: string } | null>(null);
+  const [invComparison, setInvComparison] = useState<SandboxInvComparison | null>(null);
+  const [invGroupResult, setInvGroupResult] = useState<SandboxInvGroupSmoke | null>(null);
+  const [invBusy, setInvBusy] = useState<string | null>(null);
+  const [invError, setInvError] = useState<string | null>(null);
+
+  async function withInv(action: string, fn: () => Promise<void>) {
+    setInvBusy(action);
+    setInvError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setInvError(errText(e));
+    } finally {
+      setInvBusy(null);
+    }
+  }
+
+  // ── Пункт [sandbox-interview-pool] 2026-09-01 — этап 3 доменного
+  // покрытия: подбор персонала после dispatch.
+  const [ipAnswerText, setIpAnswerText] = useState('');
+  const [ipDraft, setIpDraft] = useState<SandboxIpDraft | null>(null);
+  const [ipConfigDone, setIpConfigDone] = useState(false);
+  const [ipQuestionnaire, setIpQuestionnaire] = useState<SandboxIpQuestionnaireItem[] | null>(null);
+  const [ipQuestionnaireFixed, setIpQuestionnaireFixed] = useState(false);
+  const [ipCandidateName, setIpCandidateName] = useState('');
+  const [ipCandidateResume, setIpCandidateResume] = useState('');
+  const [ipCandidates, setIpCandidates] = useState<string[]>([]);
+  const [ipRelevanceRes, setIpRelevanceRes] = useState<SandboxIpRelevance | null>(null);
+  const [ipReport, setIpReport] = useState<SandboxIpSummaryReport | null>(null);
+  const [ipTeamRes, setIpTeamRes] = useState<SandboxIpTeamSmoke | null>(null);
+  const [ipBusy, setIpBusy] = useState<string | null>(null);
+  const [ipError, setIpError] = useState<string | null>(null);
+
+  async function withIp(action: string, fn: () => Promise<void>) {
+    setIpBusy(action);
+    setIpError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setIpError(errText(e));
+    } finally {
+      setIpBusy(null);
+    }
+  }
+
+  // ── Пункт [sandbox-family-law] 2026-09-01 — этап 4 доменного
+  // покрытия: семейное право после dispatch.
+  const [flAnswerText, setFlAnswerText] = useState('');
+  const [flDraft, setFlDraft] = useState<SandboxFlDraft | null>(null);
+  const [flConfigId, setFlConfigId] = useState<string | null>(null);
+  const [flParties, setFlParties] = useState<string[]>([]);
+  const [flPartyRole, setFlPartyRole] = useState<'SELF' | 'SPOUSE'>('SELF');
+  const [flPartyName, setFlPartyName] = useState('');
+  const [flAssetType, setFlAssetType] = useState('');
+  const [flAssetValue, setFlAssetValue] = useState('');
+  const [flAssets, setFlAssets] = useState<string[]>([]);
+  const [flBudgetAmount, setFlBudgetAmount] = useState('');
+  const [flBudgetCategory, setFlBudgetCategory] = useState('LEGAL_FEES');
+  const [flBudgetDirection, setFlBudgetDirection] = useState('EXPENSE');
+  const [flBudget, setFlBudget] = useState<SandboxFlBudget | null>(null);
+  const [flSettlement, setFlSettlement] = useState<SandboxFlSettlementDraft | null>(null);
+  const [flBusy, setFlBusy] = useState<string | null>(null);
+  const [flError, setFlError] = useState<string | null>(null);
+
+  async function withFl(action: string, fn: () => Promise<void>) {
+    setFlBusy(action);
+    setFlError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setFlError(errText(e));
+    } finally {
+      setFlBusy(null);
+    }
+  }
+
+  // ── Пункт [sandbox-dtp] 2026-09-01 — этап 5 доменного покрытия:
+  // ДТП после dispatch (последним — данные собирать труднее).
+  const [dtpAnswerText, setDtpAnswerText] = useState('');
+  const [dtpDraft, setDtpDraft] = useState<SandboxDtpDraft | null>(null);
+  const [dtpConfigId, setDtpConfigId] = useState<string | null>(null);
+  const [dtpRole, setDtpRole] = useState<'SELF' | 'OTHER_PARTY' | 'THIRD_PARTY'>('SELF');
+  const [dtpParticipants, setDtpParticipants] = useState<string[]>([]);
+  const [dtpFaultSource, setDtpFaultSource] = useState('POLICE');
+  const [dtpFaultText, setDtpFaultText] = useState('');
+  const [dtpFaultDone, setDtpFaultDone] = useState(false);
+  const [dtpEvidence, setDtpEvidence] = useState<SandboxDtpEvidence | null>(null);
+  const [dtpSettlement, setDtpSettlement] = useState<SandboxFlSettlementDraft | null>(null);
+  const [dtpBusy, setDtpBusy] = useState<string | null>(null);
+  const [dtpError, setDtpError] = useState<string | null>(null);
+
+  async function withDtp(action: string, fn: () => Promise<void>) {
+    setDtpBusy(action);
+    setDtpError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setDtpError(errText(e));
+    } finally {
+      setDtpBusy(null);
+    }
+  }
+
   // Диагностика зависшего PROCESSING: живой статус у провайдера +
   // внеочередной опрос + вердикт словами. По itemId.
   const [diagnoses, setDiagnoses] = useState<Record<string, SandboxDiagnosis | 'loading' | string>>({});
@@ -396,6 +591,76 @@ export default function SandboxPage() {
   const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // ── Пункт [sandbox-domain-conversations] 2026-09-01 — b-подэтапы:
+  // Шаг 2 умеет грузить запись в ДОМЕННЫЙ проект (кнопка в панели
+  // домена ставит цель), расшифрованный conversationId подставляется
+  // в поле b-шага автоматически.
+  const [uploadTargetProject, setUploadTargetProject] = useState<{ projectId: string; label: string } | null>(null);
+  const [bConversationId, setBConversationId] = useState('');
+  const [bBusy, setBBusy] = useState(false);
+  const [bError, setBError] = useState<string | null>(null);
+  const [bResult, setBResult] = useState<{ summary: string; breakdown: unknown } | null>(null);
+
+  async function runBStep(fn: () => Promise<{ summary: string; breakdown: unknown }>) {
+    setBBusy(true);
+    setBError(null);
+    try {
+      setBResult(await fn());
+    } catch (e) {
+      setBError(errText(e));
+    } finally {
+      setBBusy(false);
+    }
+  }
+
+  // Общий блок b-шага для панелей доменов: цель загрузки → id
+  // расшифрованного разговора → продовый AI-разбор.
+  function renderBStep(opts: { projectId: string; label: string; runLabel: string; disabledReason?: string | null; onRun: (conversationId: string) => Promise<{ summary: string; breakdown: unknown }> }) {
+    const targeted = uploadTargetProject?.projectId === opts.projectId;
+    return (
+      <div style={{ marginTop: 10, borderTop: '1px dashed var(--border, #2a2f3a)', paddingTop: 8 }}>
+        <b>Подэтап b — запись разговора + AI-разбор</b>
+        <p className="muted" style={{ margin: '4px 0 6px', fontSize: 12 }}>
+          1) нажмите «Грузить сюда», 2) загрузите файл в Шаге 2 (расшифровка платная), 3) после
+          расшифровки id подставится сам — запустите разбор.
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setUploadTargetProject(targeted ? null : { projectId: opts.projectId, label: opts.label })}
+          >
+            {targeted ? '✓ Шаг 2 грузит сюда — сбросить' : 'Грузить сюда (Шаг 2)'}
+          </button>
+          <input
+            type="text"
+            value={bConversationId}
+            onChange={(e) => setBConversationId(e.target.value)}
+            placeholder="conversationId расшифрованного разговора…"
+            style={{ flex: '1 1 260px' }}
+          />
+          <button
+            type="button"
+            disabled={bBusy || !bConversationId.trim() || Boolean(opts.disabledReason)}
+            title={opts.disabledReason ?? undefined}
+            onClick={() => runBStep(() => opts.onRun(bConversationId.trim()))}
+          >
+            {bBusy ? 'Разбираем…' : opts.runLabel}
+          </button>
+        </div>
+        {opts.disabledReason && <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>{opts.disabledReason}</p>}
+        {bError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{bError}</p>}
+        {bResult && (
+          <div style={{ marginTop: 6, fontSize: 13 }}>
+            <span className="badge badge-ok">РАЗБОР ГОТОВ</span> {bResult.summary}
+            {bResult.breakdown != null && (
+              <pre style={{ maxHeight: 200, overflow: 'auto', fontSize: 12, marginTop: 4 }}>{JSON.stringify(bResult.breakdown, null, 2)}</pre>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   async function handleFileRun() {
     if (!file) return;
     setUploadError(null);
@@ -405,7 +670,7 @@ export default function SandboxPage() {
     try {
       setUploadPhase('preparing');
       const isVideo = file.type.startsWith('video/');
-      const { projectId, conversationId } = await createSandboxUploadConversation(isVideo);
+      const { projectId, conversationId } = await createSandboxUploadConversation(isVideo, undefined, uploadTargetProject?.projectId);
 
       // Префикс обязан совпадать с AUDIO_PREFIX на бэкенде — токен вне
       // него просто не выдадут.
@@ -436,6 +701,10 @@ export default function SandboxPage() {
 
       setUploadPhase('starting');
       const started = await sandboxTranscribe(conversationId);
+
+      // b-подэтап: id разговора в доменном проекте подставляется в поле
+      // разбора сам — оператору не нужно копировать его руками.
+      if (uploadTargetProject) setBConversationId(conversationId);
 
       // Дальше — та же панель статуса и те же кнопки анализа, что у
       // синтетического прогона: run единый для обоих путей.
@@ -775,19 +1044,40 @@ export default function SandboxPage() {
                       // всем сегментам backend теперь отдаёт ошибкой
                       // запроса — ветка typeof fc === 'string' выше).
                       const withErrors = fc.results.filter((r) => r.error);
+                      // Пункт [fact-check-ai-fallback] 2026-09-01 —
+                      // показываются и сегменты с AI-гипотезой: та же
+                      // кнопка, два слоя результата, ясно размеченных.
+                      const shown = fc.results.filter((r) => r.matches.length > 0 || r.ai);
+                      const AI_VERDICT_LABELS: Record<string, string> = {
+                        SUPPORTED: 'согласуется с фактами',
+                        CONTRADICTED: 'противоречит фактам',
+                        DISPUTED: 'источники расходятся',
+                        UNVERIFIABLE: 'непроверяемо',
+                      };
                       return (
                         <div style={{ marginTop: 8, fontSize: 13 }}>
                           <p className="muted" style={{ margin: '0 0 6px' }}>
-                            Проверено сегментов: {fc.checkedSegments} из {fc.totalSegments}. Совпадения найдены
-                            в {withMatches.length}. Это поиск по базе опубликованных фактчеков — отсутствие
-                            совпадений НЕ подтверждает утверждение.
+                            Проверено сегментов: {fc.checkedSegments} из {fc.totalSegments}. Совпадения в базе
+                            фактчеков: {withMatches.length}
+                            {fc.aiFallbackUsed && <> · AI-гипотезы: {fc.aiCheckedSegments} (модель с веб-поиском — это ГИПОТЕЗА, не подтверждённый фактчек)</>}.
+                            Отсутствие совпадений НЕ подтверждает утверждение.
                           </p>
-                          {withErrors.length > 0 && (
+                          {!fc.apiKeyPresent && (
+                            <p style={{ color: 'var(--signal-critical)', margin: '0 0 6px' }}>
+                              FACT_CHECK_TOOLS_API_KEY не задан — база фактчеков пропущена, ниже только AI-гипотезы.
+                            </p>
+                          )}
+                          {fc.apiKeyPresent && withErrors.length > 0 && (
                             <p style={{ color: 'var(--signal-critical)', margin: '0 0 6px' }}>
                               Сбой поиска по {withErrors.length} сегм.: {withErrors[0].error}
                             </p>
                           )}
-                          {withMatches.map((r) => (
+                          {fc.aiError && (
+                            <p style={{ color: 'var(--signal-critical)', margin: '0 0 6px' }}>
+                              AI-фоллбек не удался: {fc.aiError}
+                            </p>
+                          )}
+                          {shown.map((r) => (
                             <div key={r.segmentId} style={{ marginBottom: 10, border: '1px solid var(--border, #2a2f3a)', borderRadius: 6, padding: '6px 10px' }}>
                               <div className="muted" style={{ fontSize: 12 }}>[{msToTimecode(r.startMs)}] {r.text.slice(0, 160)}</div>
                               {r.matches.map((m, i) => (
@@ -805,6 +1095,20 @@ export default function SandboxPage() {
                                   )}
                                 </div>
                               ))}
+                              {r.ai && (
+                                <div style={{ marginTop: 4 }}>
+                                  <span
+                                    className={`badge ${r.ai.verdict === 'CONTRADICTED' ? 'badge-bad' : r.ai.verdict === 'SUPPORTED' ? 'badge-ok' : 'badge-pending'}`}
+                                    title="Гипотеза модели с веб-поиском — не рейтинг аккредитованного фактчекера"
+                                  >
+                                    AI: {AI_VERDICT_LABELS[r.ai.verdict] ?? r.ai.verdict} · {Math.round(r.ai.confidence * 100)}%
+                                  </span>{' '}
+                                  <span>{r.ai.rationale}</span>
+                                  {r.ai.sources.length > 0 && (
+                                    <span className="muted"> — источники (не проверены): {r.ai.sources.join('; ')}</span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1070,6 +1374,1079 @@ export default function SandboxPage() {
                         {healthError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{healthError}</p>}
                       </div>
                     )}
+
+                    {/* Пункт [sandbox-major-purchase] 2026-09-01 — этап 1
+                        доменного покрытия: цикл крупной покупки до
+                        сравнительной таблицы, продовыми сервисами. */}
+                    {intakeState.chosenScenario === 'major-purchase' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг крупной покупки</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Ответы квиза уже перенесены в разговор. Выберите категорию, при желании добавьте
+                          деталей (бюджет, критерии) — «Чек-лист» и «Извлечь конфиг» — реальные LLM-вызовы.
+                        </p>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                          <select value={mpCategory} onChange={(e) => setMpCategory(e.target.value as 'REAL_ESTATE' | 'VEHICLE')} disabled={mpDraft !== null}>
+                            <option value="VEHICLE">Автомобиль</option>
+                            <option value="REAL_ESTATE">Недвижимость</option>
+                          </select>
+                          <button
+                            type="button"
+                            disabled={mpBusy !== null}
+                            onClick={() =>
+                              withMp('checklist', async () => {
+                                const r = await sandboxMpChecklist(intakeState.conversationId as string, mpCategory);
+                                setMpChecklistItems(r.items);
+                              })
+                            }
+                          >
+                            {mpBusy === 'checklist' ? 'Генерируем…' : 'Чек-лист тем (AI)'}
+                          </button>
+                        </div>
+                        {mpChecklistItems && (
+                          <ul style={{ margin: '6px 0', fontSize: 13 }}>
+                            {mpChecklistItems.map((c, i) => <li key={i}>{c}</li>)}
+                          </ul>
+                        )}
+                        {!mpDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={mpAnswerText}
+                              onChange={(e) => setMpAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ (необязательно)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={mpBusy !== null || !mpAnswerText.trim()}
+                              onClick={() =>
+                                withMp('answer', async () => {
+                                  await sandboxMpAnswer(intakeState.conversationId as string, mpAnswerText);
+                                  setMpAnswerText('');
+                                })
+                              }
+                            >
+                              {mpBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={mpBusy !== null}
+                              onClick={() =>
+                                withMp('extract', async () => {
+                                  setMpDraft(await sandboxMpExtract(intakeState.conversationId as string, mpCategory));
+                                })
+                              }
+                            >
+                              {mpBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {mpDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>Черновик конфига:</b> {mpDraft.goalDescription}</div>
+                            <div className="muted" style={{ fontSize: 13 }}>
+                              {mpDraft.budgetMin !== null || mpDraft.budgetMax !== null ? (
+                                <>бюджет: {mpDraft.budgetMin ?? '…'}–{mpDraft.budgetMax ?? '…'} {mpDraft.currency ?? ''}</>
+                              ) : 'бюджет не назван'}
+                              {mpDraft.financingMethod && <> · финансирование: {mpDraft.financingMethod}</>}
+                              {mpDraft.timeline && <> · сроки: {mpDraft.timeline}</>}
+                            </div>
+                            <ul style={{ margin: '6px 0' }}>
+                              {mpDraft.criteria.map((c, i) => (
+                                <li key={i}>{c.text}{c.isRequired && <span className="muted"> · обязательный</span>}</li>
+                              ))}
+                            </ul>
+                            {!mpConfigId ? (
+                              <button
+                                type="button"
+                                disabled={mpBusy !== null}
+                                onClick={() =>
+                                  withMp('config', async () => {
+                                    const res = await sandboxMpConfig(
+                                      (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                      mpCategory,
+                                      mpDraft,
+                                    );
+                                    setMpConfigId(res.id);
+                                  })
+                                }
+                              >
+                                {mpBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span> <code>{mpConfigId}</code>
+                                <span className="muted"> — воронка major-purchase дошла до «С конфигом»</span>
+
+                                {/* Варианты + сравнительная таблица — «жемчужина»
+                                    домена: ради неё он и выбран первым. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Варианты</b>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <input
+                                      type="text"
+                                      value={mpVariantLabel}
+                                      onChange={(e) => setMpVariantLabel(e.target.value)}
+                                      placeholder="Название варианта (например «Octavia 2019, серая»)…"
+                                      style={{ flex: '1 1 280px' }}
+                                    />
+                                    <input
+                                      type="number"
+                                      value={mpVariantPrice}
+                                      onChange={(e) => setMpVariantPrice(e.target.value)}
+                                      placeholder="Цена (необязательно)"
+                                      style={{ width: 160 }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={mpBusy !== null || !mpVariantLabel.trim()}
+                                      onClick={() =>
+                                        withMp('variant', async () => {
+                                          await sandboxMpVariant(
+                                            mpConfigId,
+                                            mpVariantLabel,
+                                            mpVariantPrice ? Number(mpVariantPrice) : undefined,
+                                            mpVariantPrice ? (mpDraft.currency ?? 'UAH') : undefined,
+                                          );
+                                          setMpVariantLabel('');
+                                          setMpVariantPrice('');
+                                          setMpComparison(await sandboxMpComparison(mpConfigId));
+                                        })
+                                      }
+                                    >
+                                      {mpBusy === 'variant' ? 'Добавляем…' : 'Добавить вариант'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={mpBusy !== null}
+                                      onClick={() => withMp('comparison', async () => setMpComparison(await sandboxMpComparison(mpConfigId)))}
+                                    >
+                                      {mpBusy === 'comparison' ? 'Строим…' : 'Сравнительная таблица'}
+                                    </button>
+                                  </div>
+                                  {mpComparison && (
+                                    <div style={{ marginTop: 8, overflowX: 'auto' }}>
+                                      {mpComparison.variants.length === 0 ? (
+                                        <p className="muted">Вариантов пока нет — добавьте первый выше.</p>
+                                      ) : (
+                                        <table style={{ fontSize: 13 }}>
+                                          <thead>
+                                            <tr><th>Вариант</th><th>Цена</th><th>Сравнений</th><th>AI-заключение</th></tr>
+                                          </thead>
+                                          <tbody>
+                                            {mpComparison.variants.map((v) => (
+                                              <tr key={v.id}>
+                                                <td>{v.label}{v.placeName && <span className="muted"> · {v.placeName}</span>}</td>
+                                                <td>{v.askingPrice !== null ? `${v.askingPrice} ${v.currency ?? ''}` : '—'}</td>
+                                                <td>{v.comparisonCount}</td>
+                                                <td className="muted" style={{ maxWidth: 320, overflowWrap: 'anywhere' }}>
+                                                  {v.latestConclusion ?? 'нет встреч — заключение появится после generate-conclusion (следующий подэтап)'}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      )}
+                                      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                                        Критериев в конфиге: {mpComparison.criteria.length}. Разбор по критериям
+                                        заполняется AI-заключением встречи с продавцом — подэтап b ниже.
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                                {renderBStep({
+                                  projectId: (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                  label: 'Крупная покупка — встреча с продавцом',
+                                  runLabel: 'Встреча → AI-заключение (1b)',
+                                  disabledReason: !mpComparison || mpComparison.variants.length === 0 ? 'Сначала добавьте вариант — встреча привязывается к первому из них' : null,
+                                  onRun: async (convId) => {
+                                    const r = await sandboxMpMeetingConclusion((mpComparison as SandboxMpComparison).variants[0].id, convId);
+                                    setMpComparison(await sandboxMpComparison(mpConfigId));
+                                    return { summary: r.conclusionDraft ?? 'заключение готово (без вердикта «покупать/не покупать» — граница §5.5)', breakdown: r.criteriaBreakdown };
+                                  },
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {mpError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{mpError}</p>}
+                      </div>
+                    )}
+
+                    {/* Пункт [sandbox-investment] 2026-09-01 — этап 2
+                        доменного покрытия: инвестиции до сравнительной
+                        таблицы (без score/rank — продовая граница) +
+                        смоук групповой механики. */}
+                    {intakeState.chosenScenario === 'investment' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг инвестиций</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Ответы квиза уже перенесены. Добавьте детали (бюджет, что смущает в предложении)
+                          и нажмите «Извлечь конфиг» — реальный LLM-вызов.
+                        </p>
+                        {!invDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={invAnswerText}
+                              onChange={(e) => setInvAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ (необязательно)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={invBusy !== null || !invAnswerText.trim()}
+                              onClick={() =>
+                                withInv('answer', async () => {
+                                  await sandboxInvAnswer(intakeState.conversationId as string, invAnswerText);
+                                  setInvAnswerText('');
+                                })
+                              }
+                            >
+                              {invBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={invBusy !== null}
+                              onClick={() =>
+                                withInv('extract', async () => {
+                                  setInvDraft(await sandboxInvExtract(intakeState.conversationId as string));
+                                })
+                              }
+                            >
+                              {invBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {invDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>Черновик конфига:</b> {invDraft.goalDescription}</div>
+                            {invDraft.targetBudget !== null && (
+                              <div className="muted" style={{ fontSize: 13 }}>бюджет: {invDraft.targetBudget} {invDraft.currency ?? ''}</div>
+                            )}
+                            <ul style={{ margin: '6px 0' }}>
+                              {invDraft.criteria.map((c, i) => (
+                                <li key={i}>
+                                  <span className="badge badge-pending">{c.category}</span> {c.text}
+                                  {c.isRequired && <span className="muted"> · обязательный</span>}
+                                </li>
+                              ))}
+                            </ul>
+                            {!invConfigId ? (
+                              <button
+                                type="button"
+                                disabled={invBusy !== null}
+                                onClick={() =>
+                                  withInv('config', async () => {
+                                    const res = await sandboxInvConfig(
+                                      (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                      invDraft,
+                                    );
+                                    setInvConfigId(res.id);
+                                  })
+                                }
+                              >
+                                {invBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span> <code>{invConfigId}</code>
+                                <span className="muted"> — воронка investment дошла до «С конфигом»</span>
+
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Инвестиционная возможность</b>
+                                  {!invOppId ? (
+                                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                      <input
+                                        type="text"
+                                        value={invOppLabel}
+                                        onChange={(e) => setInvOppLabel(e.target.value)}
+                                        placeholder="Название (например «Фонд Х, 30% годовых»)…"
+                                        style={{ flex: '1 1 280px' }}
+                                      />
+                                      <input
+                                        type="text"
+                                        value={invOppAdvisor}
+                                        onChange={(e) => setInvOppAdvisor(e.target.value)}
+                                        placeholder="Советник (необязательно)"
+                                        style={{ width: 200 }}
+                                      />
+                                      <button
+                                        type="button"
+                                        disabled={invBusy !== null || !invOppLabel.trim()}
+                                        onClick={() =>
+                                          withInv('opp', async () => {
+                                            const o = await sandboxInvOpportunity(invConfigId, invOppLabel, invOppAdvisor || undefined);
+                                            setInvOppId(o.id);
+                                            setInvComparison(await sandboxInvComparison(invConfigId));
+                                          })
+                                        }
+                                      >
+                                        {invBusy === 'opp' ? 'Добавляем…' : 'Добавить возможность'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ marginTop: 6 }}>
+                                      <span className="badge badge-ok">ДОБАВЛЕНА</span> <code>{invOppId}</code>
+                                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                        <input
+                                          type="text"
+                                          value={invSourceUrl}
+                                          onChange={(e) => setInvSourceUrl(e.target.value)}
+                                          placeholder="URL источника для сравнения (проспект фонда, статья)…"
+                                          style={{ flex: '1 1 320px' }}
+                                        />
+                                        <button
+                                          type="button"
+                                          disabled={invBusy !== null || !invSourceUrl.trim()}
+                                          onClick={() =>
+                                            withInv('source', async () => {
+                                              setInvSourceResult(await sandboxInvSourceComparison(invOppId, invSourceUrl));
+                                              setInvComparison(await sandboxInvComparison(invConfigId));
+                                            })
+                                          }
+                                        >
+                                          {invBusy === 'source' ? 'Скачиваем…' : 'Сравнить с источником'}
+                                        </button>
+                                      </div>
+                                      {invSourceResult && (
+                                        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                                          Скачано {invSourceResult.sourceTextLength} символов из {invSourceResult.sourceUrl} — сырой текст
+                                          сохранён для собственного прочтения, AI-оценки «выгодности» нет намеренно (граница §3.2).
+                                          <pre style={{ maxHeight: 120, overflow: 'auto', marginTop: 4 }}>{invSourceResult.sourceTextPreview}</pre>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {invComparison && (
+                                    <div style={{ marginTop: 8, overflowX: 'auto' }}>
+                                      <table style={{ fontSize: 13 }}>
+                                        <thead><tr><th>Возможность</th><th>Советник</th><th>Встреч</th><th>Сравнений</th></tr></thead>
+                                        <tbody>
+                                          {invComparison.opportunities.map((o) => (
+                                            <tr key={o.id}>
+                                              <td>{o.label}</td>
+                                              <td>{o.advisorName ?? '—'}{o.advisorCompany && ` (${o.advisorCompany})`}</td>
+                                              <td>{o.meetingsCount}</td>
+                                              <td>{o.comparisonCount}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                                        Критериев: {invComparison.criteria.length}. Score/rank отсутствуют намеренно —
+                                        продовая граница, не упрощение песочницы. Разбор встречи (generate-breakdown) —
+                                        подэтап 2b, нужен записанный разговор.
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {invOppId &&
+                                  renderBStep({
+                                    projectId: (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                    label: 'Инвестиции — встреча с советником',
+                                    runLabel: 'Встреча → нейтральный разбор (2b)',
+                                    onRun: async (convId) => {
+                                      const r = await sandboxInvMeetingBreakdown(invOppId, convId);
+                                      setInvComparison(await sandboxInvComparison(invConfigId));
+                                      return { summary: 'разбор по критериям готов (без оценки выгодности — граница §3.2/3.3)', breakdown: r.criteriaBreakdown };
+                                    },
+                                  })}
+
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Группа соинвесторов (смоук)</b>
+                                  {!invGroupResult ? (
+                                    <div style={{ marginTop: 6 }}>
+                                      <button
+                                        type="button"
+                                        disabled={invBusy !== null}
+                                        onClick={() => withInv('group', async () => setInvGroupResult(await sandboxInvGroupSmoke()))}
+                                      >
+                                        {invBusy === 'group' ? 'Прогоняем…' : 'Смоук: группа → инвайт → pledge'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: 13, marginTop: 6 }}>
+                                      <span className="badge badge-ok">OK</span> группа <code>{invGroupResult.groupId}</code> ·
+                                      инвайт выпущен: {invGroupResult.inviteTokenIssued ? 'да' : 'нет'} ·
+                                      повторный вход идемпотентен: {invGroupResult.rejoinIdempotent ? 'да' : 'нет'} ·
+                                      pledge: {invGroupResult.pledgedAmount} · моих групп: {invGroupResult.myGroupsCount}
+                                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{invGroupResult.notes}</div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {invError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{invError}</p>}
+                      </div>
+                    )}
+
+                    {/* Пункт [sandbox-interview-pool] 2026-09-01 — этап 3
+                        доменного покрытия: подбор персонала до сводного
+                        отчёта. Compliance-флаги — «жемчужина» домена. */}
+                    {intakeState.chosenScenario === 'interview-pool' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг подбора персонала</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Опишите вакансию (можно с сомнительными требованиями — «до 35 лет», «только мужчины»:
+                          extract подсветит их compliance-флагами с цитатой, не вычистит молча). Extract — реальный LLM-вызов.
+                        </p>
+                        {!ipDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={ipAnswerText}
+                              onChange={(e) => setIpAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ про вакансию (необязательно)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={ipBusy !== null || !ipAnswerText.trim()}
+                              onClick={() =>
+                                withIp('answer', async () => {
+                                  await sandboxIpAnswer(intakeState.conversationId as string, ipAnswerText);
+                                  setIpAnswerText('');
+                                })
+                              }
+                            >
+                              {ipBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={ipBusy !== null}
+                              onClick={() =>
+                                withIp('extract', async () => {
+                                  setIpDraft(await sandboxIpExtract(intakeState.conversationId as string));
+                                })
+                              }
+                            >
+                              {ipBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {ipDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>{ipDraft.jobTitle}</b> {ipDraft.salaryRange && <span className="muted">· {ipDraft.salaryRange}</span>}</div>
+                            <div className="muted" style={{ fontSize: 13 }}>{ipDraft.extendedDescription.slice(0, 240)}</div>
+                            {ipDraft.interviewStages.length > 0 && (
+                              <div style={{ fontSize: 13, marginTop: 4 }}>
+                                Этапы: {ipDraft.interviewStages.map((s) => s.name).join(' → ')}
+                              </div>
+                            )}
+                            {ipDraft.complianceFlags.length > 0 && (
+                              <div style={{ marginTop: 6 }}>
+                                {ipDraft.complianceFlags.map((f, i) => (
+                                  <div key={i}>
+                                    <span className="badge badge-bad">compliance: {f.category}</span>{' '}
+                                    <span className="muted" style={{ fontSize: 12 }}>«{f.quotedText}»</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {!ipConfigDone ? (
+                              <button
+                                type="button"
+                                disabled={ipBusy !== null}
+                                onClick={() =>
+                                  withIp('config', async () => {
+                                    await sandboxIpConfig((intakeState.projectId ?? intakeState.dispatchedProjectId) as string, ipDraft);
+                                    setIpConfigDone(true);
+                                  })
+                                }
+                                style={{ marginTop: 6 }}
+                              >
+                                {ipBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div style={{ marginTop: 6 }}>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span>
+                                <span className="muted"> — воронка interview-pool дошла до «С конфигом»</span>
+
+                                {/* Анкета: AI предлагает, человек утверждает. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Анкета пула</b>
+                                  {!ipQuestionnaire ? (
+                                    <div style={{ marginTop: 6 }}>
+                                      <button
+                                        type="button"
+                                        disabled={ipBusy !== null}
+                                        onClick={() =>
+                                          withIp('qdraft', async () => {
+                                            const r = await sandboxIpQuestionnaireDraft((intakeState.projectId ?? intakeState.dispatchedProjectId) as string);
+                                            setIpQuestionnaire(r.items);
+                                          })
+                                        }
+                                      >
+                                        {ipBusy === 'qdraft' ? 'Генерируем…' : 'Сгенерировать анкету (AI)'}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ marginTop: 6 }}>
+                                      <ul style={{ margin: '4px 0', fontSize: 13 }}>
+                                        {ipQuestionnaire.slice(0, 12).map((q, i) => (
+                                          <li key={i}>{q.text}{q.isRequired && <span className="muted"> · обязательный</span>}</li>
+                                        ))}
+                                        {ipQuestionnaire.length > 12 && <li className="muted">…и ещё {ipQuestionnaire.length - 12}</li>}
+                                      </ul>
+                                      {!ipQuestionnaireFixed ? (
+                                        <button
+                                          type="button"
+                                          disabled={ipBusy !== null}
+                                          onClick={() =>
+                                            withIp('qfix', async () => {
+                                              await sandboxIpQuestionnaireFix((intakeState.projectId ?? intakeState.dispatchedProjectId) as string, ipQuestionnaire);
+                                              setIpQuestionnaireFixed(true);
+                                            })
+                                          }
+                                        >
+                                          {ipBusy === 'qfix' ? 'Фиксируем…' : 'Зафиксировать анкету (человек утверждает)'}
+                                        </button>
+                                      ) : (
+                                        <span className="badge badge-ok">АНКЕТА ЗАФИКСИРОВАНА</span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Кандидаты + релевантность + отчёт. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Кандидаты</b>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <input
+                                      type="text"
+                                      value={ipCandidateName}
+                                      onChange={(e) => setIpCandidateName(e.target.value)}
+                                      placeholder="Имя кандидата…"
+                                      style={{ width: 200 }}
+                                    />
+                                    <input
+                                      type="text"
+                                      value={ipCandidateResume}
+                                      onChange={(e) => setIpCandidateResume(e.target.value)}
+                                      placeholder="Резюме одной строкой (необязательно)"
+                                      style={{ flex: '1 1 260px' }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={ipBusy !== null || !ipCandidateName.trim()}
+                                      onClick={() =>
+                                        withIp('candidate', async () => {
+                                          await sandboxIpCandidate(
+                                            (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                            ipCandidateName,
+                                            ipCandidateResume || undefined,
+                                          );
+                                          setIpCandidates((l) => [...l, ipCandidateName]);
+                                          setIpCandidateName('');
+                                          setIpCandidateResume('');
+                                        })
+                                      }
+                                    >
+                                      {ipBusy === 'candidate' ? 'Добавляем…' : 'Добавить в пул'}
+                                    </button>
+                                  </div>
+                                  {ipCandidates.length > 0 && (
+                                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>В пуле: {ipCandidates.join(', ')}</div>
+                                  )}
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                                    <button
+                                      type="button"
+                                      disabled={ipBusy !== null || !ipQuestionnaireFixed}
+                                      title={!ipQuestionnaireFixed ? 'Сначала зафиксируйте анкету — релевантность сравнивает с ней' : undefined}
+                                      onClick={() =>
+                                        withIp('relevance', async () => {
+                                          setIpRelevanceRes(await sandboxIpRelevance((intakeState.projectId ?? intakeState.dispatchedProjectId) as string));
+                                        })
+                                      }
+                                    >
+                                      {ipBusy === 'relevance' ? 'Оцениваем…' : 'Пересчитать релевантность (AI)'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={ipBusy !== null}
+                                      onClick={() =>
+                                        withIp('report', async () => {
+                                          setIpReport(await sandboxIpSummaryReport((intakeState.projectId ?? intakeState.dispatchedProjectId) as string));
+                                        })
+                                      }
+                                    >
+                                      {ipBusy === 'report' ? 'Формируем…' : 'Сводный отчёт'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={ipBusy !== null}
+                                      onClick={() => withIp('team', async () => setIpTeamRes(await sandboxIpTeamSmoke()))}
+                                    >
+                                      {ipBusy === 'team' ? 'Прогоняем…' : 'Смоук команды'}
+                                    </button>
+                                  </div>
+                                  {ipRelevanceRes && (
+                                    <div style={{ fontSize: 13, marginTop: 6 }}>
+                                      {ipRelevanceRes.note ? (
+                                        <span className="muted">{ipRelevanceRes.note}</span>
+                                      ) : (
+                                        ipRelevanceRes.entries.map((e, i) => (
+                                          <div key={i}>
+                                            <b>{e.candidate}</b>
+                                            {e.attentionPoints.length > 0 && <span className="muted"> · внимание: {e.attentionPoints.join('; ')}</span>}
+                                            {e.followUpRequestsDraft.length > 0 && <span className="muted"> · дозапросить: {e.followUpRequestsDraft.join('; ')}</span>}
+                                          </div>
+                                        ))
+                                      )}
+                                    </div>
+                                  )}
+                                  {ipReport && (
+                                    <div style={{ fontSize: 13, marginTop: 6 }}>
+                                      <span className="badge badge-ok">ОТЧЁТ</span> кандидатов: {ipReport.content.funnel.totalCandidates} ·{' '}
+                                      {Object.entries(ipReport.content.funnel.byStage).filter(([, n]) => n > 0).map(([s, n]) => `${s}: ${n}`).join(' · ')}
+                                      {ipReport.content.entries.map((e) => (
+                                        <div key={e.candidateProfileId} className="muted" style={{ fontSize: 12 }}>
+                                          {e.displayName} — покрытие обязательных вопросов: {Math.round(e.coverageScore * 100)}% (прозрачная метрика, не AI-балл)
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {ipTeamRes && (
+                                    <div style={{ fontSize: 13, marginTop: 6 }}>
+                                      <span className="badge badge-ok">OK</span> команда <code>{ipTeamRes.teamId}</code> ·
+                                      инвайт: {ipTeamRes.inviteTokenIssued ? 'да' : 'нет'} · повторный вход идемпотентен: {ipTeamRes.rejoinIdempotent ? 'да' : 'нет'} ·
+                                      моих команд: {ipTeamRes.myTeamsCount}
+                                      <div className="muted" style={{ fontSize: 12 }}>{ipTeamRes.notes}</div>
+                                    </div>
+                                  )}
+                                  {renderBStep({
+                                    projectId: (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                    label: 'Подбор персонала — интервью кандидата',
+                                    runLabel: 'Привязать интервью (3b)',
+                                    disabledReason: ipCandidates.length === 0 ? 'Сначала добавьте кандидата — интервью привязывается к нему' : null,
+                                    onRun: async (convId) => {
+                                      const r = await sandboxIpAttachInterview((intakeState.projectId ?? intakeState.dispatchedProjectId) as string, convId);
+                                      return { summary: `привязано к стадии «${r.stageName}». ${r.note}`, breakdown: null };
+                                    },
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {ipError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{ipError}</p>}
+                      </div>
+                    )}
+
+                    {/* Пункт [sandbox-family-law] 2026-09-01 — этап 4
+                        доменного покрытия: до черновика протокола
+                        урегулирования (дисклеймер §3.6 — из прода). */}
+                    {intakeState.chosenScenario === 'family-law' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг семейного права</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Тип договора уже передан при dispatch. Добавьте детали (что делить, бюджет на
+                          юристов) — «Извлечь конфиг» — реальный LLM-вызов.
+                        </p>
+                        {!flDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={flAnswerText}
+                              onChange={(e) => setFlAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ (необязательно)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={flBusy !== null || !flAnswerText.trim()}
+                              onClick={() =>
+                                withFl('answer', async () => {
+                                  await sandboxFlAnswer(intakeState.conversationId as string, flAnswerText);
+                                  setFlAnswerText('');
+                                })
+                              }
+                            >
+                              {flBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={flBusy !== null}
+                              onClick={() =>
+                                withFl('extract', async () => {
+                                  setFlDraft(await sandboxFlExtract(intakeState.conversationId as string));
+                                })
+                              }
+                            >
+                              {flBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {flDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>Черновик конфига:</b> {flDraft.goalDescription}</div>
+                            {flDraft.targetBudget !== null && (
+                              <div className="muted" style={{ fontSize: 13 }}>бюджет: {flDraft.targetBudget} {flDraft.currency ?? ''}</div>
+                            )}
+                            <ul style={{ margin: '6px 0' }}>
+                              {flDraft.criteria.map((c, i) => (
+                                <li key={i}>
+                                  <span className="badge badge-pending">{c.category}</span> {c.text}
+                                  {c.isRequired && <span className="muted"> · обязательный</span>}
+                                </li>
+                              ))}
+                            </ul>
+                            {!flConfigId ? (
+                              <button
+                                type="button"
+                                disabled={flBusy !== null}
+                                onClick={() =>
+                                  withFl('config', async () => {
+                                    const res = await sandboxFlConfig(
+                                      (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                      flDraft,
+                                    );
+                                    setFlConfigId(res.id);
+                                  })
+                                }
+                              >
+                                {flBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span> <code>{flConfigId}</code>
+                                <span className="muted"> — воронка family-law дошла до «С конфигом»</span>
+
+                                {/* Стороны и активы — реестр §3.1/§3.3. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Стороны и активы</b>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <select value={flPartyRole} onChange={(e) => setFlPartyRole(e.target.value as 'SELF' | 'SPOUSE')}>
+                                      <option value="SELF">SELF (я)</option>
+                                      <option value="SPOUSE">SPOUSE (супруг/а)</option>
+                                    </select>
+                                    <input
+                                      type="text"
+                                      value={flPartyName}
+                                      onChange={(e) => setFlPartyName(e.target.value)}
+                                      placeholder="Имя (необязательно)"
+                                      style={{ width: 180 }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={flBusy !== null}
+                                      onClick={() =>
+                                        withFl('party', async () => {
+                                          await sandboxFlParty(flConfigId, flPartyRole, flPartyName || undefined);
+                                          setFlParties((l) => [...l, `${flPartyRole}${flPartyName ? ` (${flPartyName})` : ''}`]);
+                                          setFlPartyName('');
+                                        })
+                                      }
+                                    >
+                                      {flBusy === 'party' ? 'Добавляем…' : 'Добавить сторону'}
+                                    </button>
+                                  </div>
+                                  {flParties.length > 0 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Стороны: {flParties.join(', ')}</div>}
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <input
+                                      type="text"
+                                      value={flAssetType}
+                                      onChange={(e) => setFlAssetType(e.target.value)}
+                                      placeholder="Актив (например «квартира», «авто»)…"
+                                      style={{ flex: '1 1 220px' }}
+                                    />
+                                    <input
+                                      type="number"
+                                      value={flAssetValue}
+                                      onChange={(e) => setFlAssetValue(e.target.value)}
+                                      placeholder="Оценка (необязательно)"
+                                      style={{ width: 170 }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={flBusy !== null || !flAssetType.trim()}
+                                      onClick={() =>
+                                        withFl('asset', async () => {
+                                          await sandboxFlAsset(flConfigId, flAssetType, flAssetValue ? Number(flAssetValue) : undefined, flAssetValue ? 'UAH' : undefined);
+                                          setFlAssets((l) => [...l, flAssetType]);
+                                          setFlAssetType('');
+                                          setFlAssetValue('');
+                                        })
+                                      }
+                                    >
+                                      {flBusy === 'asset' ? 'Добавляем…' : 'Добавить актив'}
+                                    </button>
+                                  </div>
+                                  {flAssets.length > 0 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Активы: {flAssets.join(', ')}</div>}
+                                </div>
+
+                                {/* Бюджет §3.4 — строки расход/покрытие, свод по валютам. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Бюджет</b>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <select value={flBudgetCategory} onChange={(e) => setFlBudgetCategory(e.target.value)}>
+                                      {['LEGAL_FEES', 'ASSET_TRANSFER', 'SUPPORT_PAYMENT', 'OTHER'].map((c) => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    <select value={flBudgetDirection} onChange={(e) => setFlBudgetDirection(e.target.value)}>
+                                      <option value="EXPENSE">расход</option>
+                                      <option value="COVERAGE">покрытие</option>
+                                    </select>
+                                    <input
+                                      type="number"
+                                      value={flBudgetAmount}
+                                      onChange={(e) => setFlBudgetAmount(e.target.value)}
+                                      placeholder="Сумма"
+                                      style={{ width: 140 }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={flBusy !== null || !flBudgetAmount}
+                                      onClick={() =>
+                                        withFl('budget', async () => {
+                                          setFlBudget(await sandboxFlBudgetItem(flConfigId, flBudgetCategory, flBudgetDirection, Number(flBudgetAmount), 'UAH'));
+                                          setFlBudgetAmount('');
+                                        })
+                                      }
+                                    >
+                                      {flBusy === 'budget' ? 'Добавляем…' : 'Добавить строку'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={flBusy !== null}
+                                      onClick={() => withFl('draft', async () => setFlSettlement(await sandboxFlSettlementDraft(flConfigId)))}
+                                    >
+                                      {flBusy === 'draft' ? 'Компилируем…' : 'Черновик протокола урегулирования'}
+                                    </button>
+                                  </div>
+                                  {flBudget && (
+                                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                                      {flBudget.byCurrency.map((b) => `${b.currency}: расходы ${b.totalExpense}, покрытие ${b.totalCoverage}, нетто ${b.netBudget}`).join(' · ')}
+                                      {flBudget.targetBudget !== null && ` · целевой бюджет: ${flBudget.targetBudget} ${flBudget.currency ?? ''}`}
+                                    </div>
+                                  )}
+                                  {flSettlement && (
+                                    <div style={{ marginTop: 8 }}>
+                                      <span className="badge badge-pending">черновик-компиляция, НЕ юридический документ</span>
+                                      <pre style={{ maxHeight: 220, overflow: 'auto', fontSize: 12, marginTop: 4, whiteSpace: 'pre-wrap' }}>{flSettlement.text}</pre>
+                                    </div>
+                                  )}
+                                </div>
+                                {renderBStep({
+                                  projectId: (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                  label: 'Семейное право — консультация юриста',
+                                  runLabel: 'Консультация → AI-разбор (4b)',
+                                  onRun: async (convId) => {
+                                    const r = await sandboxFlConsultationBreakdown(flConfigId, convId, 'Песочный юрист');
+                                    return { summary: `консультация ${r.consultationId} разобрана по критериям конфига`, breakdown: r.criteriaBreakdown };
+                                  },
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {flError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{flError}</p>}
+                      </div>
+                    )}
+
+                    {/* Пункт [sandbox-dtp] 2026-09-01 — этап 5 доменного
+                        покрытия: до реестра доказательств (chain of
+                        custody) и черновика протокола. */}
+                    {intakeState.chosenScenario === 'dtp' && intakeState.conversationId && (
+                      <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                        <b>Онбординг ДТП</b>
+                        <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                          Опишите аварию (кто виноват по протоколу, что со страховой) — «Извлечь конфиг» —
+                          реальный LLM-вызов.
+                        </p>
+                        {!dtpDraft && (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <input
+                              type="text"
+                              value={dtpAnswerText}
+                              onChange={(e) => setDtpAnswerText(e.target.value)}
+                              placeholder="Дополнительный ответ (необязательно)…"
+                              style={{ flex: '1 1 320px' }}
+                            />
+                            <button
+                              type="button"
+                              disabled={dtpBusy !== null || !dtpAnswerText.trim()}
+                              onClick={() =>
+                                withDtp('answer', async () => {
+                                  await sandboxDtpAnswer(intakeState.conversationId as string, dtpAnswerText);
+                                  setDtpAnswerText('');
+                                })
+                              }
+                            >
+                              {dtpBusy === 'answer' ? 'Добавляем…' : 'Добавить ответ'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={dtpBusy !== null}
+                              onClick={() =>
+                                withDtp('extract', async () => {
+                                  setDtpDraft(await sandboxDtpExtract(intakeState.conversationId as string));
+                                })
+                              }
+                            >
+                              {dtpBusy === 'extract' ? 'Извлекаем…' : 'Извлечь конфиг (extract)'}
+                            </button>
+                          </div>
+                        )}
+                        {dtpDraft && (
+                          <div style={{ marginTop: 8 }}>
+                            <div><b>Черновик конфига:</b> {dtpDraft.goalDescription}</div>
+                            <div className="muted" style={{ fontSize: 13 }}>
+                              {dtpDraft.occurredAt && <>дата ДТП: {dtpDraft.occurredAt} · </>}
+                              {dtpDraft.targetBudget !== null ? <>бюджет: {dtpDraft.targetBudget} {dtpDraft.currency ?? ''}</> : 'бюджет не назван'}
+                            </div>
+                            <ul style={{ margin: '6px 0' }}>
+                              {dtpDraft.criteria.map((c, i) => (
+                                <li key={i}>
+                                  <span className="badge badge-pending">{c.category}</span> {c.text}
+                                  {c.isRequired && <span className="muted"> · обязательный</span>}
+                                </li>
+                              ))}
+                            </ul>
+                            {!dtpConfigId ? (
+                              <button
+                                type="button"
+                                disabled={dtpBusy !== null}
+                                onClick={() =>
+                                  withDtp('config', async () => {
+                                    const res = await sandboxDtpConfig(
+                                      (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                      dtpDraft,
+                                    );
+                                    setDtpConfigId(res.id);
+                                  })
+                                }
+                              >
+                                {dtpBusy === 'config' ? 'Создаём…' : 'Создать конфиг'}
+                              </button>
+                            ) : (
+                              <div>
+                                <span className="badge badge-ok">КОНФИГ СОЗДАН</span> <code>{dtpConfigId}</code>
+                                <span className="muted"> — воронка dtp дошла до «С конфигом»</span>
+
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Участники и вина</b>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <select value={dtpRole} onChange={(e) => setDtpRole(e.target.value as never)}>
+                                      <option value="SELF">SELF (я)</option>
+                                      <option value="OTHER_PARTY">OTHER_PARTY (вторая сторона)</option>
+                                      <option value="THIRD_PARTY">THIRD_PARTY (третья)</option>
+                                    </select>
+                                    <button
+                                      type="button"
+                                      disabled={dtpBusy !== null}
+                                      onClick={() =>
+                                        withDtp('participant', async () => {
+                                          await sandboxDtpParticipant(dtpConfigId, dtpRole);
+                                          setDtpParticipants((l) => [...l, dtpRole]);
+                                        })
+                                      }
+                                    >
+                                      {dtpBusy === 'participant' ? 'Добавляем…' : 'Добавить участника'}
+                                    </button>
+                                  </div>
+                                  {dtpParticipants.length > 0 && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Участники: {dtpParticipants.join(', ')}</div>}
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                    <select value={dtpFaultSource} onChange={(e) => setDtpFaultSource(e.target.value)}>
+                                      {['POLICE', 'INSURANCE_COMPANY', 'COURT', 'MUTUAL_AGREEMENT', 'UNDETERMINED'].map((sName) => <option key={sName} value={sName}>{sName}</option>)}
+                                    </select>
+                                    <input
+                                      type="text"
+                                      value={dtpFaultText}
+                                      onChange={(e) => setDtpFaultText(e.target.value)}
+                                      placeholder="Формулировка (например «виновник признал вину, протокол №…»)…"
+                                      style={{ flex: '1 1 280px' }}
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={dtpBusy !== null || !dtpFaultText.trim()}
+                                      onClick={() =>
+                                        withDtp('fault', async () => {
+                                          await sandboxDtpFault(dtpConfigId, dtpFaultSource, dtpFaultText);
+                                          setDtpFaultDone(true);
+                                          setDtpFaultText('');
+                                        })
+                                      }
+                                    >
+                                      {dtpBusy === 'fault' ? 'Фиксируем…' : 'Зафиксировать вину'}
+                                    </button>
+                                    {dtpFaultDone && <span className="badge badge-ok">зафиксировано</span>}
+                                  </div>
+                                </div>
+
+                                {/* Доказательства — chain of custody. */}
+                                <div style={{ marginTop: 10 }}>
+                                  <b>Доказательство (фото)</b>
+                                  <p className="muted" style={{ margin: '4px 0 6px', fontSize: 12 }}>
+                                    Реальная загрузка в приватное хранилище: sha256 считается сервером из
+                                    содержимого, доступ пишется в append-only журнал. AI по доказательствам
+                                    не вызывается никогда (§3.1/3.4). До ~3 МБ.
+                                  </p>
+                                  {!dtpEvidence ? (
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      disabled={dtpBusy !== null}
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0];
+                                        if (!f) return;
+                                        const reader = new FileReader();
+                                        reader.onload = () =>
+                                          withDtp('evidence', async () => {
+                                            const dataUrl = String(reader.result ?? '');
+                                            const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+                                            setDtpEvidence(await sandboxDtpEvidence(dtpConfigId, base64, f.type || 'image/jpeg'));
+                                          });
+                                        reader.readAsDataURL(f);
+                                      }}
+                                    />
+                                  ) : (
+                                    <div style={{ fontSize: 13 }}>
+                                      <span className="badge badge-ok">СОХРАНЕНО</span>{' '}
+                                      sha256: <code style={{ fontSize: 11 }}>{dtpEvidence.fileHash.slice(0, 16)}…</code>
+                                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                                        Журнал доступа: {dtpEvidence.accessLog.map((l) => `${l.action} (${new Date(l.at).toLocaleTimeString('ru-RU')})`).join(' → ') || 'пуст'}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {dtpBusy === 'evidence' && <p className="muted">Загружаем…</p>}
+                                </div>
+
+                                <div style={{ marginTop: 10 }}>
+                                  <button
+                                    type="button"
+                                    disabled={dtpBusy !== null}
+                                    onClick={() => withDtp('draft', async () => setDtpSettlement(await sandboxDtpSettlementDraft(dtpConfigId)))}
+                                  >
+                                    {dtpBusy === 'draft' ? 'Компилируем…' : 'Черновик протокола урегулирования'}
+                                  </button>
+                                  {dtpSettlement && (
+                                    <div style={{ marginTop: 8 }}>
+                                      <span className="badge badge-pending">черновик-компиляция, НЕ юридический документ</span>
+                                      <pre style={{ maxHeight: 220, overflow: 'auto', fontSize: 12, marginTop: 4, whiteSpace: 'pre-wrap' }}>{dtpSettlement.text}</pre>
+                                    </div>
+                                  )}
+                                </div>
+                                {renderBStep({
+                                  projectId: (intakeState.projectId ?? intakeState.dispatchedProjectId) as string,
+                                  label: 'ДТП — консультация юриста',
+                                  runLabel: 'Консультация → AI-разбор (5b)',
+                                  onRun: async (convId) => {
+                                    const r = await sandboxDtpConsultationBreakdown(dtpConfigId, convId, 'Песочный юрист');
+                                    return { summary: `консультация ${r.consultationId} разобрана по критериям конфига`, breakdown: r.criteriaBreakdown };
+                                  },
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {dtpError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{dtpError}</p>}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1105,6 +2482,15 @@ export default function SandboxPage() {
               Файл будет привязан к ролику: <strong>{queueTarget.title}</strong>{' '}
               <button type="button" onClick={() => setQueueTarget(null)} style={{ marginLeft: 8 }}>
                 Отвязать
+              </button>
+            </p>
+          )}
+          {uploadTargetProject && (
+            <p style={{ marginTop: 0 }}>
+              <span className="badge badge-pending">b-подэтап</span> Разговор будет создан в доменном
+              проекте: <strong>{uploadTargetProject.label}</strong>{' '}
+              <button type="button" onClick={() => setUploadTargetProject(null)} style={{ marginLeft: 8 }}>
+                Сбросить
               </button>
             </p>
           )}

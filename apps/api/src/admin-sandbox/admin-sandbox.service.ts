@@ -35,7 +35,7 @@
 
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import type { HandleUploadBody } from '@vercel/blob/client';
-import { ConsentType, ConversationSourceType } from '@prisma/client';
+import { ConsentType, ConversationSourceType, PurchaseCategory } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -48,6 +48,23 @@ import { AIRouterService } from '../ai-router/ai-router.service';
 import { IntakeService, IntakeScenario } from '../intake/intake.service';
 import { HealthOnboardingService, ExtractedHealthConfigDraft } from '../health/health-onboarding.service';
 import { HealthService } from '../health/health.service';
+import { MajorPurchaseOnboardingService, ExtractedConfigDraft } from '../major-purchase/major-purchase-onboarding.service';
+import { MajorPurchaseService } from '../major-purchase/major-purchase.service';
+import { InvestmentOnboardingService, ExtractedInvestmentConfigDraft } from '../investment/investment-onboarding.service';
+import { InvestmentService } from '../investment/investment.service';
+import { InvestmentGroupService } from '../investment/investment-group.service';
+import { DtpOnboardingService, ExtractedDtpConfigDraft } from '../dtp/dtp-onboarding.service';
+import { DtpService } from '../dtp/dtp.service';
+import { DtpV2Service } from '../dtp/dtp-v2.service';
+import { FamilyLawOnboardingService, ExtractedFamilyLawConfigDraft } from '../family-law/family-law-onboarding.service';
+import { FamilyLawService } from '../family-law/family-law.service';
+import { FamilyLawV2Service } from '../family-law/family-law-v2.service';
+import { InterviewPoolOnboardingService, ExtractedPoolConfigDraft } from '../interview-pool/interview-pool-onboarding.service';
+import { InterviewPoolService, DraftQuestionnaireItem } from '../interview-pool/interview-pool.service';
+import { InterviewPoolCandidateService } from '../interview-pool/interview-pool-candidate.service';
+import { InterviewPoolRelevanceService } from '../interview-pool/interview-pool-relevance.service';
+import { InterviewPoolReportService } from '../interview-pool/interview-pool-report.service';
+import { InterviewPoolTeamService } from '../interview-pool/interview-pool-team.service';
 import { LiveSessionService } from '../live-session/live-session.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
@@ -141,6 +158,23 @@ export class AdminSandboxService {
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
+    private readonly majorPurchaseOnboarding: MajorPurchaseOnboardingService,
+    private readonly majorPurchase: MajorPurchaseService,
+    private readonly investmentOnboarding: InvestmentOnboardingService,
+    private readonly investment: InvestmentService,
+    private readonly investmentGroups: InvestmentGroupService,
+    private readonly poolOnboarding: InterviewPoolOnboardingService,
+    private readonly pool: InterviewPoolService,
+    private readonly poolCandidates: InterviewPoolCandidateService,
+    private readonly poolRelevance: InterviewPoolRelevanceService,
+    private readonly poolReports: InterviewPoolReportService,
+    private readonly poolTeams: InterviewPoolTeamService,
+    private readonly familyLawOnboarding: FamilyLawOnboardingService,
+    private readonly familyLaw: FamilyLawService,
+    private readonly familyLawV2: FamilyLawV2Service,
+    private readonly dtpOnboarding: DtpOnboardingService,
+    private readonly dtp: DtpService,
+    private readonly dtpV2: DtpV2Service,
   ) {}
 
   /** Песочница — операторский инструмент: она расходует реальные
@@ -287,6 +321,22 @@ export class AdminSandboxService {
       detail: visionPresent
         ? undefined
         : 'включите Cloud Vision API в том же проекте Google Cloud и добавьте ключ; без него домен здоровья работает, кроме загрузки лабдокументов',
+    });
+
+    // Аудит [fact-check-audit] 2026-09-01: кнопка «Проверить факты»
+    // зависела от ключа, которого в чеклисте готовности не было вовсе
+    // — единственный расходуемый кнопкой секрет без строки здесь.
+    // ok: true всегда — с Пункта [fact-check-ai-fallback] ключ
+    // опционален (без него работают AI-гипотезы), поэтому отсутствие —
+    // не «проблема», а режим; текст в detail говорит какой.
+    const factCheckPresent = await this.secretPresent('FACT_CHECK_TOOLS_API_KEY');
+    items.push({
+      key: 'fact-check',
+      label: 'FACT_CHECK_TOOLS_API_KEY (кнопка «Проверить факты»)',
+      ok: true,
+      detail: factCheckPresent
+        ? 'задан — база опубликованных фактчеков + AI-гипотезы по остальному'
+        : 'не задан — база фактчеков пропускается, кнопка работает только на AI-гипотезах; для полного режима включите Fact Check Tools API и добавьте ключ',
     });
 
     // 6. LLM-ключи (шаг 8: анализ) — нужен хотя бы один.
@@ -454,20 +504,34 @@ export class AdminSandboxService {
   /** Разговор под загрузку реального файла — в том же песочном
    * проекте, что и синтетические прогоны. sourceType от типа файла:
    * это видно потом в TMA и влияет только на подпись, не на конвейер. */
-  async createUploadConversation(operatorUserId: string, isVideo: boolean, durationSeconds?: number) {
+  async createUploadConversation(operatorUserId: string, isVideo: boolean, durationSeconds?: number, targetProjectId?: string) {
     await this.assertOperator(operatorUserId);
 
-    let project = await this.prisma.project.findFirst({
-      where: { ownerId: operatorUserId, question: SANDBOX_PROJECT_QUESTION },
-    });
-    if (!project) {
-      project = await this.prisma.project.create({
-        data: {
-          ownerId: operatorUserId,
-          question: SANDBOX_PROJECT_QUESTION,
-          goal: 'Технический проект песочницы админки — можно удалять',
-        },
+    // Пункт [sandbox-domain-conversations] 2026-09-01 — недостающий
+    // кусок всех b-подэтапов: targetProjectId позволяет загрузить
+    // запись ПРЯМО В ДОМЕННЫЙ ПРОЕКТ (встреча с продавцом, консультация
+    // юриста, интервью кандидата) — доменные сервисы принимают только
+    // разговоры своего проекта, песочный проект им не подходит.
+    // Владение проверяется: чужой проект = NotFound-класс отказа.
+    let project;
+    if (targetProjectId?.trim()) {
+      project = await this.prisma.project.findUnique({ where: { id: targetProjectId } });
+      if (!project || project.ownerId !== operatorUserId) {
+        throw new BadRequestException(`Проект ${targetProjectId} не найден или принадлежит не вам`);
+      }
+    } else {
+      project = await this.prisma.project.findFirst({
+        where: { ownerId: operatorUserId, question: SANDBOX_PROJECT_QUESTION },
       });
+      if (!project) {
+        project = await this.prisma.project.create({
+          data: {
+            ownerId: operatorUserId,
+            question: SANDBOX_PROJECT_QUESTION,
+            goal: 'Технический проект песочницы админки — можно удалять',
+          },
+        });
+      }
     }
 
     const conversation = await this.conversations.create(operatorUserId, project.id, {
@@ -809,6 +873,488 @@ export class AdminSandboxService {
     return this.health.verifyLabDocument(operatorUserId, draftId);
   }
 
+  // ── Пункт [sandbox-major-purchase] 2026-09-01 — этап 1 плана
+  // доменного покрытия песочницы (выбран первым: тестовые данные
+  // проще всех остальных доменов, аудитория самая широкая — тот же
+  // критерий, каким оператор выбирал здоровье). Тот же принцип, что
+  // [sandbox-health]: всё продовыми сервисами домена, от имени
+  // оператора, без обходов; extract и динамический чек-лист — реальные
+  // LLM-вызовы. Цикл: ответы → чек-лист → extract → конфиг → варианты
+  // → сравнительная таблица. Встречи с продавцом и generate-conclusion
+  // — отдельным подэтапом (нужен записанный разговор). ──
+
+  async mpAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.majorPurchaseOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  /** Персональный чек-лист тем для разговора — реальный AI-вызов по
+   * брифу (внутри сервиса честная деградация до статичного списка при
+   * сбое провайдера — это его продовое поведение, песочница видит то
+   * же, что пользователь). */
+  async mpChecklist(operatorUserId: string, conversationId: string, category: PurchaseCategory) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    const items = await this.majorPurchaseOnboarding.getChecklist(operatorUserId, conversationId, category);
+    return { items };
+  }
+
+  async mpExtract(operatorUserId: string, conversationId: string, category: PurchaseCategory) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.majorPurchaseOnboarding.extract(operatorUserId, conversationId, category);
+  }
+
+  async mpCreateConfig(operatorUserId: string, projectId: string, category: PurchaseCategory, draft: ExtractedConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.majorPurchase.createConfig(operatorUserId, projectId, category, draft);
+  }
+
+  async mpAddVariant(operatorUserId: string, configId: string, label: string, askingPrice?: number, currency?: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.majorPurchase.createVariant(operatorUserId, configId, label, askingPrice, currency);
+  }
+
+  async mpComparisonTable(operatorUserId: string, configId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.majorPurchase.getComparisonTable(operatorUserId, configId);
+  }
+
+  // ── Пункт [sandbox-investment] 2026-09-01 — этап 2 плана доменного
+  // покрытия. Тот же принцип: продовые сервисы, оператор, без обходов.
+  // Цикл: ответы → extract (LLM) → конфиг → возможность → сравнение с
+  // источником (реальный fetch с SSRF-защитой, БЕЗ AI-извлечения цены
+  // — так в проде намеренно, §3.2 ТЗ) → сравнительная таблица (без
+  // score/rank — тоже продовая граница, не упрощение песочницы). ──
+
+  async invAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.investmentOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  async invExtract(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.investmentOnboarding.extract(operatorUserId, conversationId);
+  }
+
+  async invCreateConfig(operatorUserId: string, projectId: string, draft: ExtractedInvestmentConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.investment.createConfig(operatorUserId, projectId, draft);
+  }
+
+  async invAddOpportunity(operatorUserId: string, configId: string, label: string, advisorName?: string, advisorCompany?: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.investment.createOpportunity(operatorUserId, configId, label, advisorName, advisorCompany);
+  }
+
+  /** Сравнение с источником: реальный fetchUrlText (SSRF-защита
+   * продовая) — сохраняется сырой текст страницы, никакой AI-оценки
+   * «выгодности» (граница §3.2 ТЗ, песочница её не пересекает). */
+  async invSourceComparison(operatorUserId: string, opportunityId: string, sourceUrl: string) {
+    await this.assertOperator(operatorUserId);
+    if (!opportunityId?.trim()) throw new BadRequestException('opportunityId обязателен');
+    if (!sourceUrl?.trim()) throw new BadRequestException('sourceUrl обязателен');
+    const row = await this.investment.addSourceComparison(operatorUserId, opportunityId, sourceUrl);
+    // Сырой текст страницы может быть большим — в ответ песочнице идёт
+    // только длина и начало, сам текст уже сохранён продовой моделью.
+    return { id: row.id, sourceUrl: row.sourceUrl, sourceTextLength: row.sourceText.length, sourceTextPreview: row.sourceText.slice(0, 400) };
+  }
+
+  async invComparisonTable(operatorUserId: string, configId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.investment.getComparisonTable(operatorUserId, configId);
+  }
+
+  // ── Пункт [sandbox-interview-pool] 2026-09-01 — этап 3 плана
+  // доменного покрытия. Цикл: ответы → extract (LLM, с compliance-
+  // флагами — «жемчужина» домена: дискриминационные требования
+  // подсвечиваются цитатой, не молча вычищаются) → конфиг → анкета
+  // (LLM-черновик → фиксация) → кандидат → релевантность → сводный
+  // отчёт. Всё продовыми сервисами, от имени оператора. ──
+
+  async ipAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.poolOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  async ipExtract(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.poolOnboarding.extract(operatorUserId, conversationId);
+  }
+
+  async ipCreateConfig(operatorUserId: string, projectId: string, draft: ExtractedPoolConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.pool.createConfig(operatorUserId, projectId, draft);
+  }
+
+  /** Анкета: LLM-черновик. Фиксация — ОТДЕЛЬНАЯ кнопка (§4.1 ТЗ «AI
+   * предлагает, человек утверждает» — песочница не сливает два шага
+   * в один, граница продовая). */
+  async ipQuestionnaireDraft(operatorUserId: string, projectId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    const items = await this.pool.generateQuestionnaireDraft(operatorUserId, projectId);
+    return { items };
+  }
+
+  async ipFixQuestionnaire(operatorUserId: string, projectId: string, items: DraftQuestionnaireItem[]) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    if (!items?.length) throw new BadRequestException('items обязательны');
+    const fixed = await this.pool.fixQuestionnaire(operatorUserId, projectId, items);
+    return { count: fixed.length };
+  }
+
+  /** Кандидат: профиль + добавление в пул одним действием (в проде
+   * это два шага TMA; здесь слиты, потому что оба — чистые записи без
+   * AI и без внешних вызовов, а операторский прогон ценит краткость).
+   * reuseHistory=false — дефолт продукта (осознанный выбор каждый раз). */
+  async ipAddCandidate(operatorUserId: string, projectId: string, displayName: string, resumeText?: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    if (!displayName?.trim()) throw new BadRequestException('displayName обязателен');
+    const profile = await this.poolCandidates.createCandidate(operatorUserId, displayName, undefined, resumeText);
+    const status = await this.pool.addCandidate(operatorUserId, projectId, profile.id, false);
+    return { candidateProfileId: profile.id, statusId: status.id, stage: status.stage };
+  }
+
+  /** Релевантность: продовый regenerate — AI-оценка ТОЛЬКО по
+   * завершённым собеседованиям (§4.3). Без записанных интервью снимок
+   * честно пуст — это результат прогона, не сбой песочницы. */
+  async ipRelevance(operatorUserId: string, projectId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    const snapshot = await this.poolRelevance.regenerate(operatorUserId, projectId);
+    return {
+      snapshotId: snapshot?.id ?? null,
+      entries: (snapshot?.entries ?? []).map((e: any) => ({
+        candidate: e.candidateProfile?.displayName ?? e.candidateProfileId,
+        attentionPoints: e.attentionPoints ?? [],
+        followUpRequestsDraft: e.followUpRequestsDraft ?? [],
+      })),
+      note:
+        (snapshot?.entries ?? []).length === 0
+          ? 'Снимок пуст: у кандидатов нет завершённых собеседований (§4.3 — оценка только по завершённым). Привяжите разговор через recordStageProgress или считайте это честным результатом.'
+          : null,
+    };
+  }
+
+  async ipSummaryReport(operatorUserId: string, projectId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    const report = await this.poolReports.generateSummaryReport(operatorUserId, projectId);
+    return { reportId: report.id, content: report.content };
+  }
+
+  // ── Пункт [sandbox-family-law] 2026-09-01 — этап 4 плана доменного
+  // покрытия. contractType уже передаётся в intake dispatch; здесь —
+  // продолжение до конфига и доменная «жемчужина»: реестр сторон/
+  // активов → бюджет по валютам → черновик протокола урегулирования
+  // (компиляция фактов с обязательным дисклеймером «не юридический
+  // документ» — граница §3.6, песочница её показывает, не прячет). ──
+
+  async flAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.familyLawOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  async flExtract(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.familyLawOnboarding.extract(operatorUserId, conversationId);
+  }
+
+  async flCreateConfig(operatorUserId: string, projectId: string, draft: ExtractedFamilyLawConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.familyLaw.createConfig(operatorUserId, projectId, draft);
+  }
+
+  async flAddParty(operatorUserId: string, configId: string, role: 'SELF' | 'SPOUSE', displayName?: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.familyLawV2.createParty(operatorUserId, configId, role as never, displayName);
+  }
+
+  async flAddAsset(
+    operatorUserId: string,
+    configId: string,
+    assetType: string,
+    estimatedValue?: number,
+    currency?: string,
+    isMaritalProperty?: boolean,
+  ) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.familyLawV2.createAsset(operatorUserId, configId, assetType, undefined, undefined, isMaritalProperty, estimatedValue, currency);
+  }
+
+  async flAddBudgetItem(
+    operatorUserId: string,
+    configId: string,
+    category: string,
+    direction: string,
+    amount: number,
+    currency?: string,
+  ) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    await this.familyLawV2.createBudgetLineItem(operatorUserId, configId, category, direction, amount, currency);
+    return this.familyLawV2.getBudget(operatorUserId, configId);
+  }
+
+  /** Черновик протокола урегулирования — детерминированная компиляция
+   * зафиксированных фактов, БЕЗ AI; дисклеймер «не юридический
+   * документ, требует юриста» приходит из продового сервиса. */
+  async flSettlementDraft(operatorUserId: string, configId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.familyLawV2.getSettlementProtocolDraft(operatorUserId, configId);
+  }
+
+  // ── Пункт [sandbox-dtp] 2026-09-01 — этап 5 плана доменного
+  // покрытия (последним — по слову оператора про сбор данных). Цикл:
+  // ответы → extract (LLM) → конфиг → участники → определение вины →
+  // «жемчужина» домена: реестр доказательств с chain of custody
+  // (sha256 сервером из реального содержимого, append-only журнал
+  // доступа, НИКОГДА никакого AI по доказательствам — §3.1/3.4) →
+  // черновик протокола. ──
+
+  async dtpAppendAnswer(operatorUserId: string, conversationId: string, text: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    await this.dtpOnboarding.appendAnswer(operatorUserId, conversationId, text);
+    return { ok: true };
+  }
+
+  async dtpExtract(operatorUserId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    return this.dtpOnboarding.extract(operatorUserId, conversationId);
+  }
+
+  async dtpCreateConfig(operatorUserId: string, projectId: string, draft: ExtractedDtpConfigDraft) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    return this.dtp.createConfig(operatorUserId, projectId, draft);
+  }
+
+  async dtpAddParticipant(
+    operatorUserId: string,
+    configId: string,
+    role: 'SELF' | 'OTHER_PARTY' | 'THIRD_PARTY',
+    displayName?: string,
+    hasFledScene?: boolean,
+  ) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.dtpV2.createParticipant(operatorUserId, configId, role as never, displayName, hasFledScene);
+  }
+
+  async dtpFault(
+    operatorUserId: string,
+    configId: string,
+    source: string,
+    statusText: string,
+    isOfficial?: boolean,
+  ) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.dtpV2.createFaultDetermination(operatorUserId, configId, source, statusText, new Date().toISOString(), isOfficial);
+  }
+
+  /** Доказательство: продовый createEvidence — реальная загрузка в
+   * приватный blob, sha256 сервером, гео/аудио не передаются (не
+   * требовать LOCATION-согласие ради смоука). Сразу же — запись в
+   * append-only журнал доступа и его чтение: оператор видит chain of
+   * custody целиком одной кнопкой. */
+  async dtpUploadEvidence(operatorUserId: string, configId: string, base64Content: string, contentType: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    const evidence = await this.dtp.createEvidence(
+      operatorUserId,
+      configId,
+      'PHOTO' as never,
+      false,
+      base64Content,
+      contentType,
+      new Date().toISOString(),
+    );
+    await this.dtpV2.logEvidenceAccess(operatorUserId, evidence.id, 'VIEWED_METADATA' as never);
+    const accessLog = await this.dtpV2.getEvidenceAccessLog(operatorUserId, evidence.id);
+    return {
+      evidenceId: evidence.id,
+      fileHash: evidence.fileHash,
+      mediaType: evidence.mediaType,
+      capturedAt: evidence.capturedAt,
+      accessLog: (accessLog as Array<{ action: string; occurredAt: Date }>).map((l) => ({
+        action: l.action,
+        at: l.occurredAt.toISOString(),
+      })),
+    };
+  }
+
+  async dtpSettlementDraft(operatorUserId: string, configId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    return this.dtpV2.getSettlementProtocolDraft(operatorUserId, configId);
+  }
+
+  // ── Пункт [sandbox-domain-conversations] 2026-09-01 — пять
+  // b-подэтапов одним механизмом: разговор, загруженный в доменный
+  // проект (createUploadConversation с targetProjectId) и
+  // расшифрованный обычным Шагом 2, привязывается к встрече/
+  // консультации/интервью, и запускается продовый AI-разбор.
+  // Требование «разговор принадлежит проекту домена» проверяют САМИ
+  // доменные сервисы — песочница его не дублирует и не обходит. ──
+
+  /** 1b: встреча с продавцом → AI-заключение (без вердикта
+   * «покупать/не покупать» — продовая граница §5.5). */
+  async mpMeetingConclusion(operatorUserId: string, variantId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!variantId?.trim()) throw new BadRequestException('variantId обязателен');
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    const meeting = await this.majorPurchase.createMeeting(operatorUserId, variantId, conversationId, new Date().toISOString());
+    const updated = await this.majorPurchase.generateConclusion(operatorUserId, meeting.id);
+    return {
+      meetingId: updated.id,
+      conclusionDraft: updated.conclusionDraft,
+      criteriaBreakdown: updated.criteriaBreakdown,
+    };
+  }
+
+  /** 2b: встреча с советником → нейтральный разбор по критериям (без
+   * оценки выгодности — §3.2/3.3). */
+  async invMeetingBreakdown(operatorUserId: string, opportunityId: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!opportunityId?.trim()) throw new BadRequestException('opportunityId обязателен');
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    const meeting = await this.investment.createMeeting(operatorUserId, opportunityId, conversationId, new Date().toISOString());
+    const updated = await this.investment.generateBreakdown(operatorUserId, meeting.id);
+    return { meetingId: updated.id, criteriaBreakdown: updated.criteriaBreakdown };
+  }
+
+  /** 3b: привязка расшифрованного интервью к кандидату — первая стадия
+   * конфига + указанный кандидат (или первый в пуле), completedAt
+   * сейчас; после этого «Пересчитать релевантность» перестаёт быть
+   * пустым. Выбор «первая стадия/первый кандидат» — упрощение
+   * ПЕСОЧНИЦЫ (в TMA рекрутер выбирает явно), названо в ответе. */
+  async ipAttachInterview(operatorUserId: string, projectId: string, conversationId: string, candidateStatusId?: string) {
+    await this.assertOperator(operatorUserId);
+    if (!projectId?.trim()) throw new BadRequestException('projectId обязателен');
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+
+    const config = await this.prisma.interviewPoolConfig.findUnique({
+      where: { projectId },
+      include: { interviewStages: { orderBy: { orderIndex: 'asc' }, take: 1 } },
+    });
+    if (!config || config.interviewStages.length === 0) {
+      throw new BadRequestException('У пула нет этапов интервью — extract не вернул stages или конфиг не создан');
+    }
+    const status = candidateStatusId?.trim()
+      ? await this.prisma.candidatePipelineStatus.findUnique({ where: { id: candidateStatusId } })
+      : await this.prisma.candidatePipelineStatus.findFirst({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+    if (!status || status.projectId !== projectId) {
+      throw new BadRequestException('В пуле нет кандидатов — сначала добавьте кандидата');
+    }
+
+    const progress = await this.pool.recordStageProgress(
+      operatorUserId,
+      status.id,
+      config.interviewStages[0].id,
+      conversationId,
+      new Date().toISOString(),
+    );
+    return {
+      statusId: status.id,
+      stageDefinitionId: config.interviewStages[0].id,
+      stageName: config.interviewStages[0].name,
+      completedAt: progress.completedAt,
+      note: 'Привязано к первой стадии конфига (упрощение песочницы — в TMA рекрутер выбирает стадию явно). Теперь «Пересчитать релевантность» оценит кандидата по этому интервью.',
+    };
+  }
+
+  /** 4b/5b: советник → консультация с разговором → AI-разбор. Общая
+   * форма family-law и dtp (сервисы разные, контур одинаковый). */
+  async flConsultationBreakdown(operatorUserId: string, configId: string, advisorLabel: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    const advisor = await this.familyLaw.createAdvisor(operatorUserId, configId, advisorLabel || 'Песочный юрист');
+    const consultation = await this.familyLaw.createConsultation(operatorUserId, advisor.id, conversationId, new Date().toISOString());
+    const updated = await this.familyLaw.generateBreakdown(operatorUserId, consultation.id);
+    return { advisorId: advisor.id, consultationId: updated.id, criteriaBreakdown: updated.criteriaBreakdown };
+  }
+
+  async dtpConsultationBreakdown(operatorUserId: string, configId: string, advisorLabel: string, conversationId: string) {
+    await this.assertOperator(operatorUserId);
+    if (!configId?.trim()) throw new BadRequestException('configId обязателен');
+    if (!conversationId?.trim()) throw new BadRequestException('conversationId обязателен');
+    const advisor = await this.dtp.createAdvisor(operatorUserId, configId, advisorLabel || 'Песочный юрист');
+    const consultation = await this.dtp.createConsultation(operatorUserId, advisor.id, conversationId, new Date().toISOString());
+    const updated = await this.dtp.generateBreakdown(operatorUserId, consultation.id);
+    return { advisorId: advisor.id, consultationId: updated.id, criteriaBreakdown: updated.criteriaBreakdown };
+  }
+
+  /** Смоук командной механики — тот же контур, что invGroupSmoke. */
+  async ipTeamSmoke(operatorUserId: string) {
+    await this.assertOperator(operatorUserId);
+    const team = await this.poolTeams.createTeam(operatorUserId, `Песочная команда ${new Date().toISOString().slice(0, 10)}`);
+    const invite = await this.poolTeams.createInviteLink(operatorUserId, team.id);
+    const rejoin = await this.poolTeams.joinTeam(operatorUserId, invite.token);
+    const myTeams = await this.poolTeams.listMyTeams(operatorUserId);
+    return {
+      teamId: team.id,
+      teamName: team.name,
+      inviteTokenIssued: Boolean(invite.token),
+      rejoinIdempotent: rejoin.role === 'OWNER',
+      myTeamsCount: myTeams.length,
+      notes: 'Вход второго участника одним аккаунтом не проверить — песочница не имперсонирует; инвайт можно отдать второму TMA-аккаунту.',
+    };
+  }
+
+  /** Смоук групповой механики ОДНИМ аккаунтом: создать группу →
+   * инвайт-ссылка → joinGroup СВОИМ ЖЕ токеном (проверяет валидность
+   * токена и идемпотентность повторного входа) → заявить свой pledge.
+   * Честная граница: вход ВТОРОГО участника одним аккаунтом не
+   * проверить — песочница не имперсонирует (принцип 1), об этом
+   * сказано в notes ответа. */
+  async invGroupSmoke(operatorUserId: string, pledgedAmount: number) {
+    await this.assertOperator(operatorUserId);
+    const group = await this.investmentGroups.createGroup(operatorUserId, `Песочная группа ${new Date().toISOString().slice(0, 10)}`);
+    const invite = await this.investmentGroups.createInviteLink(operatorUserId, group.id);
+    const rejoin = await this.investmentGroups.joinGroup(operatorUserId, invite.token);
+    const pledge = await this.investmentGroups.setPledge(operatorUserId, group.id, pledgedAmount);
+    const myGroups = await this.investmentGroups.listMyGroups(operatorUserId);
+    return {
+      groupId: group.id,
+      groupName: group.name,
+      inviteTokenIssued: Boolean(invite.token),
+      inviteExpiresAt: invite.expiresAt,
+      rejoinIdempotent: rejoin.role === 'OWNER',
+      pledgedAmount: pledge.pledgedAmount,
+      myGroupsCount: myGroups.length,
+      notes: 'Вход второго участника одним аккаунтом не проверить — песочница не имперсонирует; инвайт-ссылку можно отправить реальному второму аккаунту TMA.',
+    };
+  }
+
   /** Пункт [progress-diagnose] — автоматический анализ «а не сбой ли
    * это» для зависшего PROCESSING. Делает то, что оператор делал бы
    * руками через SQL и curl: собирает факты о джобе, спрашивает у
@@ -925,7 +1471,9 @@ export class AdminSandboxService {
    * живут кэш, пагинация и ключ FACT_CHECK_TOOLS_API_KEY. */
   async factCheckConversation(operatorUserId: string, conversationId: string) {
     await this.assertOperator(operatorUserId);
-    return this.discrepancy.factCheckConversationSegments(conversationId);
+    // Пункт [fact-check-ai-fallback]: userId нужен AIRouter'у фоллбека
+    // (согласия/биллинг) — и заодно закрывает владение разговором.
+    return this.discrepancy.factCheckConversationSegments(operatorUserId, conversationId);
   }
 
   async getConversation(operatorUserId: string, conversationId: string) {
