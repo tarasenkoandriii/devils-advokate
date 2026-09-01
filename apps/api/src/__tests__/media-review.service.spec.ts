@@ -5,6 +5,7 @@ function createFakePrisma() {
   const queues = new Map<string, any>();
   const items = new Map<string, any>();
   const conversations = new Map<string, any>();
+  const jobs = new Map<string, any>();
   const segments: any[] = [];
   const signals: any[] = [];
   let idCounter = 0;
@@ -105,7 +106,21 @@ function createFakePrisma() {
         if (include?.project) return { ...conv, project: { ownerId: conv.ownerId } };
         return conv;
       },
+      update: async ({ where, data }: any) => {
+        const conv = conversations.get(where.id);
+        Object.assign(conv, data);
+        return conv;
+      },
     },
+    aIJob: {
+      findUnique: async ({ where }: any) => jobs.get(where.id) ?? null,
+    },
+    _seedJob(j: any) {
+      const job = { id: nextId(), ...j };
+      jobs.set(job.id, job);
+      return job;
+    },
+    $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(undefined)),
     transcriptSegment: {
       findMany: async ({ where }: any) => {
         const convIds: string[] = where.transcript.conversationId.in;
@@ -218,6 +233,25 @@ describe('MediaReviewService', () => {
     // самый «елемент назавжди застряг», уже однажды найденный аудитом.
     expect(result.items[0].status).toBe('AWAITING_UPLOAD');
     expect(result.items[0].autoAnalysisError).toBeTruthy();
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (живой прогон 2026-08-31): джоба FAILED мимо обработчика при Conversation=ANALYZING → элемент выходит из PROCESSING с причиной из джобы', async () => {
+    const prisma = createFakePrisma();
+    const queue = prisma._seedQueue({ userId: 'u1', title: 'q' });
+    // Ручной SQL-UPDATE закрыл джобу, обработчик завершения не вызывался:
+    // джоба FAILED, разговор так и остался ANALYZING.
+    const conv = prisma._seedConversation({ status: 'ANALYZING' });
+    const job = prisma._seedJob({ status: 'FAILED', partialResult: 'закрыто вручную при расчистке' });
+    prisma._seedItem({ queueId: queue.id, conversationId: conv.id, status: 'PROCESSING', aiJobId: job.id });
+    const svc = makeService(prisma);
+
+    const result = await svc.getQueue('u1', queue.id);
+
+    // До правки синк смотрел только на Conversation → вечный PROCESSING
+    // без кнопки «Повторить». Теперь: откат + причина + разговор FAILED.
+    expect(result.items[0].status).toBe('AWAITING_UPLOAD');
+    expect(result.items[0].autoAnalysisError).toContain('вручную');
+    expect(conv.status).toBe('FAILED');
   });
 
   it('фаза C: listQueues повертає лише свої черги з кількістю елементів', async () => {

@@ -319,12 +319,20 @@ export class MediaReviewAutoService implements OnModuleInit {
     if (!item) return; // джоба не из очереди медиа-разбора
 
     if (outcome.kind === 'failed') {
+      // «Выход не прошёл валидацию схемы» на публичном видео — почти
+      // всегда ролик без внятной речи (липсинк, музыка, мемы без слов):
+      // модель честно возвращает пустые segments, а схема требует хотя
+      // бы один. Отказ правильный, но без пояснения он читается как
+      // поломка (первый живой прогон: Lisa/BLACKPINK-шортс).
+      const reason = outcome.reason.includes('валидацию схемы')
+        ? `${outcome.reason}. Чаще всего это ролик без внятной речи (музыка, липсинк) — модели нечего транскрибировать; возьмите ролик с диалогом или загрузите файл вручную`
+        : outcome.reason;
       await this.prisma.$transaction([
         this.prisma.mediaReviewQueueItem.update({
           where: { id: item.id },
           data: {
             status: MediaReviewItemStatus.AWAITING_UPLOAD,
-            autoAnalysisError: outcome.reason,
+            autoAnalysisError: reason,
           },
         }),
         ...(item.conversationId

@@ -6,7 +6,7 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ConversationProcessingStatus, MediaReviewItemStatus } from '@prisma/client';
+import { AIJobStatus, ConversationProcessingStatus, MediaReviewItemStatus } from '@prisma/client';
 import { MediaReviewAutoService } from './media-review-auto.service';
 
 export interface CreateQueueItemInput {
@@ -165,6 +165,37 @@ export class MediaReviewService {
                   'Разбор завершился ошибкой — можно загрузить файл вручную либо повторить попытку',
               },
             });
+          }
+          // Вторая дыра того же класса, найденная живым прогоном
+          // 2026-08-31: джоба закрыта МИМО обработчика завершения
+          // (ручной SQL-UPDATE при расчистке, упавший воркер между
+          // failJob и notifyCompletion) — джоба FAILED, а Conversation
+          // так и остался ANALYZING. Смотреть только на Conversation
+          // значит держать элемент в PROCESSING вечно, без кнопки
+          // «Повторить». Поэтому синк сверяется и с самой джобой.
+          if (item.aiJobId && item.conversation.status === ConversationProcessingStatus.ANALYZING) {
+            const job = await this.prisma.aIJob.findUnique({
+              where: { id: item.aiJobId },
+              select: { status: true, partialResult: true },
+            });
+            if (job && job.status === AIJobStatus.FAILED) {
+              const [updated] = await this.prisma.$transaction([
+                this.prisma.mediaReviewQueueItem.update({
+                  where: { id: item.id },
+                  data: {
+                    status: MediaReviewItemStatus.AWAITING_UPLOAD,
+                    autoAnalysisError:
+                      job.partialResult ??
+                      'Джоба разбора закрыта без результата (вне обработчика) — повторите попытку',
+                  },
+                }),
+                this.prisma.conversation.update({
+                  where: { id: item.conversationId as string },
+                  data: { status: ConversationProcessingStatus.FAILED },
+                }),
+              ]);
+              return updated;
+            }
           }
           const mapped = mapConversationStatusToItemStatus(item.conversation.status);
           if (mapped !== item.status) {
