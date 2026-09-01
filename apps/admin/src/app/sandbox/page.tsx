@@ -40,6 +40,7 @@ import type {
   SandboxTranscriptionRun,
   SandboxConversation,
   SandboxQueue,
+  SandboxQueueItem,
   SandboxAnalysis,
   SandboxFactCheck,
 } from '../../lib/types';
@@ -203,6 +204,68 @@ export default function SandboxPage() {
     const mm = Math.floor(totalSec / 60);
     const ss = totalSec % 60;
     return `${mm}:${String(ss).padStart(2, '0')}`;
+  }
+
+  // Пока есть PROCESSING — очередь сама обновляется раз в 15 секунд:
+  // прогресс без автообновления был бы мёртвой картинкой.
+  useEffect(() => {
+    if (!queue?.items.some((i) => i.status === 'PROCESSING')) return;
+    const t = setInterval(loadQueue, 15000);
+    return () => clearInterval(t);
+  }, [queue, loadQueue]);
+
+  /** ПРИБЛИЗИТЕЛЬНЫЙ прогресс разбора — из фактов БД, потому что сами
+   * провайдеры прогресса не отдают. Оси две: фаза (статус Conversation
+   * и джобы) и время (обработка видео идёт примерно в реальном времени
+   * просмотра — замерено на живых прогонах — плюс до двух минут на
+   * такты cron). Уже записанный в БД транскрипт двигает оценку выше
+   * любых расчётов по времени. Потолок 95% — стопроцентным разбор
+   * становится только фактом DONE. */
+  function processingProgress(item: SandboxQueueItem): { percent: number; label: string } | null {
+    if (item.status !== 'PROCESSING') return null;
+
+    // Транскрипт уже в БД — самая надёжная из оценок: осталась только
+    // финализация (для ручного пути — анализ, для авто — смена статуса).
+    if (item.segments > 0) {
+      return {
+        percent: item.conversationStatus === 'TRANSCRIBED' ? 80 : 95,
+        label:
+          item.conversationStatus === 'TRANSCRIBED'
+            ? `транскрипт в БД (${item.segments} сегм.) — ожидает анализа`
+            : `транскрипт в БД (${item.segments} сегм.) — финализация`,
+      };
+    }
+
+    const startedAt = item.job ? new Date(item.job.startedAt).getTime() : null;
+    const elapsedSec = startedAt !== null ? Math.max(0, (Date.now() - startedAt) / 1000) : 0;
+
+    // Ручной путь: расшифровка у AssemblyAI (джобы AIRouter нет вовсе).
+    if (item.conversationStatus === 'TRANSCRIBING') {
+      const expectedSec = 60 + (item.durationSeconds ?? 120) * 0.5; // AssemblyAI быстрее реального времени
+      return {
+        percent: Math.max(15, Math.min(75, Math.round((elapsedSec / expectedSec) * 60) + 15)),
+        label: 'расшифровка у AssemblyAI',
+      };
+    }
+
+    if (!item.job) {
+      return { percent: 5, label: 'подготовка' };
+    }
+
+    const expectedSec = 120 + (item.durationSeconds ?? 60) * 1.2;
+    let percent = Math.min(95, Math.round((elapsedSec / expectedSec) * 100));
+    let label: string;
+    if (item.job.status === 'QUEUED' || !item.job.submitted) {
+      percent = Math.min(percent, 10);
+      label = 'в очереди на постановку (~1 мин)';
+    } else if (elapsedSec > expectedSec * 2) {
+      // Сильно дольше ожидания — честно говорим, что оценка исчерпана:
+      // либо перегруз провайдера (ретраи), либо джобу закроет сторожевая.
+      label = 'дольше ожидаемого — идут ретраи либо сработает сторожевая (до 2 ч)';
+    } else {
+      label = `считается у Gemini, ~${Math.max(1, Math.round((expectedSec - elapsedSec) / 60))} мин осталось`;
+    }
+    return { percent: Math.max(3, percent), label };
   }
 
   async function handleRetryItem(itemId: string) {
@@ -476,9 +539,24 @@ export default function SandboxPage() {
                   <span className="badge">{item.status}</span>
                 )}
                 <span style={{ flex: '1 1 260px', minWidth: 200 }}>{item.title || item.youtubeVideoId}</span>
-                <span className="muted" style={{ fontSize: 13 }}>
-                  {item.segments > 0 ? `${item.segments} сегм. / ${item.signals} сигн.` : item.autoAnalysisError ? 'ошибка' : '—'}
-                </span>
+                {(() => {
+                  const progress = processingProgress(item);
+                  if (progress) {
+                    return (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }} title={progress.label}>
+                        <span style={{ width: 110, height: 6, borderRadius: 3, background: 'var(--border, #2a2f3a)', overflow: 'hidden', display: 'inline-block' }}>
+                          <span style={{ display: 'block', height: '100%', width: `${progress.percent}%`, background: 'var(--signal-ok, #3fb27f)', transition: 'width 1s linear' }} />
+                        </span>
+                        <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>≈{progress.percent}% · {progress.label}</span>
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="muted" style={{ fontSize: 13 }}>
+                      {item.segments > 0 ? `${item.segments} сегм. / ${item.signals} сигн.` : item.autoAnalysisError ? 'ошибка' : '—'}
+                    </span>
+                  );
+                })()}
                 {item.status !== 'DONE' && item.status !== 'PROCESSING' && (
                   <button
                     type="button"

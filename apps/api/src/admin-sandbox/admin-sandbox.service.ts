@@ -564,6 +564,7 @@ export class AdminSandboxService {
         // ровно так его и прочитали в первом живом прогоне.
         let segments = 0;
         let signals = 0;
+        let conversationStatus: string | null = null;
         if (i.conversationId) {
           const transcript = await this.prisma.transcript.findUnique({
             where: { conversationId: i.conversationId as string },
@@ -573,6 +574,28 @@ export class AdminSandboxService {
           });
           segments = transcript?.segments.length ?? 0;
           signals = transcript?.segments.reduce((acc, s) => acc + s._count.signals, 0) ?? 0;
+          // Статус разговора — вторая ось прогресса: для ручного пути
+          // он различает «расшифровка у AssemblyAI» и «транскрипт уже
+          // в БД, ждёт анализа», чего по одной джобе не увидеть.
+          const conv = await this.prisma.conversation.findUnique({
+            where: { id: i.conversationId as string },
+            select: { status: true },
+          });
+          conversationStatus = conv?.status ?? null;
+        }
+        // Сырьё для приблизительного прогресс-индикатора PROCESSING:
+        // провайдер прогресса НЕ отдаёт, поэтому наружу идут ФАКТЫ
+        // (фаза джобы + когда поставлена + длительность ролика), а
+        // оценка процента — на клиенте и честно помечена как «≈».
+        let job: { status: string; startedAt: Date; submitted: boolean } | null = null;
+        if (i.aiJobId && i.status === 'PROCESSING') {
+          const j = await this.prisma.aIJob.findUnique({
+            where: { id: i.aiJobId as string },
+            select: { status: true, createdAt: true, externalInteractionId: true },
+          });
+          if (j) {
+            job = { status: j.status, startedAt: j.createdAt, submitted: j.externalInteractionId != null };
+          }
         }
         return {
           id: i.id,
@@ -583,6 +606,9 @@ export class AdminSandboxService {
           autoAnalysisError: (i.autoAnalysisError as string | null | undefined) ?? null,
           segments,
           signals,
+          durationSeconds: (i.durationSeconds as number | null | undefined) ?? null,
+          conversationStatus,
+          job,
         };
       }),
     );

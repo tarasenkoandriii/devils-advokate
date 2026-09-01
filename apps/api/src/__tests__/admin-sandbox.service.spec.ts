@@ -37,6 +37,16 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
         segments: [{ _count: { signals: 1 } }, { _count: { signals: 0 } }],
       })),
     },
+    conversation: {
+      findUnique: jest.fn(async () => ({ status: 'ANALYZING' })),
+    },
+    aIJob: {
+      findUnique: jest.fn(async () => ({
+        status: 'RUNNING',
+        createdAt: new Date('2026-09-01T00:00:00Z'),
+        externalInteractionId: 'int-1',
+      })),
+    },
   };
   const secrets = {
     resolve: jest.fn(async (ref: string) => {
@@ -345,6 +355,26 @@ describe('AdminSandboxService — песочная очередь медиа-р�
     expect(res.queue?.items[0].segments).toBe(2);
     expect(res.queue?.items[0].signals).toBe(1);
     expect(res.queue?.items[0].autoAnalysisError).toBeNull();
+    // Сырьё прогресса: статус разговора отдаётся всегда (вторая ось),
+    // факты джобы — только для PROCESSING (здесь READY → null).
+    expect(res.queue?.items[0].conversationStatus).toBe('ANALYZING');
+    expect(res.queue?.items[0].job).toBeNull();
+  });
+
+  it('прогресс PROCESSING-элемента несёт факты джобы (фаза, старт, submitted) — процент считает клиент', async () => {
+    const deps = makeDeps();
+    deps.mediaReview.listQueues = jest.fn(async () => [{ id: 'queue-1', title: '[SANDBOX] Очередь из админки' }]);
+    deps.mediaReview.getQueue = jest.fn(async () => ({
+      id: 'queue-1', title: '[SANDBOX] Очередь из админки',
+      items: [{ id: 'item-1', youtubeVideoId: 'v1', title: 'T', status: 'PROCESSING', conversationId: 'conv-1', aiJobId: 'job-1', durationSeconds: 300 }],
+    }));
+    deps.prisma.transcript.findUnique = jest.fn(async (): Promise<any> => null);
+    const svc = makeService(deps);
+
+    const res = await svc.getSandboxQueue(OPERATOR);
+    const item = res.queue!.items[0];
+    expect(item.durationSeconds).toBe(300);
+    expect(item.job).toEqual({ status: 'RUNNING', startedAt: new Date('2026-09-01T00:00:00Z'), submitted: true });
   });
 
   it('«Повторить» делегируется продовому retryAnalysis с userId оператора; не-оператору — отказ', async () => {

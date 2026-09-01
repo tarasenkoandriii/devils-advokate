@@ -235,6 +235,13 @@ export interface SandboxQueueItem {
   segments: number;
   /** Итог разбора: сколько сигналов найдено (честный 0 допустим). */
   signals: number;
+  /** Длительность ролика из метаданных YouTube — основа оценки времени разбора. */
+  durationSeconds: number | null;
+  /** Статус Conversation — вторая ось прогресса (TRANSCRIBING/ANALYZING/…). */
+  conversationStatus: string | null;
+  /** Факты о джобе для PROCESSING (провайдер прогресса не отдаёт —
+   * процент оценивается на клиенте и помечается как «≈»). */
+  job: { status: string; startedAt: string; submitted: boolean } | null;
 }
 export interface SandboxQueue {
   id: string;
