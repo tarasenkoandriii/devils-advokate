@@ -27,6 +27,11 @@ import {
   ProviderHttpError,
 } from './ai-provider-client';
 import { MediaUriResolverService } from './media-uri-resolver.service';
+import {
+  DEFAULT_AI_RESPONSE_LANGUAGE,
+  normalizeLanguageCode,
+  withResponseLanguage,
+} from '../common/ai-response-language';
 import { isBackgroundCapable, GeminiApiError } from './gemini-client';
 import {
   Prisma,
@@ -55,6 +60,10 @@ export interface AIRouterRequest {
   validateOutput?: (text: string) => boolean;
   preferredModelVersionId?: string;
   maxRetries?: number;
+  /** Пункт [ai-locale] 2026-09-02: язык ответа. По умолчанию берётся
+   *  язык пользователя (User.languageCode из Telegram); поле нужно
+   *  редким вызовам, где язык диктует не пользователь. */
+  responseLanguage?: string;
 }
 
 export interface AIRouterResult {
@@ -269,7 +278,18 @@ export class AIRouterService {
         'prompt injection pattern detected in userPrompt — request rejected before reaching any AI provider',
       );
     }
-    const sanitizedRequest: AIRouterRequest = { ...request, userPrompt: sanitizedPrompt };
+    // Пункт [ai-locale] 2026-09-02: язык ответа задаётся ЗДЕСЬ, в общей
+    // воронке execute()/enqueue(), а не в промпте каждой фичи. До этого
+    // язык не задавался нигде, и модель отвечала на языке входных
+    // данных: разбор украинского видео приходил по-английски
+    // русскоязычному пользователю. Инструкция уходит и в
+    // pendingRequest асинхронных джоб — медиа-разбор получает её тоже.
+    const language = await this.resolveResponseLanguage(request);
+    const sanitizedRequest: AIRouterRequest = {
+      ...request,
+      userPrompt: sanitizedPrompt,
+      systemPrompt: withResponseLanguage(request.systemPrompt, language),
+    };
 
     const modelVersion = await this.resolveModelVersion(
       sanitizedRequest.taskType,
@@ -399,6 +419,21 @@ export class AIRouterService {
       }
     }
     return { sanitizedPrompt: sanitized, scanResultIds, blocked: false };
+  }
+
+  /**
+   * Язык ответа: явное указание вызывающего > язык пользователя из
+   * Telegram > дефолт. Отдельный запрос за языком дешевле, чем тащить
+   * его через шесть десятков вызывающих сервисов, и не даёт им забыть.
+   */
+  private async resolveResponseLanguage(request: AIRouterRequest): Promise<string> {
+    const explicit = normalizeLanguageCode(request.responseLanguage);
+    if (explicit) return explicit;
+    const user = await this.prisma.user.findUnique({
+      where: { id: request.userId },
+      select: { languageCode: true },
+    });
+    return normalizeLanguageCode(user?.languageCode) ?? DEFAULT_AI_RESPONSE_LANGUAGE;
   }
 
   /**

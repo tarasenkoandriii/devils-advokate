@@ -159,6 +159,13 @@ export class AdminAuthService {
     // Widget и Mini App отдают тот же числовой Telegram user id) —
     // намеренно не заводим параллельного "admin-пользователя", вход
     // через админку — тот же User, что и в TMA, с теми же флагами.
+    // Пункт [ai-locale] 2026-09-02: language_code здесь взять НЕОТКУДА —
+    // Telegram Login Widget отдаёт только id/имя/username/photo_url/
+    // auth_date/hash, языка в его payload нет (в отличие от initData
+    // Mini App). Если оператор пользуется и TMA — язык проставится
+    // оттуда в ту же строку User; если нет — AI отвечает на дефолтном
+    // языке (русском). Не выдумываем язык из заголовка Accept-Language:
+    // это язык браузера, а не выбор пользователя в Telegram.
     const user = await this.prisma.user.upsert({
       where: { telegramId: String(parsed.id) },
       update: {},

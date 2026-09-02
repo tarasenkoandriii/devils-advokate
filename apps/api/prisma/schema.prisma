@@ -98,6 +98,15 @@ model User {
   createdAt  DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
+  // Пункт [ai-locale] 2026-09-02: язык интерфейса пользователя из
+  // Telegram initData (language_code). Приходил с КАЖДЫМ запросом и
+  // выбрасывался — из-за этого AI отвечал на языке ВХОДНЫХ ДАННЫХ:
+  // разбор украинского видео возвращался по-английски русскоязычному
+  // пользователю. Теперь это единственный источник языка ответа для
+  // всех AI-фич (AIRouter добавляет инструкцию в системный промпт).
+  // NULL = язык неизвестен (dev-вход без initData) — берётся дефолт.
+  languageCode String?
+
   // §4.6 — влияет на то, допустим ли EPHEMERAL_SERVER без явного
   // per-operation согласия (MAXIMUM_PRIVACY запрещает его вовсе).
   privacyProcessingMode PrivacyProcessingMode @default(BALANCED)

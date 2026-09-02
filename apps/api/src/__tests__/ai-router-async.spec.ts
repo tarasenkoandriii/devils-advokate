@@ -24,6 +24,11 @@ function makeDeps() {
   const prisma = {
     _jobs: jobs,
     _rawQueries: rawQueries,
+    // Пункт [ai-locale] 2026-09-02: роутер спрашивает язык ответа
+    // (User.languageCode) и добавляет требование в системный промпт.
+    user: {
+      findUnique: async () => ({ languageCode: 'ru' }),
+    },
     aIJob: {
       findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
       count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки

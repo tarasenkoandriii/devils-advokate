@@ -22,6 +22,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizeLanguageCode } from '../common/ai-response-language';
 import {
   validateTelegramInitData,
   TelegramInitDataInvalidError,
@@ -101,10 +102,15 @@ export class TelegramAuthGuard implements CanActivate {
     // запрос, чтобы не залипать на первом значении; 'XX'/пусто (localhost,
     // приватные сети) — не пишем.
     const ipCountryCode = readVercelIpCountry(request.headers);
+    // Пункт [ai-locale] 2026-09-02: language_code из initData приходил с
+    // каждым запросом и выбрасывался. Он — единственный источник языка
+    // ответа для всех AI-фич; пишем при каждом запросе (пользователь
+    // мог сменить язык Telegram), пустое значение не затирает прежнее.
+    const languageCode = normalizeLanguageCode(parsed.user.language_code);
     const user = await this.prisma.user.upsert({
       where: { telegramId: String(parsed.user.id) },
-      update: ipCountryCode ? { ipCountryCode } : {},
-      create: { telegramId: String(parsed.user.id), ipCountryCode },
+      update: { ...(ipCountryCode ? { ipCountryCode } : {}), ...(languageCode ? { languageCode } : {}) },
+      create: { telegramId: String(parsed.user.id), ipCountryCode, languageCode },
     });
 
     // Пункт [full-block] — те саме, що в dev-bypass гілці вище:

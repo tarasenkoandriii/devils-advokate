@@ -28,6 +28,11 @@ function createFakePrisma() {
     _seedConsent(c: any) { consentRecords.push(c); },
     _getJob(id: string) { return aiJobs.get(id); },
     _getDetections() { return contentScanDetections; },
+    // Пункт [ai-locale] 2026-09-02: роутер спрашивает язык ответа
+    // (User.languageCode) и добавляет требование в системный промпт.
+    user: {
+      findUnique: async (): Promise<{ languageCode: string | null }> => ({ languageCode: 'ru' }),
+    },
     aIJob: {
       count: async () => fakeAiJobCount, // [rate-limits]: настраивается тестом лимита
       findFirst: async () => fakeReusableJob, // [idempotency]
@@ -274,6 +279,77 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
       }),
     ).rejects.toBeInstanceOf(AIRouterNoCapableModelError);
     expect(called).toBe(false);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [ai-locale]: язык пользователя уходит в системный промпт — независимо от языка материала', async () => {
+    // Найдено живым прогоном: украинский транскрипт, русскоязычный
+    // оператор, ответ по-английски. Язык ответа не задавался нигде.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    // Пользователь Telegram с русским интерфейсом.
+    prisma.user.findUnique = async () => ({ languageCode: 'ru-RU' });
+
+    let sentBody: any;
+    (global as any).fetch = async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return {
+        ok: true, status: 200, statusText: 'OK',
+        json: async () => openaiSuccessBody,
+        text: async () => JSON.stringify(openaiSuccessBody),
+      };
+    };
+
+    const router = buildRouter(prisma);
+    await router.execute({
+      userId: USER_ID,
+      taskType: 'argument-generation',
+      systemPrompt: 'Сгенерируй аргументы.',
+      userPrompt: 'Текст украинского транскрипта',
+      jsonMode: true,
+    });
+
+    const system = sentBody.messages.find((m: any) => m.role === 'system').content;
+    expect(system).toContain('Сгенерируй аргументы.'); // исходный промпт не затёрт
+    expect(system).toContain('ЯЗЫК ОТВЕТА');
+    expect(system).toContain('русский'); // ru-RU нормализован в ru
+    expect(system).toContain('НЕЗАВИСИМО от языка входных данных');
+    // Без этой оговорки модель перевела бы enum-значения, и
+    // validateOutput отверг бы ответ — фича падала бы вместо языка.
+    expect(system).toContain('ключи JSON');
+  });
+
+  it('[ai-locale] без языка у пользователя — дефолт, а не отсутствие инструкции', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    prisma.user.findUnique = async () => ({ languageCode: null }); // dev-вход без initData
+
+    let sentBody: any;
+    (global as any).fetch = async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return {
+        ok: true, status: 200, statusText: 'OK',
+        json: async () => openaiSuccessBody,
+        text: async () => JSON.stringify(openaiSuccessBody),
+      };
+    };
+
+    const router = buildRouter(prisma);
+    await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'x', jsonMode: true });
+
+    const system = sentBody.messages.find((m: any) => m.role === 'system').content;
+    expect(system).toContain('русский');
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: подбор пропускает модель без ключа и берёт следующую с ключом', async () => {
