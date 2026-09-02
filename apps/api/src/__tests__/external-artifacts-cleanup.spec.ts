@@ -48,6 +48,19 @@ describe('ExternalArtifactsCleanupService', () => {
     expect(report.conversationAudioBlobs).toBe(1);
   });
 
+  it('РЕГРЕССИЯ (отставание миграции): база без значения PROCESSING — удаление не падает, ищутся только PENDING', async () => {
+    const { svc, calls } = make({ sparring: [{ externalTranscriptionJobId: 'soniox:vr-1' }] });
+    const prisma: any = (svc as any).prisma;
+    const original = prisma.sparringVoiceReplyJob.findMany;
+    prisma.sparringVoiceReplyJob.findMany = async ({ where }: any) => {
+      if (where.status.in.includes('PROCESSING')) throw new Error('invalid input value for enum "SparringVoiceReplyStatus": "PROCESSING"');
+      return original({ where });
+    };
+    const report = await svc.discardForUser('u1');
+    expect(report.sttJobsDiscarded).toBe(1);
+    expect(calls.discarded).toEqual(['soniox:vr-1']);
+  });
+
   it('нет токена Blob — доказательства помечаются failed, остальное всё равно убирается', async () => {
     const { svc, calls } = make({ token: null, evidence: [{ id: 'e1', blobUrl: 'https://blob/ok' }], conversations: [{ id: 'c1', audioBlobPathname: 'x', status: 'UPLOADED', externalTranscriptionJobId: null }] });
     const report = await svc.discardForUser('u1');

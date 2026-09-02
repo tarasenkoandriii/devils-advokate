@@ -25,6 +25,7 @@ import { useEffect, useRef, useState } from 'react';
 import { sandboxTranscriptionToken, sandboxVoiceNote } from '../lib/endpoints';
 import { startLiveAudioCapture, LiveAudioCaptureHandle } from '../lib/live-audio-capture';
 import { connectLiveTranscription, LiveTranscriptionHandle } from '../lib/live-transcription';
+import { startSilenceWatchdog, SilenceWatchdogHandle, SILENCE_AUTO_STOP_MS } from '../lib/silence-watchdog';
 
 interface Props {
   value: string;
@@ -60,8 +61,12 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
   // partial-фразы показываются поверх и заменяются (как в TMA).
   const baseRef = useRef('');
   const langRef = useRef<VoiceLang>('ru');
+  const silenceRef = useRef<SilenceWatchdogHandle | null>(null);
+  const [autoStopped, setAutoStopped] = useState(false);
 
   function stopCaptureOnly() {
+    silenceRef.current?.stop();
+    silenceRef.current = null;
     wsRef.current?.stop();
     wsRef.current = null;
     recorderRef.current = null;
@@ -85,6 +90,7 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
 
   async function start() {
     setVoiceError(null);
+    setAutoStopped(false);
     baseRef.current = value;
     langRef.current = lang;
     const capture = await startLiveAudioCapture((state, msg) => {
@@ -110,6 +116,7 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
           ctx,
           stream,
           (update) => {
+            silenceRef.current?.touch(); // текст от провайдера — это речь, даже тихая
             if (update.isFinal) {
               baseRef.current = `${baseRef.current} ${update.text}`.trim();
               partial = '';
@@ -144,6 +151,12 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
         recorderRef.current = recorder;
         recorder.start(1000);
       }
+      // 2026-09-02: авто-стоп после 30 с тишины на обеих ветках — для
+      // записи-заметки это ещё и запуск распознавания (stop() → onstop).
+      silenceRef.current = startSilenceWatchdog(capture.getAnalyser(), () => {
+        setAutoStopped(true);
+        stop();
+      });
       setRecording(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Голосовой ввод недоступен';
@@ -208,11 +221,14 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
           {recording ? '■ Стоп' : '🎤 Голосом'}
         </button>
         {recording && STREAMING_LANGS.has(langRef.current) && (
-          <span className="muted" style={{ fontSize: 12 }}>Говорите — текст появится в поле по мере речи</span>
+          <span className="muted" style={{ fontSize: 12 }}>Говорите — текст появится в поле по мере речи; запись остановится сама после {SILENCE_AUTO_STOP_MS / 1000} с тишины</span>
+        )}
+        {!recording && !transcribing && autoStopped && !voiceError && (
+          <span className="muted" style={{ fontSize: 12 }}>Запись остановлена: {SILENCE_AUTO_STOP_MS / 1000} с тишины</span>
         )}
         {recording && !STREAMING_LANGS.has(langRef.current) && (
           <span className="muted" style={{ fontSize: 12 }}>
-            Идёт запись — текст появится после «Стоп» (русский/украинский живой стриминг не поддерживает, распознаём записью)
+            Идёт запись — текст появится после «Стоп» (без выбранного языка распознаём запись целиком, чтобы модель определила язык сама)
           </span>
         )}
         {transcribing && <span className="muted" style={{ fontSize: 12 }}>Распознаём запись…</span>}

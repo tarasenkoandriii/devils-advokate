@@ -16,6 +16,8 @@ export interface FieldSpec {
   required?: boolean;
   options?: Array<{ value: string; label: string }>;
   hint?: string;
+  /** подсказка внутри поля (для textarea с голосовым вводом) */
+  placeholder?: string;
   /** для type=money — имя поля валюты рядом (по умолчанию 'currency') */
   currencyField?: string;
 }

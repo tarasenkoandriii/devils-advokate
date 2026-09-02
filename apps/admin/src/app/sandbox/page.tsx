@@ -1288,13 +1288,11 @@ export default function SandboxPage() {
                         </p>
                         {!healthDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={healthAnswerText}
-                              onChange={(e) => setHealthAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ (необязательно)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={healthAnswerText} onChange={setHealthAnswerText} placeholder="Дополнительный ответ (необязательно)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={healthBusy !== null || !healthAnswerText.trim()}
@@ -1452,13 +1450,11 @@ export default function SandboxPage() {
                         )}
                         {!mpDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={mpAnswerText}
-                              onChange={(e) => setMpAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ (необязательно)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={mpAnswerText} onChange={setMpAnswerText} placeholder="Дополнительный ответ (необязательно)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={mpBusy !== null || !mpAnswerText.trim()}
@@ -1629,13 +1625,11 @@ export default function SandboxPage() {
                         </p>
                         {!invDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={invAnswerText}
-                              onChange={(e) => setInvAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ (необязательно)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={invAnswerText} onChange={setInvAnswerText} placeholder="Дополнительный ответ (необязательно)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={invBusy !== null || !invAnswerText.trim()}
@@ -1839,13 +1833,11 @@ export default function SandboxPage() {
                         </p>
                         {!ipDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={ipAnswerText}
-                              onChange={(e) => setIpAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ про вакансию (необязательно)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={ipAnswerText} onChange={setIpAnswerText} placeholder="Дополнительный ответ про вакансию (необязательно)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={ipBusy !== null || !ipAnswerText.trim()}
@@ -2092,13 +2084,11 @@ export default function SandboxPage() {
                         </p>
                         {!flDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={flAnswerText}
-                              onChange={(e) => setFlAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ (необязательно)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={flAnswerText} onChange={setFlAnswerText} placeholder="Дополнительный ответ (необязательно)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={flBusy !== null || !flAnswerText.trim()}
@@ -2302,13 +2292,11 @@ export default function SandboxPage() {
                         </p>
                         {!dtpDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={dtpAnswerText}
-                              onChange={(e) => setDtpAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ (необязательно)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={dtpAnswerText} onChange={setDtpAnswerText} placeholder="Дополнительный ответ (необязательно)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={dtpBusy !== null || !dtpAnswerText.trim()}
@@ -2502,13 +2490,11 @@ export default function SandboxPage() {
                         </p>
                         {!jsDraft && (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <input
-                              type="text"
-                              value={jsAnswerText}
-                              onChange={(e) => setJsAnswerText(e.target.value)}
-                              placeholder="Дополнительный ответ (опыт, стек, город)…"
-                              style={{ flex: '1 1 320px' }}
-                            />
+                            {/* Голос и текст равноправны (2026-09-02): тот же VoiceTextInput,
+                                что у intake-квиза — ru/uk через Soniox, en через AssemblyAI. */}
+                            <div style={{ flex: '1 1 320px' }}>
+                              <VoiceTextInput value={jsAnswerText} onChange={setJsAnswerText} placeholder="Дополнительный ответ (опыт, стек, город)…" rows={2} />
+                            </div>
                             <button
                               type="button"
                               disabled={jsBusy !== null || !jsAnswerText.trim()}

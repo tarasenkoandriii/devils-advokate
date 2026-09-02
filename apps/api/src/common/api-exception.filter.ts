@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiErrorResponse } from './api-response.interceptor';
+import { isUnknownEnumValueError } from './enum-migration-lag';
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -83,6 +84,19 @@ export class ApiExceptionFilter implements ExceptionFilter {
           'Схема базы данных не накатана или устарела: в базе нет таблиц/колонок, которые описаны в schema.prisma. ' +
           'Выполните `npx prisma db push` против этой базы (через DIRECT_URL, порт 5432 — DDL не проходит через pgbouncer), ' +
           'затем `npm run prisma:seed`. Подробности — VERCEL.md, раздел «Первый деплой базы данных».',
+      };
+    }
+
+    // Продолжение аудита 2026-09-02: значение перечисления, которого база
+    // ещё не знает (22P02) — ручная миграция ALTER TYPE не применена.
+    // Prisma отдельного кода не даёт, распознаём по тексту драйвера.
+    if (isUnknownEnumValueError(exception)) {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        message:
+          'База данных не знает нового значения перечисления: не применена ручная миграция ALTER TYPE ' +
+          '(см. apps/api/prisma/manual-migrations/, последняя — voice_reply_processing_2026_09_02.sql). ' +
+          'Выполните её отдельным вызовом по DIRECT_URL, без транзакции. Это конфигурация, а не сбой функции.',
       };
     }
 

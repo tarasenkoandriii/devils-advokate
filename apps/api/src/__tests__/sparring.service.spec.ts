@@ -476,6 +476,26 @@ async function run() {
     assertEqual(prisma._getMessages().length - messagesBefore, 2, 'ровно одна пара реплик (пользователь + оппонент), а не две');
   });
 
+  test('РЕГРЕССИЯ (отставание миграции): база без значения PROCESSING — реплика всё равно обрабатывается, а не 500', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    const fakeTranscription = new FakeTranscriptionService();
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
+    const session = await svc.startSession(USER_ID, PROJECT_ID);
+    const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
+    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = {
+      status: 'completed', id: fakeTranscription.externalJobId,
+      utterances: [{ speaker: 'A', text: 'реплика до миграции', start: 0, end: 1000 }],
+    };
+    // Postgres 22P02 — так падает updateMany с ещё не добавленным значением.
+    prisma.sparringVoiceReplyJob.updateMany = async () => { throw new Error('invalid input value for enum "SparringVoiceReplyStatus": "PROCESSING"'); };
+
+    await svc.handleVoiceReplyWebhook({ transcript_id: fakeTranscription.externalJobId, status: 'completed' } as any);
+
+    const updated = prisma._getVoiceReplyJobs().find((j: any) => j.id === job.id);
+    assertEqual(updated.status, 'COMPLETED', 'код впереди миграции — работаем в прежнем режиме, реплика создана');
+  });
+
   test('КЛЮЧЕВОЙ ТЕСТ: handleVoiceReplyWebhook() при ошибке AssemblyAI переводит job в FAILED, не создаёт сообщений', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);

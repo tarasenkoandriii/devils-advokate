@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { FieldSpec } from '../../lib/domains/types';
 import { haptic } from '../../lib/telegram';
+import { VoiceTextInput } from './VoiceTextInput';
 
 interface Props {
   fields: FieldSpec[];
@@ -65,7 +66,13 @@ export function EntityForm({ fields, submitLabel, initial, onSubmit, onCancel }:
       {fields.map((f) => (
         <label key={f.name} className="entity-form__field">
           <span>{f.label}{f.required ? ' *' : ''}</span>
-          {f.type === 'textarea' && <textarea rows={3} value={String(values[f.name] ?? '')} onChange={(e) => set(f.name, e.target.value)} />}
+          {/* 2026-09-02 (заполнение голосом по всем доменам): каждое
+              многострочное поле любого домена — с микрофоном, тем же
+              VoiceTextInput, что у квиза и онбординга. Голос и текст
+              равноправны; без микрофона/согласия остаётся текст. */}
+          {f.type === 'textarea' && (
+            <VoiceTextInput value={String(values[f.name] ?? '')} onChange={(text) => set(f.name, text)} disabled={busy} placeholder={f.placeholder} />
+          )}
           {f.type === 'select' && (
             <select value={String(values[f.name] ?? '')} onChange={(e) => set(f.name, e.target.value)}>
               <option value="">—</option>

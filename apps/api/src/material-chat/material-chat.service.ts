@@ -19,12 +19,13 @@
 // (title, критика, editPrompt последней версии) — тот же принцип
 // locality, что во всём §3.27.
 
-import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import type { ParsedTranscript } from '../conversations/transcription.service';
 import { SttService, sttJobIdVariants } from '../stt/stt.service';
 import { parseSttWebhookPayload } from '../stt/stt-webhook-payload';
+import { isUnknownEnumValueError, warnEnumMigrationLagOnce } from '../common/enum-migration-lag';
 import type { SttProviderName } from '../stt/stt-language';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -63,6 +64,8 @@ const SYSTEM_PROMPT =
 
 @Injectable()
 export class MaterialChatService {
+  private readonly logger = new Logger(MaterialChatService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
@@ -353,11 +356,18 @@ export class MaterialChatService {
     // нашего ответа, вторая доставка успевала пройти ту же проверку и
     // создавала вторую пару реплик. UPDATE с условием на статус: кто
     // перевёл PENDING → PROCESSING, тот и обрабатывает; второму — count 0.
-    const claimed = await this.prisma.materialChatVoiceReplyJob.updateMany({
-      where: { id: job.id, status: SparringVoiceReplyStatus.PENDING },
-      data: { status: SparringVoiceReplyStatus.PROCESSING },
-    });
-    if (claimed.count === 0) return;
+    // Отставание миграции (значение PROCESSING ещё не в базе) — не отказ
+    // реплики: работаем как до правки, с предупреждением в лог один раз.
+    try {
+      const claimed = await this.prisma.materialChatVoiceReplyJob.updateMany({
+        where: { id: job.id, status: SparringVoiceReplyStatus.PENDING },
+        data: { status: SparringVoiceReplyStatus.PROCESSING },
+      });
+      if (claimed.count === 0) return;
+    } catch (err) {
+      if (!isUnknownEnumValueError(err)) throw err;
+      warnEnumMigrationLagOnce(this.logger, 'materialChatVoiceReplyJob.claim');
+    }
 
     let parsed: ParsedTranscript | null = null;
     let failure: string | null = null;

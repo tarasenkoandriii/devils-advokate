@@ -28,6 +28,7 @@ import { AudioBlobService } from '../../conversations/audio-blob.service';
 import { SttService, parseSttJobId } from '../../stt/stt.service';
 import { deleteBlob } from '../vercel-blob';
 import { resolveBlobToken } from '../blob-token';
+import { isUnknownEnumValueError, warnEnumMigrationLagOnce } from '../enum-migration-lag';
 
 export interface ExternalArtifactsReport {
   /** Доказательства ДТП: найдено / удалено / не удалось. */
@@ -115,17 +116,7 @@ export class ExternalArtifactsCleanupService {
       }
     }
 
-    const inFlight = [SparringVoiceReplyStatus.PENDING, SparringVoiceReplyStatus.PROCESSING];
-    const [sparringJobs, materialJobs] = await Promise.all([
-      this.prisma.sparringVoiceReplyJob.findMany({
-        where: { status: { in: inFlight }, sparringSession: scope },
-        select: { externalTranscriptionJobId: true },
-      }),
-      this.prisma.materialChatVoiceReplyJob.findMany({
-        where: { status: { in: inFlight }, materialChatSession: { workingMaterial: scope } },
-        select: { externalTranscriptionJobId: true },
-      }),
-    ]);
+    const [sparringJobs, materialJobs] = await this.findInFlightVoiceJobs(scope);
     for (const job of [...sparringJobs, ...materialJobs]) {
       const { provider, externalJobId } = parseSttJobId(job.externalTranscriptionJobId);
       await this.stt.discardOrphan(provider, externalJobId);
@@ -136,5 +127,30 @@ export class ExternalArtifactsCleanupService {
       this.logger.warn(`Внешние артефакты: не удалось удалить ${report.evidenceFailed} файлов доказательств — нужна ручная чистка`);
     }
     return report;
+  }
+
+  /** Голосовые реплики в полёте. До применения миграции перечисления
+   * значение PROCESSING неизвестно базе (22P02) — тогда ищем только
+   * PENDING: удаление аккаунта/проекта не должно падать из-за отставания
+   * миграции, а PROCESSING без миграции в базе и не появляется. */
+  private async findInFlightVoiceJobs(scope: { project: { ownerId: string } | { id: string } }) {
+    const query = (statuses: SparringVoiceReplyStatus[]) =>
+      Promise.all([
+        this.prisma.sparringVoiceReplyJob.findMany({
+          where: { status: { in: statuses }, sparringSession: scope },
+          select: { externalTranscriptionJobId: true },
+        }),
+        this.prisma.materialChatVoiceReplyJob.findMany({
+          where: { status: { in: statuses }, materialChatSession: { workingMaterial: scope } },
+          select: { externalTranscriptionJobId: true },
+        }),
+      ]);
+    try {
+      return await query([SparringVoiceReplyStatus.PENDING, SparringVoiceReplyStatus.PROCESSING]);
+    } catch (err) {
+      if (!isUnknownEnumValueError(err)) throw err;
+      warnEnumMigrationLagOnce(this.logger, 'ExternalArtifactsCleanupService');
+      return query([SparringVoiceReplyStatus.PENDING]);
+    }
   }
 }

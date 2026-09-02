@@ -55,6 +55,20 @@ describe('VoiceReplyReaperService', () => {
     expect(byId['s-done'].status).toBe('COMPLETED');
   });
 
+  it('РЕГРЕССИЯ (отставание миграции): база без значения PROCESSING — PENDING всё равно чистится, PROCESSING пропускается', async () => {
+    const sparring: Job[] = [{ id: 's-old-pending', status: 'PENDING', updatedAt: ago(VOICE_REPLY_PENDING_MAX_AGE_MS + 1000), errorMessage: null }];
+    const model = fakeModel(sparring);
+    const original = model.updateMany;
+    model.updateMany = async (args: any) => {
+      if (args.where.status === 'PROCESSING') throw new Error('invalid input value for enum "SparringVoiceReplyStatus": "PROCESSING"');
+      return original(args);
+    };
+    const prisma = { sparringVoiceReplyJob: model, materialChatVoiceReplyJob: fakeModel([]) };
+    const result = await new VoiceReplyReaperService(prisma as any).reapStale(now);
+    expect(result).toEqual({ voiceRepliesReaped: 1 });
+    expect(sparring[0].status).toBe('FAILED');
+  });
+
   it('пустая база — ноль, без ошибок', async () => {
     const prisma = { sparringVoiceReplyJob: fakeModel([]), materialChatVoiceReplyJob: fakeModel([]) };
     expect(await new VoiceReplyReaperService(prisma as any).reapStale(now)).toEqual({ voiceRepliesReaped: 0 });

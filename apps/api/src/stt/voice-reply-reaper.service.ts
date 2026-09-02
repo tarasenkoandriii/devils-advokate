@@ -26,6 +26,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SparringVoiceReplyStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUnknownEnumValueError, warnEnumMigrationLagOnce } from '../common/enum-migration-lag';
 
 export const VOICE_REPLY_PENDING_MAX_AGE_MS = 30 * 60 * 1000;
 export const VOICE_REPLY_PROCESSING_MAX_AGE_MS = 5 * 60 * 1000;
@@ -57,13 +58,26 @@ export class VoiceReplyReaperService {
       where: { status: SparringVoiceReplyStatus.PROCESSING, updatedAt: { lt: processingBefore } },
       data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: PROCESSING_REASON },
     };
-    const results = await Promise.all([
+    // Ветка PROCESSING отдельно: до применения миграции перечисления
+    // запрос с этим значением падает в Postgres (22P02). Тогда PENDING
+    // всё равно чистим, PROCESSING пропускаем с предупреждением — сторожевая
+    // не должна ломаться целиком из-за отставания миграции.
+    const pending = await Promise.all([
       this.prisma.sparringVoiceReplyJob.updateMany(pendingArgs),
-      this.prisma.sparringVoiceReplyJob.updateMany(processingArgs),
       this.prisma.materialChatVoiceReplyJob.updateMany(pendingArgs),
-      this.prisma.materialChatVoiceReplyJob.updateMany(processingArgs),
     ]);
-    const total = results.reduce((sum, r) => sum + r.count, 0);
+    let processingCount = 0;
+    try {
+      const processing = await Promise.all([
+        this.prisma.sparringVoiceReplyJob.updateMany(processingArgs),
+        this.prisma.materialChatVoiceReplyJob.updateMany(processingArgs),
+      ]);
+      processingCount = processing.reduce((sum, r) => sum + r.count, 0);
+    } catch (err) {
+      if (!isUnknownEnumValueError(err)) throw err;
+      warnEnumMigrationLagOnce(this.logger, 'VoiceReplyReaperService');
+    }
+    const total = pending.reduce((sum, r) => sum + r.count, 0) + processingCount;
 
     if (total > 0) {
       this.logger.warn(`Сторожевая голосовых реплик: ${total} джоб переведено в FAILED по истечении срока`);
