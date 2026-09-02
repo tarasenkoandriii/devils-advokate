@@ -47,8 +47,8 @@ export default function PrivacyPage() {
   }
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void load().finally(() => setLoading(false));
+
   }, []);
 
   async function handleDeletePerson(personId: string) {

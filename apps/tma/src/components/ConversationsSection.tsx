@@ -14,7 +14,7 @@
 // отдельной библиотеки, не тянется без сети в этой среде разработки;
 // поле редактируемое, пользователь может поправить вручную.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   assignParticipant,
   checkAgainstUserSource,
@@ -79,16 +79,15 @@ export function ConversationsSection({ projectId }: ConversationsSectionProps) {
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listConversations(projectId)
       .then(setConversations)
       .catch(() => setConversations([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   if (loading) return null;
 
@@ -117,7 +116,7 @@ export function ConversationsSection({ projectId }: ConversationsSectionProps) {
           projectId={projectId}
           onDone={() => {
             setShowAddForm(false);
-            reload();
+            void reload();
           }}
           onCancel={() => setShowAddForm(false)}
         />
@@ -345,11 +344,20 @@ function ConversationRow({
   // перепроверяем родительский список (пока не появится push/webhook
   // до клиента, что вне рамок этого прохода — polling самый простой
   // рабочий вариант, не идеальный).
+  // onChanged — проп: его идентичность меняется на каждый рендер
+  // родителя, поэтому в зависимостях он пересоздавал бы интервал и
+  // сбрасывал отсчёт 5 секунд (при частых рендерах — бесконечно).
+  // Держим его в ref: интервал живёт по статусу, а вызывается всегда
+  // свежая функция. Это заменило подавление exhaustive-deps.
+  const onChangedRef = useRef(onChanged);
+  useEffect(() => {
+    onChangedRef.current = onChanged;
+  }, [onChanged]);
+
   useEffect(() => {
     if (conversation.status !== 'TRANSCRIBING') return;
-    const interval = setInterval(onChanged, 5000);
+    const interval = setInterval(() => onChangedRef.current(), 5000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.status]);
 
   // Пункт 15: поворотные точки (§3.50 ТЗ) — загружаются вместе с

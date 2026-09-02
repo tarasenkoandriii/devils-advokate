@@ -63,13 +63,20 @@ function makeDeps() {
       create: jest.fn(async ({ data }: any) => ({ id: `inf-${++idCounter}`, ...data })),
     },
     aIModelCapability: {
-      findFirst: jest.fn(async ({ where }: any) => ({
-        _where: where,
-        modelVersion: {
-          id: 'mv-google', version: 'gemini-test',
-          model: { name: 'gemini', provider: { name: 'google', apiEndpoint: 'https://g.example', credentialRef: 'GEMINI_API_KEY' } },
+      // Пункт [router-simplify] 2026-09-01: подбор идёт по списку всех
+      // активных моделей, а не по строке под конкретный taskType.
+      findMany: jest.fn(async ({ where }: any) => [
+        {
+          _where: where,
+          modelVersionId: 'mv-google',
+          vision: true,
+          audio: true,
+          modelVersion: {
+            id: 'mv-google', version: 'gemini-test',
+            model: { name: 'gemini', provider: { name: 'google', apiEndpoint: 'https://g.example', credentialRef: 'GEMINI_API_KEY' } },
+          },
         },
-      })),
+      ]),
     },
     contentScanResult: { updateMany: jest.fn(async () => ({ count: 1 })) },
     $queryRaw: jest.fn(async (strings: TemplateStringsArray): Promise<Array<{ id: string }>> => {

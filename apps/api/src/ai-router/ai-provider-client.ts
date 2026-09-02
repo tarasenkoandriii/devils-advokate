@@ -259,7 +259,7 @@ export function selectProviderClient(providerName: string): AIProviderClient {
     // импортирует типы отсюда, и верхний импорт дал бы цикл на этапе
     // инициализации модулей.
     case 'google': {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+
       const { GeminiClient } = require('./gemini-client') as typeof import('./gemini-client');
       return new GeminiClient();
     }

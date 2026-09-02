@@ -11,38 +11,87 @@ import { PrismaClient, DeletionBehavior } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+/**
+ * Повторный аудит 2026-09-01. Все `upsert` провайдеров шли с
+ * `update: {}` — то есть на УЖЕ засеянной базе правка apiEndpoint,
+ * credentialRef или region в этом файле не долетала никуда:
+ * коммит выглядел применённым, прод продолжал ходить по старому адресу
+ * старым способом авторизации. Тот же класс, что и «сид отстал от
+ * кода», только в обратную сторону — код обогнал базу.
+ *
+ * Теперь сид — источник истины и по параметрам подключения. Изменение
+ * не молчаливое: расхождение печатается пополе, чтобы ручная правка на
+ * проде (если она была осознанной) не исчезла незаметно.
+ */
+async function upsertProvider(data: {
+  name: string;
+  apiEndpoint: string;
+  credentialRef: string;
+  region?: string;
+}) {
+  const existing = await prisma.aIProvider.findUnique({ where: { name: data.name } });
+  const update = {
+    apiEndpoint: data.apiEndpoint,
+    credentialRef: data.credentialRef,
+    ...(data.region !== undefined ? { region: data.region } : {}),
+  };
+  if (existing) {
+    const changed = Object.entries(update).filter(
+      ([field, value]) => (existing as unknown as Record<string, unknown>)[field] !== value,
+    );
+    if (changed.length > 0) {
+      console.log(
+        `Провайдер ${data.name}: параметры подключения приведены к сиду — ` +
+          changed
+            .map(([f, v]) => `${f}: ${JSON.stringify((existing as unknown as Record<string, unknown>)[f])} → ${JSON.stringify(v)}`)
+            .join('; '),
+      );
+    }
+  }
+  return prisma.aIProvider.upsert({ where: { name: data.name }, update, create: { ...data, ...update } });
+}
+
+/**
+ * Одна строка capability на модель (Пункт [router-simplify] 2026-09-01).
+ * Идемпотентна и по-прежнему приводит поля к сиду: модель, выключенную
+ * прошлым прогоном как снятую, повторный сид вернёт в active, если она
+ * снова в списке.
+ */
+async function upsertCapability(
+  modelVersionId: string,
+  data: { vision?: boolean; audio?: boolean; latencyClass?: string; costClass?: string },
+) {
+  const update = {
+    vision: data.vision ?? false,
+    audio: data.audio ?? false,
+    latencyClass: data.latencyClass ?? null,
+    costClass: data.costClass ?? null,
+    availability: 'active',
+  };
+  return prisma.aIModelCapability.upsert({
+    where: { modelVersionId },
+    update,
+    create: { modelVersionId, ...update },
+  });
+}
+
 async function main() {
-  const openai = await prisma.aIProvider.upsert({
-    where: { name: 'openai' },
-    update: {},
-    create: {
-      name: 'openai',
-      apiEndpoint: 'https://api.openai.com/v1',
-      authMethod: 'bearer',
-      credentialRef: 'OPENAI_API_KEY',
-    },
+  const openai = await upsertProvider({
+    name: 'openai',
+    apiEndpoint: 'https://api.openai.com/v1',
+    credentialRef: 'OPENAI_API_KEY',
   });
 
-  const anthropic = await prisma.aIProvider.upsert({
-    where: { name: 'anthropic' },
-    update: {},
-    create: {
-      name: 'anthropic',
-      apiEndpoint: 'https://api.anthropic.com',
-      authMethod: 'x-api-key',
-      credentialRef: 'ANTHROPIC_API_KEY',
-    },
+  const anthropic = await upsertProvider({
+    name: 'anthropic',
+    apiEndpoint: 'https://api.anthropic.com',
+    credentialRef: 'ANTHROPIC_API_KEY',
   });
 
-  const xai = await prisma.aIProvider.upsert({
-    where: { name: 'xai' },
-    update: {},
-    create: {
-      name: 'xai',
-      apiEndpoint: 'https://api.x.ai/v1',
-      authMethod: 'bearer',
-      credentialRef: 'XAI_API_KEY',
-    },
+  const xai = await upsertProvider({
+    name: 'xai',
+    apiEndpoint: 'https://api.x.ai/v1',
+    credentialRef: 'XAI_API_KEY',
   });
 
   // Пункт 13: STT/диаризация (Conversation Dossier, раздел 2 ТЗ) —
@@ -50,37 +99,28 @@ async function main() {
   // что для LLM-провайдеров выше, не отдельная параллельная структура
   // (см. обоснование выбора AssemblyAI и решение не тащить через AIJob
   // в prisma/README.md, "Пункт 13").
-  const assemblyai = await prisma.aIProvider.upsert({
-    where: { name: 'assemblyai' },
-    update: {},
-    create: {
-      name: 'assemblyai',
-      apiEndpoint: 'https://api.assemblyai.com/v2',
-      authMethod: 'x-api-key',
-      credentialRef: 'ASSEMBLYAI_API_KEY',
-    },
+  const assemblyai = await upsertProvider({
+    name: 'assemblyai',
+    apiEndpoint: 'https://api.assemblyai.com/v2',
+    credentialRef: 'ASSEMBLYAI_API_KEY',
   });
 
   // Пункт [multimodal] §5 — Gemini: единственный провайдер с медиа и
   // фоновыми задачами (Interactions API, background: true). Ключ — в
   // ЗАГОЛОВКЕ x-goog-api-key: живая диагностика 2026-08-31
   // (scripts/diagnose-gemini.ts) подтвердила header-auth (вариант A1),
-  // query-вариант (?key=) не прошёл ни разу. authMethod здесь —
-  // документальное описание; клиент использует header-auth напрямую.
+  // query-вариант (?key=) не прошёл ни разу. Способ авторизации в БД
+  // больше не хранится (колонку authMethod не читал никто): его знает
+  // клиент провайдера, см. selectProviderClient.
   //
   // ВЕРСИЯ МОДЕЛИ: gemini-3.7-flash подтверждена тем же живым прогоном
   // (200 OK, задача принята). При смене модели — сверить со списком,
   // доступным ВАШЕМУ ключу (ТЗ §1.2).
-  const google = await prisma.aIProvider.upsert({
-    where: { name: 'google' },
-    update: {},
-    create: {
-      name: 'google',
-      region: 'US',
-      apiEndpoint: 'https://generativelanguage.googleapis.com',
-      authMethod: 'header-key',
-      credentialRef: 'GEMINI_API_KEY',
-    },
+  const google = await upsertProvider({
+    name: 'google',
+    region: 'US',
+    apiEndpoint: 'https://generativelanguage.googleapis.com',
+    credentialRef: 'GEMINI_API_KEY',
   });
   const googleModel = await prisma.aIModel.upsert({
     where: { providerId_name: { providerId: google.id, name: 'gemini-flash' } },
@@ -92,27 +132,16 @@ async function main() {
     update: {},
     create: { modelId: googleModel.id, version: 'gemini-3.7-flash' },
   });
-  for (const mediaTaskType of ['media-public-review', 'conversation-paralinguistics']) {
-    const existing = await prisma.aIModelCapability.findFirst({
-      where: { modelVersionId: googleVersion.id, taskType: mediaTaskType },
-    });
-    if (!existing) {
-      await prisma.aIModelCapability.create({
-        data: {
-          modelVersionId: googleVersion.id,
-          taskType: mediaTaskType,
-          structuredOutput: true,
-          streaming: false,
-          vision: true, // resolveModelVersion фильтрует по vision/audio для медиа-задач (§10.3)
-          audio: true,
-          latencyClass: 'high', // фоновая задача, минуты — потому и асинхронная полоса
-          privacyClass: 'external_processing',
-          costClass: 'high', // ~300 токенов/сек видео — на два порядка дороже текстовых вызовов
-          availability: 'active',
-        },
-      });
-    }
-  }
+  // Пункт [router-simplify] 2026-09-01: было две строки — по одной на
+  // каждый медиа-taskType. Измерения taskType больше нет: строка одна
+  // на модель, а vision/audio отвечают на единственный вопрос, которого
+  // не видно из ключей, — можно ли этой модели давать видео и звук.
+  await upsertCapability(googleVersion.id, {
+    vision: true,
+    audio: true,
+    latencyClass: 'high', // фоновая задача, минуты — потому и асинхронная полоса
+    costClass: 'high', // ~300 токенов/сек видео — на два порядка дороже текстовых вызовов
+  });
 
   const openaiModel = await prisma.aIModel.upsert({
     where: { providerId_name: { providerId: openai.id, name: 'gpt-4.1' } },
@@ -174,24 +203,12 @@ async function main() {
     update: {},
     create: { modelId: assemblyaiModel.id, version: 'best' },
   });
-  const existingAssemblyCapability = await prisma.aIModelCapability.findFirst({
-    where: { modelVersionId: assemblyaiVersion.id, taskType: 'audio_transcription' },
-  });
-  if (!existingAssemblyCapability) {
-    await prisma.aIModelCapability.create({
-      data: {
-        modelVersionId: assemblyaiVersion.id,
-        taskType: 'audio_transcription',
-        structuredOutput: true, // JSON-ответ с сегментами/спикерами, не свободный текст
-        streaming: false,
-        audio: true,
-        latencyClass: 'medium', // async job, не realtime — минуты на часовой файл, не секунды
-        privacyClass: 'ephemeral_processing', // файл не хранится у AssemblyAI дольше обработки при соответствующей настройке аккаунта — см. README про EPHEMERAL_SERVER
-        costClass: 'low',
-        availability: 'active',
-      },
-    });
-  }
+  // Пункт [router-simplify] 2026-09-01: capability для AssemblyAI
+  // больше не заводится. Транскрибация идёт в провайдера НАПРЯМУЮ
+  // (TranscriptionService), мимо AIRouter, и эта строка не читалась
+  // никем — а в подборе она была бы вредна: у AssemblyAI нет клиента в
+  // selectProviderClient. Сами AIProvider/AIModel/AIModelVersion
+  // остаются: на версию модели ссылается AIJob расшифровок.
 
   // Фичи 7 (Steelman) и 10 (скрипты открытия/закрытия) добавили ещё
   // два taskType — тот же паттерн capability на все три провайдера.
@@ -252,28 +269,67 @@ async function main() {
   // Пункт 84 (§3.33 ТЗ) добавил два taskType поверх LLM-провайдеров.
   // Пункт 86 (§3.37 ТЗ) добавил ещё один taskType поверх LLM-провайдеров.
   // Пункт 91 (§3.27 ТЗ) добавил ещё один taskType поверх LLM-провайдеров.
-  const taskTypes = ['argument-generation', 'steelman', 'conversation-script', 'turning-point-detection', 'missing-information-detection', 'do-not-say-detection', 'best-next-move-detection', 'source-conflict-detection', 'prediction-analysis', 'conversation-agenda-generation', 'manipulation-detection', 'discrepancy-analysis', 'archetype-perspective', 'communication-profile', 'discrepancy-source-check', 'stakeholder-role-suggestion', 'stakeholder-argument-generation', 'precedent-search', 'outcome-forecasting', 'reconciliation-arguments', 'onboarding-religion-suggestion', 'sparring-session', 'motive-analysis', 'working-material-critique', 'protocol-generation', 'situational-quote', 'situational-anecdote', 'venue-suitability', 'compromise-sheet', 'closing-message', 'weather-recommendation', 'scheduler-advice', 'live-hint', 'live-manipulation-detection', 'breaking-questions', 'live-argument-tracking', 'probing-detection', 'material-chat'];
-
+  // ── Модели, доступные роутеру: одна строка на модель ──
+  //
+  // Пункт [router-simplify] 2026-09-01. Здесь был список из 63 taskType
+  // и цикл, создававший 189 строк (63 задачи × 3 текстовых провайдера).
+  // Это измерение не отвечало ни на один вопрос — все текстовые модели
+  // умеют все текстовые задачи одинаково, а телеметрия «по фиче» берёт
+  // taskType из собственной колонки AIJob. Зато стоило дорого: новая
+  // фича добавляла taskType в сервис, забывала про сид, и фича молча
+  // умирала при живых ключах — так разом легли семь доменов
+  // (AUDIT-AI-CAPABILITIES-2026-09-01.md).
+  //
+  // Теперь строка одна на модель, и подбор идёт по наличию ключа. Новая
+  // фича не требует НИКАКИХ правок здесь — это и есть смысл правки.
   for (const modelVersionId of [openaiVersion.id, anthropicVersion.id, xaiVersion.id]) {
-    for (const taskType of taskTypes) {
-      const existingCapability = await prisma.aIModelCapability.findFirst({
-        where: { modelVersionId, taskType },
-      });
-      if (!existingCapability) {
-        await prisma.aIModelCapability.create({
-          data: {
-            modelVersionId,
-            taskType,
-            structuredOutput: true,
-            streaming: false,
-            maxContext: 128000,
-            latencyClass: 'medium',
-            costClass: 'medium',
-            availability: 'active',
-          },
-        });
-      }
-    }
+    await upsertCapability(modelVersionId, { latencyClass: 'medium', costClass: 'medium' });
+  }
+
+  // ── Деактивация capability моделей, которых в сиде больше нет ──
+  //
+  // Повторный аудит 2026-09-01. Все upsert выше идут с `update: {}`, а
+  // aIModel ключуется по (providerId, name): смена слага модели создаёт
+  // НОВУЮ строку, старая остаётся. Capability заводятся только для
+  // новых версий, старые остаются `active` и с БОЛЕЕ РАННИМ createdAt —
+  // а роутер берёт `orderBy: createdAt asc`, «первая настроенная
+  // выигрывает». То есть снятая с производства модель продолжала бы
+  // выигрывать подбор вечно, молча.
+  //
+  // Это не гипотеза: смена grok-4 → grok-4.3 в этом файле уже
+  // произошла (см. комментарий у xaiModel), и на любой базе, засеянной
+  // до неё, маршрут до сих пор идёт на retired-слаг.
+  //
+  // Сид — источник истины по моделям: всё, что он в этом прогоне НЕ
+  // засеял, переводится в `deprecated`. Строки не удаляются (история
+  // AIJob на них ссылается) и не трогаются capability чужих
+  // провайдеров, которых сид не ведёт.
+  const seededVersionIds = [
+    openaiVersion.id,
+    anthropicVersion.id,
+    xaiVersion.id,
+    googleVersion.id,
+    assemblyaiVersion.id,
+  ];
+  const seededProviderIds = [openai.id, anthropic.id, xai.id, google.id, assemblyai.id];
+  const staleCapabilities = await prisma.aIModelCapability.findMany({
+    where: {
+      availability: 'active',
+      modelVersionId: { notIn: seededVersionIds },
+      modelVersion: { model: { providerId: { in: seededProviderIds } } },
+    },
+    include: { modelVersion: { include: { model: true } } },
+  });
+  if (staleCapabilities.length > 0) {
+    await prisma.aIModelCapability.updateMany({
+      where: { id: { in: staleCapabilities.map((c) => c.id) } },
+      data: { availability: 'deprecated' },
+    });
+    const models = [...new Set(staleCapabilities.map((c) => c.modelVersion.model.name))];
+    console.log(
+      `Деактивировано capability снятых моделей: ${staleCapabilities.length} (модели: ${models.join(', ')}). ` +
+        'Строки не удалены — на них ссылается история AIJob.',
+    );
   }
 
   const existingPrompt = await prisma.promptVersion.findFirst({
@@ -291,7 +347,7 @@ async function main() {
     });
   }
 
-  console.log('Seed complete: 4 providers, 4 models, capabilities, 1 active prompt.');
+  console.log('Seed complete: 5 providers, 5 models, capabilities, 1 active prompt.');
 
   // TTL-настройки (§4.7 ТЗ) — маппинг класса на реально существующие
   // таблицы задокументирован здесь текстом (не FK, см. комментарий в

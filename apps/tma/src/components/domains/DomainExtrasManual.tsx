@@ -105,7 +105,10 @@ export function VariantLocationPanel({ configId }: { configId: string }) {
     catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сохранить'); }
     finally { setBusy(false); }
   }
-  async function useDevice(variantId: string) {
+  // Функция НЕ хук: имя useDevice нарушало соглашение React
+  // (use*-префикс) и rules-of-hooks справедливо ругался на вызов из
+  // onClick-колбэка. Переименована — поведение не менялось.
+  async function takeDeviceLocation(variantId: string) {
     if (!('geolocation' in navigator)) { setError('Геолокация недоступна в этом окружении'); return; }
     setBusy(true); setError(null);
     navigator.geolocation.getCurrentPosition(
@@ -132,7 +135,7 @@ export function VariantLocationPanel({ configId }: { configId: string }) {
             <div className="voice-text-input__row" style={{ width: '100%' }}>
               <input style={{ flex: 1 }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Адрес или название" />
               <button type="button" className="secondary" disabled={busy} onClick={() => search(v.id)}>Найти</button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => useDevice(v.id)}>Я здесь</button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => takeDeviceLocation(v.id)}>Я здесь</button>
             </div>
             {(results[v.id] ?? []).map((r: any) => (
               <button key={r.placeId ?? r.place_id} type="button" className="secondary" disabled={busy} onClick={() => setPlace(v.id, r.placeId ?? r.place_id)}>

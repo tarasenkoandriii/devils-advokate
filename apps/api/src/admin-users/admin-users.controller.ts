@@ -2,7 +2,7 @@
 // devils-advocate-admin-panel-tz.md §4.3.
 
 import { Body, Controller, Get, Param, Patch, Query, UseGuards, UseInterceptors } from '@nestjs/common';
-import { AdminSessionGuard, AdminAuthenticatedRequest } from '../admin-auth/admin-session.guard';
+import { AdminSessionGuard } from '../admin-auth/admin-session.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { AdminUsersService } from './admin-users.service';

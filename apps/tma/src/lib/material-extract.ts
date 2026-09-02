@@ -112,7 +112,7 @@ async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   const stream = new Blob([plainBuffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;

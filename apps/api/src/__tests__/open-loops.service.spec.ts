@@ -10,8 +10,6 @@ function createFakePrisma() {
   const people = new Map<string, any>();
   const facts = new Map<string, any>();
   const conflicts: any[] = [];
-  let idCounter = 0;
-  const nextId = () => `id-${++idCounter}`;
 
   return {
     _seedProject(p: any) { projects.set(p.id, p); },
@@ -41,7 +39,7 @@ function createFakePrisma() {
       findMany: async ({ where }: any) => projectPeople.filter((pp) => pp.projectId === where.projectId),
     },
     missingInformationCheck: {
-      findFirst: async ({ where, orderBy }: any) => {
+      findFirst: async ({ where }: any) => {  // фейк не воспроизводит orderBy — порядок здесь не проверяется
         const matching = missingInfoChecks.filter((c) => c.projectId === where.projectId);
         if (matching.length === 0) return null;
         return matching.reduce((latest, c) => (c.createdAt > latest.createdAt ? c : latest));
@@ -173,4 +171,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

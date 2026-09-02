@@ -20,6 +20,12 @@ function useJson<T>(route: string | null, deps: unknown[] = []) {
     if (!route) return;
     setError(null);
     domainApi.getJson(route).then(setData).catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить'));
+    // ОСТАВЛЕНО ОСОЗНАННО (аудит 2026-09-01, ревизия всех подавлений):
+    // массив зависимостей собирается из spread — статически он для
+    // правила неразрешим («React Hook has a spread element in its
+    // dependency array»), и никакая перестановка зависимостей это не
+    // снимает. Зависимости здесь передаёт вызывающая сторона, это
+    // единственный корректный вариант для универсального useJson.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route, tick, ...deps]);
   return { data, error, refresh: () => setTick((t) => t + 1) };
@@ -257,7 +263,7 @@ export function ClientReportsPanel({ projectId, questions }: { projectId: string
                 <button type="button" className="primary" onClick={() => {
                   let content: unknown;
                   try { content = JSON.parse(editing[r.id]); } catch { content = editing[r.id]; }
-                  run(() => domainApi.patchJson(`/client-reports/${r.id}`, { content }));
+                  void run(() => domainApi.patchJson(`/client-reports/${r.id}`, { content }));
                   setEditing((p) => { const n = { ...p }; delete n[r.id]; return n; });
                 }}>Сохранить правки</button>
                 <button type="button" className="secondary" onClick={() => setEditing((p) => { const n = { ...p }; delete n[r.id]; return n; })}>Отмена</button>

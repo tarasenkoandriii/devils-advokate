@@ -117,9 +117,7 @@ async function run() {
   test('КЛЮЧЕВОЙ ТЕСТ: generate() создаёт VenueRecommendation с рейтингом (🔵) и AI-парафразом (🟡) отдельными полями', async () => {
     const prisma = createFakePrisma();
     seedScheduled(prisma);
-    let callIndex = 0;
     (global as any).fetch = async (url: string) => {
-      callIndex++;
       if (url.includes('nearbysearch')) {
         return {
           ok: true,
@@ -259,4 +257,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

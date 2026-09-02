@@ -13,8 +13,9 @@ function createFakePrisma() {
   return {
     _seedCapability(c: any) { capabilities.push(c); },
     aIModelCapability: {
-      findMany: async ({ where }: any) =>
-        capabilities.filter((c) => c.taskType === where.taskType && c.availability === where.availability),
+      // Пункт [router-simplify] 2026-09-01: capability — одна строка на
+      // модель, taskType в фильтре больше нет.
+      findMany: async ({ where }: any) => capabilities.filter((c) => c.availability === where.availability),
     },
   };
 }
@@ -103,4 +104,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

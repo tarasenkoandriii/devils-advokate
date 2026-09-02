@@ -65,7 +65,7 @@ function createFakePrisma() {
     },
     majorPurchaseConfig: {
       findUnique: async ({ where, include }: any) => {
-        let config = where.id ? configs.get(where.id) : [...configs.values()].find((c) => c.projectId === where.projectId);
+        const config = where.id ? configs.get(where.id) : [...configs.values()].find((c) => c.projectId === where.projectId);
         if (!config) return null;
         if (include?.project) return { ...config, project: projects.get(config.projectId) };
         if (include?.criteria) {
@@ -334,7 +334,7 @@ describe('MajorPurchaseService', () => {
     const config = prisma._seedConfig({ projectId: project.id, category: 'REAL_ESTATE' });
     const variant = prisma._seedVariant({ configId: config.id, label: 'Варіант 1' });
 
-    let fetchedUrls: string[] = [];
+    const fetchedUrls: string[] = [];
     (global as any).fetch = jest.fn(async (url: string) => {
       fetchedUrls.push(url);
       return { ok: true, headers: { get: () => null }, text: async () => '<html>Цена: $95000</html>' };

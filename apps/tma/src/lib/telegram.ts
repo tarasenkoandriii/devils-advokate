@@ -111,7 +111,7 @@ export function getAuthHeaders(): Record<string, string> {
 
   const devUserId = process.env.NEXT_PUBLIC_DEV_USER_ID;
   if (devUserId) {
-    // eslint-disable-next-line no-console
+
     console.warn(
       `[DEV] Telegram WebApp недоступен — используется X-Dev-User-Id=${devUserId}. Не должно происходить в production-сборке.`,
     );

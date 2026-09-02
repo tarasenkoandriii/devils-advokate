@@ -79,10 +79,15 @@ function createSharedFakePrisma() {
     },
     aIModelVersion: { findUnique: async ({ where }: any) => aiModelVersions.get(where.id) ?? null },
     aIModelCapability: {
-      findFirst: async ({ where }: any) => {
-        const cap = aiModelCapabilities.find((c) => c.taskType === where.taskType && c.availability === where.availability);
-        if (!cap) return null;
-        return { ...cap, modelVersion: aiModelVersions.get(cap.modelVersionId) };
+      // Пункт [router-simplify] 2026-09-01: роутер выбирает из ВСЕХ
+      // активных моделей (taskType в подборе не участвует), поэтому
+      // фейк отдаёт список, а не первую совпавшую строку.
+      findMany: async ({ where }: any) => {
+        const media = Array.isArray(where?.OR);
+        return aiModelCapabilities
+          .filter((c: any) => c.availability === where.availability)
+          .filter((c: any) => (media ? c.vision || c.audio : true))
+          .map((c: any) => ({ ...c, modelVersion: aiModelVersions.get(c.modelVersionId) }));
       },
     },
     aIInference: {

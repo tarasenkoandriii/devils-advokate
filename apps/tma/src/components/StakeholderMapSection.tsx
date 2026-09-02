@@ -5,7 +5,7 @@
 // ТЗ называет её опциональной) — список ролей + аргументы под
 // каждого, явно не смешанные между собой.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   confirmStakeholderRole,
   generateArgumentsForStakeholder,
@@ -34,16 +34,15 @@ export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps)
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
 
-  function reloadMap() {
+  const reloadMap = useCallback(() => {
     return listStakeholderMap(projectId)
       .then(setMap)
       .catch(() => setMap([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reloadMap().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reloadMap().finally(() => setLoading(false));
+  }, [reloadMap]);
 
   async function handleSuggest() {
     setSuggesting(true);

@@ -46,9 +46,8 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   }, [pathname, router]);
 
   useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname]);
+    void refresh();
+  }, [refresh]);
 
   const logout = useCallback(async () => {
     await logoutRequest();

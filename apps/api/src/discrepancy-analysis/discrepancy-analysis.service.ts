@@ -381,7 +381,7 @@ export class DiscrepancyAnalysisService {
    * самостоятельно" — единственный способ его выставить, отдельным
    * ручным действием пользователя, не побочным эффектом detect(). */
   async confirmIntentionalFalsehood(userId: string, signalId: string) {
-    const signal = await this.findOwnedSignal(userId, signalId);
+    await this.findOwnedSignal(userId, signalId);
     return this.prisma.conversationSignal.update({
       where: { id: signalId },
       data: { userConfirmedIntentionalFalsehood: true },

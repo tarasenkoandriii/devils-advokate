@@ -309,7 +309,7 @@ export class HealthService {
     // Vision) — той самий клас ризику, що вже покриває EXTERNAL_AI
     // для будь-якого AI-виклику продукту, не новий тип згоди.
     await this.consent.requireConsent(userId, ConsentType.EXTERNAL_AI, config.projectId);
-    await this.assertUnderOcrRateLimit(userId, config.projectId);
+    await this.assertUnderOcrRateLimit(userId);
 
     const apiKey = await this.secrets.resolve(VISION_API_KEY_REF);
     let ocrText: string;
@@ -349,7 +349,10 @@ export class HealthService {
     });
   }
 
-  private async assertUnderOcrRateLimit(userId: string, projectId: string) {
+  // Лимит OCR — на пользователя, не на проект (см. SANDBOX-COVERAGE.md):
+  // projectId в подсчёте не участвовал и убран из сигнатуры, чтобы не
+  // выглядело лимитом «10 в сутки на каждый проект».
+  private async assertUnderOcrRateLimit(userId: string) {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const count = await this.prisma.healthLabDocumentDraft.count({
       where: { config: { project: { ownerId: userId } }, createdAt: { gte: since } },

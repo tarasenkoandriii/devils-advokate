@@ -10,7 +10,7 @@
 // не даёт нажать "Отправить" до просмотра — тот же инвариант с двух
 // сторон, не полагается только на одну.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   generateCompromiseSheet,
   generateCompromiseSheetVoiceOver,
@@ -46,16 +46,15 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
   const [shareError, setShareError] = useState<string | null>(null);
   const [recordingForSheetId, setRecordingForSheetId] = useState<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listCompromiseSheets(sessionId)
       .then(setSheets)
       .catch(() => setSheets([]));
-  }
+  }, [sessionId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleGenerate(phase: CompromiseSheetPhase) {
     setGenerating(phase);
@@ -77,7 +76,11 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
       const updated = await generateCompromiseSheetVoiceOver(sheetId);
       setSheets((prev) => prev.map((s) => (s.id === sheetId ? updated : s)));
       if (updated.audioBase64) {
-        new Audio(`data:audio/mpeg;base64,${updated.audioBase64}`).play();
+        // play() отклоняется, когда браузер блокирует автовоспроизведение.
+        // Это НЕ провал озвучки: она сгенерирована и уже в состоянии —
+        // поэтому отказ ловится отдельно от общего catch, который
+        // сообщает об ошибке генерации.
+        await new Audio(`data:audio/mpeg;base64,${updated.audioBase64}`).play().catch(() => undefined);
       }
       haptic('success');
     } catch {

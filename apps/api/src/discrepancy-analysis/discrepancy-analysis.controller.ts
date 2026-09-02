@@ -3,7 +3,7 @@ import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { DiscrepancyAnalysisService } from './discrepancy-analysis.service';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 
 class CheckAgainstUserSourceDto {
   @IsString()

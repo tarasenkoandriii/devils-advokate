@@ -25,6 +25,9 @@ function createFakePrisma() {
     },
     aIProvider: {
       findUniqueOrThrow: async () => ({ id: 'provider-1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' }),
+      // Повторный аудит 2026-09-01: чтение провайдера переведено на
+      // requireAIProvider (findUnique + внятная ошибка вместо P2025/500).
+      findUnique: async () => ({ id: 'provider-1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' }),
     },
     cooldownNudgeEvent: {
       create: async ({ data }: any) => {
@@ -185,4 +188,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

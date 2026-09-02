@@ -59,8 +59,8 @@ export function SituationalContentSection({ projectId }: SituationalContentSecti
         setLoading(false);
       }
     }
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void load();
+
   }, [projectId]);
 
   async function handleShowQuote() {

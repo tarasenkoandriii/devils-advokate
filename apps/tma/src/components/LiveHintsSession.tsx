@@ -165,7 +165,7 @@ export function LiveHintsSession({ projectId, mode = 'conversation' }: LiveHints
       )}
 
       {needsAudioConsent && (
-        <ThirdPartyAudioConsentPrompt source="live-hints-session" onGranted={() => { setNeedsAudioConsent(false); handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
+        <ThirdPartyAudioConsentPrompt source="live-hints-session" onGranted={() => { setNeedsAudioConsent(false); void handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
       )}
       {!needsAudioConsent && captureState === 'idle' && (
         <button type="button" onClick={handleStart}>

@@ -1,7 +1,11 @@
 // ТЗ devils-advocate-domain-ui-and-voice-intake-tz.md §0 — манифест домена.
 // Один набор generic-компонентов, параметризованный данными, не семь копий UI.
 
-export type DomainId = 'dtp' | 'family-law' | 'health' | 'interview-pool' | 'investment' | 'major-purchase';
+// Повторный аудит 2026-09-01: 'job-search' добавлен седьмым. До этого
+// сценарий существовал в классификаторе интейка и полностью в API, но
+// не в этом типе — квиз отправлял пользователя в домен, экрана которого
+// нет: проект создавался, а страница отвечала «Неизвестный сценарий».
+export type DomainId = 'dtp' | 'family-law' | 'health' | 'interview-pool' | 'investment' | 'major-purchase' | 'job-search';
 
 export type FieldType = 'text' | 'textarea' | 'number' | 'date' | 'datetime' | 'select' | 'bool' | 'money' | 'url' | 'file-base64';
 

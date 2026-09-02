@@ -20,8 +20,13 @@ async function bootstrap() {
   const app = await createNestApp();
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
-  // eslint-disable-next-line no-console
   console.log(`Devil's Advocate API listening on port ${port}`);
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  // Без этого падение старта (занятый порт, недоступная БД, кривой env)
+  // уходило в unhandled rejection: процесс мог остаться живым и
+  // «слушающим» ничего, а в докере — перезапускаться без внятной причины.
+  console.error('Не удалось запустить API:', err);
+  process.exit(1);
+});

@@ -54,7 +54,7 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
       .then(setScenarios)
       .catch(() => setScenarios([]))
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [projectId]);
 
   function updateUserScenario(index: number, value: string) {

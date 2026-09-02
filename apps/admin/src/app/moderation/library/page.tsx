@@ -18,7 +18,7 @@ export default function LibraryModerationPage() {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;

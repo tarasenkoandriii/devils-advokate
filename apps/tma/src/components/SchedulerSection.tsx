@@ -12,7 +12,7 @@
 // упрощение под мобильный экран, вся суть требования (какие
 // разговоры впереди, какие прошли и есть ли для них разбор) сохранена.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   createScheduledConversation,
   linkScheduledConversation,
@@ -53,20 +53,19 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
   const [linkingId, setLinkingId] = useState<string | null>(null);
   const [linkChoice, setLinkChoice] = useState('');
 
-  function reload() {
+  const reload = useCallback(() => {
     return listScheduledConversations(projectId)
       .then(setScheduled)
       .catch(() => setScheduled([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    Promise.all([
+    void Promise.all([
       reload(),
       listPeople(projectId).then(setPeople).catch(() => setPeople([])),
       listConversations(projectId).then(setConversations).catch(() => setConversations([])),
     ]).finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [reload, projectId]);
 
   // Пункт 78 (§3.20 ТЗ) — "мягкое предупреждение прямо в форме
   // создания". Не блокирует создание — при любой ошибке или

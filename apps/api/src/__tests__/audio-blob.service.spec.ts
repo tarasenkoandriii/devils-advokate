@@ -33,7 +33,7 @@ jest.mock('@vercel/blob/client', () => ({
   handleUpload: (...args: unknown[]) => mockHandleUpload(...args),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+
 import { AudioBlobService } from '../conversations/audio-blob.service';
 
 const USER_ID = 'user-1';

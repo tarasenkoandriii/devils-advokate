@@ -51,14 +51,26 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
         if (!cancelled) setError(err instanceof Error ? err.message : 'Не удалось открыть онбординг');
       }
     }
-    load();
+    void load();
     return () => { cancelled = true; };
+    // ОСТАВЛЕНО ОСОЗНАННО (аудит 2026-09-01, ревизия всех подавлений):
+    // эффект ОТКРЫВАЕТ онбординг — при отсутствии conversationId он его
+    // создаёт. conversationId в зависимостях означал бы повторный проход
+    // сразу после собственного setConversationId, а category — полный
+    // перезапуск онбординга при переключении категории (за это отвечает
+    // отдельный эффект ниже, он перезапрашивает только чек-лист).
+    // Правильный триггер здесь ровно один: смена проекта.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
     if (!conversationId || manifest.id !== 'major-purchase') return;
     domainApi.checklist(manifest, conversationId, { category }).then(setChecklist).catch(() => undefined);
+    // ОСТАВЛЕНО ОСОЗНАННО (аудит 2026-09-01, ревизия всех подавлений):
+    // эффект существует ровно ради смены категории. conversationId и
+    // manifest тут — условие применимости, а не триггер: первый чек-лист
+    // грузит эффект открытия онбординга выше, и повтор по появлению
+    // conversationId был бы вторым тем же запросом подряд.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 

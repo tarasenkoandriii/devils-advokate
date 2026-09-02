@@ -5,7 +5,7 @@
 // генерация Steelman-кейса для каждого. Не полноценный "круг лиц"
 // (§3.8 ТЗ, v3-фича) — просто список + кнопка, достаточно для MVP.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   addPerson,
   createRelationship,
@@ -64,16 +64,15 @@ export function PeopleSection({ projectId }: PeopleSectionProps) {
   const [newName, setNewName] = useState('');
   const [adding, setAdding] = useState(false);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listPeople(projectId)
       .then(setPeople)
       .catch(() => setPeople([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleAdd() {
     const name = newName.trim();

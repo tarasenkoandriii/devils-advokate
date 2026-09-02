@@ -8,7 +8,7 @@
 // разница/вывод от AI показываются прямо в карточке, форма больше не
 // нужна для этого прогноза.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createPrediction, listPredictions, recordActualOutcome } from '../lib/features';
 import { Prediction } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -24,16 +24,15 @@ export function PredictionsSection({ projectId }: PredictionsSectionProps) {
   const [newPrediction, setNewPrediction] = useState('');
   const [adding, setAdding] = useState(false);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listPredictions(projectId)
       .then(setPredictions)
       .catch(() => setPredictions([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleAdd() {
     const text = newPrediction.trim();

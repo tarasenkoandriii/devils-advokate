@@ -1,14 +1,17 @@
 // Пункт [job-search] 2026-09-01 — контроллер домена кандидата. Та же
 // связка гвардов, что у остальных доменов (investment как образец).
 
-import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { ProjectMode } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { getOnboardingAnswers, listDomainProjects } from '../common/domain-onboarding-reads';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { JobSearchOnboardingService, ExtractedJobSearchConfigDraft } from './job-search-onboarding.service';
 import { JobSearchService } from './job-search.service';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 
 class CreateProjectDto {
   // Пункт [validation] 2026-09-01: лимиты на тексты, уходящие в LLM.
@@ -53,7 +56,28 @@ export class JobSearchController {
   constructor(
     private readonly onboarding: JobSearchOnboardingService,
     private readonly jobSearch: JobSearchService,
+    private readonly prisma: PrismaService,
   ) {}
+
+  // Повторный аудит 2026-09-01: у домена были только POST-роуты
+  // онбординга — ровно тот же «create-only API missing read endpoint»,
+  // который для шести доменов закрыли ещё в проходе domain-ui. Без этих
+  // двух GET generic-UI не может ни показать список проектов домена, ни
+  // возобновить онбординг после перезапуска Mini App, поэтому манифеста
+  // в TMA и не было.
+
+  @Get('projects')
+  async listDomainProjects(@CurrentUser() userId: string, @Query('take') take?: string, @Query('skip') skip?: string) {
+    return listDomainProjects(this.prisma, userId, ProjectMode.JOB_SEARCH, {
+      take: take ? Number(take) : undefined,
+      skip: skip ? Number(skip) : undefined,
+    });
+  }
+
+  @Get('onboarding-conversations/:id')
+  async getOnboardingConversation(@CurrentUser() userId: string, @Param('id') conversationId: string) {
+    return getOnboardingAnswers(this.prisma, userId, conversationId);
+  }
 
   @Post('projects')
   async createProject(@CurrentUser() userId: string, @Body() dto: CreateProjectDto) {

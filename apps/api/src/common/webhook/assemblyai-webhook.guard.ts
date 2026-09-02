@@ -10,7 +10,6 @@
 // задаётся при отправке задачи (TranscriptionService.submitJob) и
 // проверяется здесь. Fail closed: секрет не настроен → 503, а не «пропустить».
 import { CanActivate, ExecutionContext, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
-import { timingSafeEqual } from 'node:crypto';
 import { SecretsService } from '../../secrets/secrets.service';
 import { safeSecretEqual } from '../timing-safe-equal';
 

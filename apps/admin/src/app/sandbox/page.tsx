@@ -187,6 +187,15 @@ export default function SandboxPage() {
   const [conversation, setConversation] = useState<SandboxConversation | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const [queue, setQueue] = useState<SandboxQueue | null>(null);
+
+  // Объявление поднято сюда из блока очереди (аудит 2026-09-01):
+  // поллинг ниже вызывает loadQueue и обязан держать её в зависимостях,
+  // а обращение к const из dep-массива до его инициализации — ReferenceError.
+  const loadQueue = useCallback(() => {
+    getSandboxQueue().then((r) => setQueue(r.queue)).catch(() => undefined);
+  }, []);
+
   // Поллинг, а не пуш: вебхук приходит на бэкенд, у админки нет канала
   // реального времени, и заводить его ради одной страницы — лишняя
   // инфраструктура. Раз в 5 секунд, останавливается на терминальном
@@ -212,7 +221,7 @@ export default function SandboxPage() {
     return () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
     };
-  }, [run]);
+  }, [run, loadQueue]);
 
   async function handleRun() {
     setRunning(true);
@@ -242,11 +251,7 @@ export default function SandboxPage() {
   const [queueTarget, setQueueTarget] = useState<{ itemId: string; title: string } | null>(null);
   const [queueTargetError, setQueueTargetError] = useState<string | null>(null);
   const [addingToQueue, setAddingToQueue] = useState<string | null>(null);
-  const [queue, setQueue] = useState<SandboxQueue | null>(null);
 
-  const loadQueue = useCallback(() => {
-    getSandboxQueue().then((r) => setQueue(r.queue)).catch(() => undefined);
-  }, []);
   useEffect(loadQueue, [loadQueue]);
 
   const [retryingItem, setRetryingItem] = useState<string | null>(null);
@@ -711,7 +716,7 @@ export default function SandboxPage() {
 
       // Префикс обязан совпадать с AUDIO_PREFIX на бэкенде — токен вне
       // него просто не выдадут.
-      const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'upload';
+      const safeName = file.name.replace(/[^\w.-]+/g, '_') || 'upload';
       const pathname = `conversation-audio/${conversationId}/${safeName}`;
       const { clientToken } = await getSandboxUploadToken(conversationId, pathname);
 
@@ -966,7 +971,7 @@ export default function SandboxPage() {
                       // Кнопка в summary: не даём клику схлопнуть аккордеон.
                       e.preventDefault();
                       e.stopPropagation();
-                      handleRetryItem(item.id);
+                      void handleRetryItem(item.id);
                     }}
                     disabled={retryingItem !== null}
                     title="Поставить автоматический разбор заново (после квоты/сбоя)"

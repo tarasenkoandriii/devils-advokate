@@ -4,7 +4,7 @@
 // не только изолированный AIRouterService, это ближе к реальному
 // поведению после закрытия обоих TODO.
 
-import { AIRouterService, AIRouterExhaustedError, AIRouterContentBlockedError, AIRouterNoCapableModelError } from '../ai-router/ai-router.service';
+import { AIRouterService, AIRouterContentBlockedError, AIRouterNoCapableModelError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
 import { ContentScanService } from '../content-scan/content-scan.service';
 import { ForbiddenException } from '@nestjs/common';
@@ -43,10 +43,14 @@ function createFakePrisma() {
     },
     aIModelVersion: { findUnique: async ({ where }: any) => aiModelVersions.get(where.id) ?? null },
     aIModelCapability: {
-      findFirst: async ({ where }: any) => {
-        const cap = aiModelCapabilities.find((c) => c.taskType === where.taskType && c.availability === where.availability);
-        if (!cap) return null;
-        return { ...cap, modelVersion: aiModelVersions.get(cap.modelVersionId) };
+      // Пункт [router-simplify] 2026-09-01: роутер берёт список всех
+      // активных моделей и сам выбирает первую, чей ключ задан.
+      findMany: async ({ where }: any) => {
+        const media = Array.isArray(where?.OR);
+        return aiModelCapabilities
+          .filter((c) => c.availability === where.availability)
+          .filter((c) => (media ? c.vision || c.audio : true))
+          .map((c) => ({ ...c, modelVersion: aiModelVersions.get(c.modelVersionId) }));
       },
     },
     aIInference: { create: async ({ data }: any) => ({ id: nextId(), ...data }) },
@@ -90,6 +94,20 @@ function mockFetchSequence(responses: Array<{ ok: boolean; status?: number; body
 }
 
 const openaiSuccessBody = { choices: [{ message: { content: '[{"text":"arg1","stance":"pro","weight":0.8}]' } }], usage: { prompt_tokens: 10, completion_tokens: 20 } };
+
+/** Роутер, для которого перечисленные ключи ОТСУТСТВУЮТ в окружении
+ *  (SecretsService в этом случае бросает — так же ведёт себя настоящий). */
+function buildRouterWithMissingKeys(prisma: any, missing: string[]) {
+  const consent = new ConsentService(prisma as any);
+  const contentScan = new ContentScanService(prisma as any);
+  const secrets = {
+    resolve: async (ref: string) => {
+      if (missing.includes(ref)) throw new Error(`Secret not found for credentialRef "${ref}"`);
+      return 'sk-test';
+    },
+  };
+  return new AIRouterService(prisma as any, secrets as any, consent, contentScan, { resolve: async () => ({ uri: 'https://x' }) } as any);
+}
 
 function buildRouter(prisma: any, secretsMap: Record<string, string> = { OPENAI_API_KEY: 'sk-test' }) {
   const consent = new ConsentService(prisma as any);
@@ -220,6 +238,123 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
 
     const job = prisma._getJob(result.jobId);
     expect(job.modelVersionId).toBe('mv-anthropic');
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: явно выбранная модель без ключа отклоняется ДО обращения к провайдеру', async () => {
+    // Раньше ветка preferredModelVersionId не проверяла ничего: id
+    // модели, чьего ключа в проекте нет, проходил насквозь, и запрос
+    // уходил провайдеру, чтобы вернуться 401. Отсутствие ключа — не
+    // ошибка вызова, а отсутствие кандидата, и решается до вызова.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedModelVersion({
+      id: 'mv-anthropic',
+      version: 'claude-sonnet-5',
+      model: { name: 'claude-sonnet-5', provider: { name: 'anthropic', apiEndpoint: 'https://api.anthropic.com', credentialRef: 'ANTHROPIC_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedCapability({ modelVersionId: 'mv-anthropic', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    let called = false;
+    (global as any).fetch = async () => { called = true; throw new Error('провайдера трогать не должны'); };
+
+    // Ключ есть только у openai; пользователь явно выбрал anthropic.
+    const router = buildRouterWithMissingKeys(prisma, ['ANTHROPIC_API_KEY']);
+    await expect(
+      router.execute({
+        userId: USER_ID,
+        taskType: 'argument-generation',
+        userPrompt: 'test',
+        preferredModelVersionId: 'mv-anthropic',
+      }),
+    ).rejects.toBeInstanceOf(AIRouterNoCapableModelError);
+    expect(called).toBe(false);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: подбор пропускает модель без ключа и берёт следующую с ключом', async () => {
+    // Ровно ситуация владельца: openai настроен первым, но ключа от него
+    // в проекте нет — раньше роутер упирался в него и падал на 401.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedModelVersion({
+      id: 'mv-anthropic',
+      version: 'claude-sonnet-5',
+      model: { name: 'claude-sonnet-5', provider: { name: 'anthropic', apiEndpoint: 'https://api.anthropic.com', credentialRef: 'ANTHROPIC_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedCapability({ modelVersionId: 'mv-anthropic', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    let calledEndpoint: string | undefined;
+    (global as any).fetch = async (url: string) => {
+      calledEndpoint = url;
+      return {
+        ok: true, status: 200, statusText: 'OK',
+        json: async () => anthropicSuccessBody,
+        text: async () => JSON.stringify(anthropicSuccessBody),
+      };
+    };
+
+    const router = buildRouterWithMissingKeys(prisma, ['OPENAI_API_KEY']);
+    const result = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'test', jsonMode: true });
+
+    expect(calledEndpoint).toContain('anthropic');
+    expect(result.text).toContain('claude-arg');
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: если ключа нет ни у одной модели — отказ, а не вызов наугад', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    let called = false;
+    (global as any).fetch = async () => { called = true; throw new Error('провайдера трогать не должны'); };
+
+    const router = buildRouterWithMissingKeys(prisma, ['OPENAI_API_KEY']);
+    await expect(
+      router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'test' }),
+    ).rejects.toBeInstanceOf(AIRouterNoCapableModelError);
+    expect(called).toBe(false);
+  });
+
+  it('явно выбранная модель с деактивированной capability отклоняется', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedModelVersion({
+      id: 'mv-anthropic',
+      version: 'claude-sonnet-5',
+      model: { name: 'claude-sonnet-5', provider: { name: 'anthropic', apiEndpoint: 'https://api.anthropic.com', credentialRef: 'ANTHROPIC_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-anthropic', taskType: 'argument-generation', availability: 'deprecated' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    const router = buildRouter(prisma);
+    await expect(
+      router.execute({
+        userId: USER_ID,
+        taskType: 'argument-generation',
+        userPrompt: 'test',
+        preferredModelVersionId: 'mv-anthropic',
+      }),
+    ).rejects.toBeInstanceOf(AIRouterNoCapableModelError);
   });
 
   // Пункт 32 (расширенный аудит тестов) — AIRouterNoCapableModelError

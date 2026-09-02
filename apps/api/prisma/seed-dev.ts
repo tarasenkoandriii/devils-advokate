@@ -106,7 +106,7 @@ async function main() {
     },
   });
 
-  // eslint-disable-next-line no-console
+
   console.log(`[seed-dev] Пользователь ${DEV_TELEGRAM_ID} (id=${user.id}) — оператор + оба модератора.`);
 
   if (SEED_CONSENTS) {
@@ -116,6 +116,10 @@ async function main() {
       ConsentType.EXTERNAL_AI,
       ConsentType.RECORDING,
       ConsentType.EPHEMERAL_SERVER,
+      // Повторный аудит 2026-09-01: без него POST /tts отвечает 403, и
+      // озвучка на dev-стенде невоспроизводима — выглядит как отказ
+      // ElevenLabs. В TMA согласие теперь спрашивает SpeakButton.
+      ConsentType.VOICE_PROCESSING,
     ];
     for (const consentType of types) {
       const existing = await prisma.consentRecord.findFirst({
@@ -134,10 +138,10 @@ async function main() {
         },
       });
     }
-    // eslint-disable-next-line no-console
+
     console.log(`[seed-dev] SEED_DEV_CONSENTS=true — выданы согласия: ${types.join(', ')}.`);
   } else {
-    // eslint-disable-next-line no-console
+
     console.log(
       '[seed-dev] Согласия НЕ выданы (по умолчанию) — пройдите consent-гейты в TMA как обычный пользователь. SEED_DEV_CONSENTS=true, если нужно пропустить.',
     );
@@ -152,17 +156,17 @@ async function main() {
         goal: 'Принять решение до конца недели, не потеряв текущие отношения с командой.',
       },
     });
-    // eslint-disable-next-line no-console
+
     console.log(`[seed-dev] Демо-проект создан: ${project.id}.`);
   } else {
-    // eslint-disable-next-line no-console
+
     console.log(`[seed-dev] У пользователя уже есть проекты (${projectCount}) — демо-проект не создаётся.`);
   }
 }
 
 main()
   .catch((e) => {
-    // eslint-disable-next-line no-console
+
     console.error(e);
     process.exit(1);
   })

@@ -19,7 +19,7 @@
 // вызов синтеза при клике) остался честным ручным fallback'ом на
 // случай сбоя предзаготовки, не основным путём — см. useEffect ниже.
 
-import { useEffect, useRef, useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   endSparringSession,
   getSparringSession,
@@ -89,11 +89,11 @@ export function SparringSection({ projectId }: SparringSectionProps) {
   // (играть).
   const initializedSessionIdRef = useRef<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listSparringSessions(projectId)
       .then(setSessions)
       .catch(() => setSessions([]));
-  }
+  }, [projectId]);
 
   // Пункт 90 (§3.26 ТЗ) — "реплики AI-собеседника озвучиваются
   // голосом" (buкально ТЗ), автоматически, не по клику — "тренировка
@@ -102,7 +102,12 @@ export function SparringSection({ projectId }: SparringSectionProps) {
   // в этой сессии компонента (lastPlayedMessageIdRef).
   useEffect(() => {
     const messages = activeSession?.messages ?? [];
-    if (messages.length === 0 || !activeSession) return;
+    // Проверка `!activeSession` убрана как избыточная (аудит 2026-09-01):
+    // непустой messages уже означает, что сессия есть. Ссылка на
+    // activeSession целиком заставляла exhaustive-deps требовать его в
+    // зависимостях — ровно то, что раньше подавлялось директивой.
+    // Повтор озвучки по-прежнему отсекает lastPlayedMessageIdRef.
+    if (messages.length === 0) return;
     const last = messages[messages.length - 1];
 
     if (last.role !== 'OPPONENT') return;
@@ -118,14 +123,13 @@ export function SparringSection({ projectId }: SparringSectionProps) {
   }, [activeSession?.messages, activeSession?.id]);
 
   useEffect(() => {
-    Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
+    void Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
       setLoading(false),
     );
     return () => {
       if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [reload, projectId]);
 
   async function handleStart() {
     setStarting(true);
@@ -276,7 +280,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
         setVoiceStatus('idle');
       }
     }
-    check();
+    void check();
   }
 
   if (loading) return null;

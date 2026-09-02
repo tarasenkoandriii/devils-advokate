@@ -63,7 +63,7 @@ export default function CalibrationPage() {
   useBackButton(() => router.push('/'));
 
   useEffect(() => {
-    Promise.all([
+    void Promise.all([
       getCalibrationSummary().then(setSummary).catch(() => setSummary(null)),
       getSuccessStats().then(setStats).catch(() => setStats(null)),
     ]).finally(() => setLoading(false));

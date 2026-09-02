@@ -34,6 +34,7 @@
 //    реальном деплое.
 
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { requireAIProvider } from '../common/require-provider';
 import type { HandleUploadBody } from '@vercel/blob/client';
 import { ConsentType, ConversationSourceType, PurchaseCategory } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -93,6 +94,11 @@ const SANDBOX_CONSENT_TYPES: ConsentType[] = [
   // health-ТЗ) — без него прогон падал бы на createProject. Согласие
   // выдаётся ОПЕРАТОРСКОМУ аккаунту той же кнопкой, что остальные.
   ConsentType.HEALTH_DATA,
+  // Повторный аудит 2026-09-01: TextToSpeechService требует
+  // VOICE_PROCESSING, выдать его было негде вообще — озвучка отвечала
+  // 403 при живом ключе ElevenLabs. Оператор получает его той же
+  // кнопкой, что остальные.
+  ConsentType.VOICE_PROCESSING,
   // Пункт [sandbox-voice] 2026-09-01: голосовой ввод квиза — прямой
   // канал browser→AssemblyAI по короткоживущему токену; выдача токена
   // требует ровно этого согласия (см. LiveSessionService).
@@ -251,6 +257,56 @@ export class AdminSandboxService {
             : `провайдеров: ${providers}, но записи assemblyai нет`,
     });
 
+    // 2b. Модели, доступные роутеру.
+    //
+    // Пункт [router-simplify] 2026-09-01: раньше здесь проверялась
+    // capability под каждый taskType песочницы — этого измерения больше
+    // нет, строка заводится на модель. Вопрос, на который пункт
+    // отвечает, остался прежним и главным: возьмёт ли роутер хоть
+    // кого-нибудь. Пункт «Сид БД» выше зелёный при одних лишь
+    // AIProvider — и был зелёным, когда intake-квиз отвечал
+    // «AI-провайдер недоступен».
+    if (dbReachable) {
+      const models = await this.prisma.aIModelCapability.findMany({
+        where: { availability: 'active' },
+        orderBy: { createdAt: 'asc' },
+        include: { modelVersion: { include: { model: { include: { provider: true } } } } },
+      });
+      const withKey: string[] = [];
+      const withoutKey: string[] = [];
+      let mediaWithKey = 0;
+      for (const m of models) {
+        const provider = m.modelVersion.model.provider;
+        const label = `${provider.name}/${m.modelVersion.model.name}`;
+        // credentialRef в схеме nullable: пустой — это тоже «ключ взять
+        // неоткуда», и молчать об этом нельзя.
+        const usable = Boolean(provider.credentialRef) && (await this.secretPresent(provider.credentialRef!));
+        if (usable) {
+          withKey.push(label);
+          if (m.vision || m.audio) mediaWithKey += 1;
+        } else {
+          withoutKey.push(`${label} (${provider.credentialRef ?? 'credentialRef не задан'})`);
+        }
+      }
+      const noModels = models.length === 0;
+      const detail = noModels
+        ? 'в базе нет ни одной активной модели — выполните npm run prisma:seed (ключи тут ни при чём)'
+        : withKey.length === 0
+          ? `модели есть, но ключа нет ни у одной: ${withoutKey.join(', ')} — задайте ключ любого из провайдеров`
+          : `подбор возьмёт: ${withKey[0]}` +
+            (withKey.length > 1 ? ` (в запасе: ${withKey.slice(1).join(', ')})` : '') +
+            (mediaWithKey === 0 ? '; медиа-разбор недоступен — нет модели с vision/audio и ключом' : '') +
+            (withoutKey.length > 0 ? `; без ключа: ${withoutKey.join(', ')}` : '');
+      items.push({
+        key: 'capabilities',
+        label: 'Модели, доступные роутеру',
+        // Медиа-модель не обязательна для основного контура — её
+        // отсутствие отражено в detail, но не красит весь пункт.
+        ok: !noModels && withKey.length > 0,
+        detail,
+      });
+    }
+
     // 3. Ключи по шагам цепочки. Только задан/не задан — значения
     // секретов из этого эндпоинта не выходят никогда.
     items.push({
@@ -383,7 +439,11 @@ export class AdminSandboxService {
       const consents: string[] = [];
       const missing: string[] = [];
       for (const type of SANDBOX_CONSENT_TYPES) {
-        (await this.consent.hasActiveConsent(operatorUserId, type)) ? consents.push(type) : missing.push(type);
+        if (await this.consent.hasActiveConsent(operatorUserId, type)) {
+          consents.push(type);
+        } else {
+          missing.push(type);
+        }
       }
       const modeOk = user?.privacyProcessingMode !== 'MAXIMUM_PRIVACY';
       items.push({
@@ -865,7 +925,7 @@ export class AdminSandboxService {
       throw new BadRequestException('Запись слишком длинная (лимит ~3 МБ) — говорите короче или частями');
     }
     await this.consent.requireConsent(operatorUserId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
-    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const provider = await requireAIProvider(this.prisma, 'assemblyai');
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
     const audio = Buffer.from(base64Content, 'base64');
     return this.transcription.transcribeShortNoteSync(apiKey, audio, languageCode);

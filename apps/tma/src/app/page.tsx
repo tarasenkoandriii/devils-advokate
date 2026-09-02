@@ -44,7 +44,7 @@ export default function HomePage() {
         setLoadState('error');
       }
     }
-    init();
+    void init();
   }, []);
 
   async function handleSubmit(input: { question: string; goal?: string }) {

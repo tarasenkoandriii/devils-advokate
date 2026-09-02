@@ -44,8 +44,8 @@ export default function ConversationCardPage() {
 
   useEffect(() => {
     if (!params.id) return;
-    loadCard(params.id).finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadCard(params.id).finally(() => setLoading(false));
+
   }, [params.id]);
 
   async function handleGenerateScript(type: 'OPENING' | 'CLOSING') {

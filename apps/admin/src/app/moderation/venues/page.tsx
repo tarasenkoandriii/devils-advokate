@@ -31,7 +31,7 @@ export default function VenuesModerationPage() {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   async function loadSummary(venueId: string) {
@@ -76,7 +76,7 @@ export default function VenuesModerationPage() {
             try {
               await moderateVenueApplication(app.id, 'APPROVE');
               setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
-              load();
+              void load();
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Не удалось одобрить заявку');
             }

@@ -1318,7 +1318,9 @@ model AIProvider {
   privacyPolicyUrl String?
 
   apiEndpoint  String?
-  authMethod   String? // "bearer" | "api-key-header" | ...
+  // authMethod удалён Пунктом [router-simplify] 2026-09-01: колонку не
+  // читал никто — способ авторизации выбирает клиент провайдера по его
+  // имени (selectProviderClient), и «настройка» в БД была декоративной.
   credentialRef String? // ссылка на secret manager, НИКОГДА не сырой ключ
 
   createdAt DateTime @default(now())
@@ -1373,27 +1375,36 @@ model AIModelVersion {
   @@map("ai_model_versions")
 }
 
+// Пункт [router-simplify] 2026-09-01. Была строка на КАЖДУЮ пару
+// (модель × taskType) — 192 строки на пять моделей и 63 задачи. Это
+// измерение не зарабатывало ничего: ни одна текстовая задача ничем не
+// отличалась от другой, все текстовые модели умеют их все, а телеметрия
+// «по фиче» берёт taskType из собственной колонки AIJob. Зато оно
+// стоило: отсутствие строки под новую задачу молча убивало фичу при
+// живых ключах (см. AUDIT-AI-CAPABILITIES-2026-09-01.md) — семь доменов
+// разом.
+//
+// Теперь строка ОДНА НА МОДЕЛЬ и отвечает ровно на два вопроса, на
+// которые из ключей ответа нет: можно ли модели давать медиа и не
+// выключена ли она вручную. Кого спрашивать — решает наличие ключа.
+//
+// Удалены как нечитаемые ничем: taskType, structuredOutput, streaming,
+// maxContext, privacyClass. latencyClass/costClass оставлены — они
+// показываются в селекторе движков.
 model AIModelCapability {
   id             String         @id @default(cuid())
-  modelVersionId String
+  modelVersionId String         @unique
   modelVersion   AIModelVersion @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
 
-  taskType String // "generation" | "classification" | "extraction" | "vision_analysis" | "audio_transcription" | ... — держим строкой по тому же принципу, что inferenceType
-
-  structuredOutput Boolean @default(false)
-  streaming        Boolean @default(false)
-  vision           Boolean @default(false)
-  audio            Boolean @default(false)
-  maxContext       Int?
+  vision Boolean @default(false)
+  audio  Boolean @default(false)
 
   latencyClass String? // "low" | "medium" | "high" — свободная строка, см. README про причину не enum'ить заранее
-  privacyClass String? // характеристика провайдера по хранению данных — влияет на выбор в privacyProcessingMode (4.6), конкретные значения — на усмотрение при первой реализации
   costClass    String? // "low" | "medium" | "high"
   availability String  @default("active") // "active" | "beta" | "deprecated"
 
   createdAt DateTime @default(now())
 
-  @@index([modelVersionId, taskType])
   @@map("ai_model_capabilities")
 }
 

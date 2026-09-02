@@ -141,4 +141,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

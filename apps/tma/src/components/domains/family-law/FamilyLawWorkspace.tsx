@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { domainApi } from '../../../lib/domains/api';
 import { DomainManifest } from '../../../lib/domains/types';
 import { EntityForm } from '../EntityForm';
-import { dateOnly, dateTime, money } from '../dtp/dtp-types';
+import { dateOnly, money } from '../dtp/dtp-types';
 import { BudgetByCurrency, ComparisonMatrix, CriteriaByCategory, Criterion, CrossCheckList, SourceCard, TextDocument, useList } from '../shared/ConsultationPipeline';
 
 interface FlConfig { id: string; goalDescription: string; targetBudget: number | null; currency: string | null; criteria: Criterion[]; project?: { contractType?: string } }

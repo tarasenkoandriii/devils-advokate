@@ -67,7 +67,7 @@ export class SourceConflictService {
   ) {}
 
   async detect(userId: string, personId: string) {
-    const person = await this.findOwnedPerson(userId, personId);
+    await this.findOwnedPerson(userId, personId);
 
     const facts = await this.prisma.personFact.findMany({
       where: { personId, status: { not: FactStatus.EXPIRED } },

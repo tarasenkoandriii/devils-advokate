@@ -146,6 +146,9 @@ function createFakePrisma() {
       },
     },
     aIProvider: {
+      // Повторный аудит 2026-09-01: код читает провайдера через
+      // requireAIProvider (findUnique + внятная ошибка вместо P2025/500).
+      findUnique: async ({ where }: any) => [...aiProviders.values()].find((p) => p.name === where.name) ?? null,
       findUniqueOrThrow: async ({ where }: any) => {
         const p = [...aiProviders.values()].find((p) => p.name === where.name);
         if (!p) throw new Error('provider not found');
@@ -153,6 +156,11 @@ function createFakePrisma() {
       },
     },
     aIModelVersion: {
+      // Повторный аудит 2026-09-01: сервис резолвит версию модели ДО
+      // платного submitJob и через findFirst + orderBy (детерминизм),
+      // с внятным отказом вместо P2025.
+      findFirst: async ({ where }: any) =>
+        [...aiModelVersions.values()].find((v) => v.providerId === where.model.providerId) ?? null,
       findFirstOrThrow: async ({ where }: any) => {
         const v = [...aiModelVersions.values()].find((v) => v.providerId === where.model.providerId);
         if (!v) throw new Error('model version not found');
@@ -788,4 +796,9 @@ async function run() {
   }
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

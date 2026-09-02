@@ -7,7 +7,7 @@ import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SecretsService } from '../secrets/secrets.service';
 import { IntakeScenario, IntakeService } from './intake.service';
 import { safeSecretEqual } from '../common/timing-safe-equal';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 
 export class TextDto {
   // Пункт [validation] 2026-09-01: ответ квиза уходит в LLM-контекст —

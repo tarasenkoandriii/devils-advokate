@@ -66,7 +66,7 @@ export function DtpWorkspace({ config, manifest }: { config: DtpConfig; manifest
   const [tab, setTab] = useState('overview');
   const [counts, setCounts] = useState({ participants: 0, evidence: 0, advisors: 0 });
   useEffect(() => {
-    Promise.all([
+    void Promise.all([
       domainApi.getJson(`/dtp/configs/${config.id}/participants`).catch(() => []),
       domainApi.getJson(`/dtp/configs/${config.id}/evidence`).catch(() => []),
       domainApi.getJson(`/dtp/configs/${config.id}/advisors`).catch(() => []),

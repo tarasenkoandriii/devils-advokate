@@ -11,7 +11,7 @@
 // ТЗ) — эта страница физически не может показать факты/документы,
 // backend их и не возвращает через этот эндпоинт.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import {
   addPublicComment,
@@ -39,17 +39,16 @@ export default function PublicDiscussionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return getPublicDiscussion(token)
       .then(setView)
       .catch(() => setNotFound(true));
-  }
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+    void reload().finally(() => setLoading(false));
+  }, [reload, token]);
 
   async function handleJoin(anonymous: boolean) {
     try {

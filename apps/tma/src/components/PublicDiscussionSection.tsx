@@ -5,7 +5,7 @@
 // (для тех, кто перешёл по ссылке) — отдельная страница вне TMA,
 // /public/[token]/page.tsx, использует lib/public-api.ts, не эту секцию.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   disablePublicSharing,
   enablePublicSharing,
@@ -32,7 +32,7 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
   const [needsConsent, setNeedsConsent] = useState(false);
   const [grantingConsent, setGrantingConsent] = useState(false);
 
-  function reload() {
+  const reload = useCallback(() => {
     if (!token) {
       setSubmissions([]);
       return Promise.resolve();
@@ -40,12 +40,11 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
     return listPublicSubmissionsForModeration(projectId)
       .then(setSubmissions)
       .catch(() => setSubmissions([]));
-  }
+  }, [projectId, token]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, token]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleEnable() {
     setToggling(true);

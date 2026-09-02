@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { getTelemetrySummary, getTelemetryByModel } from '../../lib/endpoints';
 import { TelemetryChart } from '../../components/TelemetryChart';
@@ -11,26 +11,34 @@ function last24hIso() {
 }
 
 export default function TelemetryPage() {
+  // Аудит 2026-09-01: поля дат и ПРИМЕНЁННЫЙ диапазон разделены.
+  // Раньше эффект грузил данные один раз с подавленным exhaustive-deps;
+  // после включения линтера стало видно, что load() замыкает from/to и
+  // без разделения кнопка «Обновить» либо тянула бы стартовый диапазон,
+  // либо каждое движение в поле даты било бы в API двумя запросами.
   const [from, setFrom] = useState(last24hIso());
   const [to, setTo] = useState(new Date().toISOString());
+  const [applied, setApplied] = useState({ from: from, to: to });
   const [summary, setSummary] = useState<TelemetrySummaryRow[] | null>(null);
   const [byModel, setByModel] = useState<TelemetryByModelRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
-      const [s, m] = await Promise.all([getTelemetrySummary(from, to), getTelemetryByModel(from, to)]);
+      const [s, m] = await Promise.all([
+        getTelemetrySummary(applied.from, applied.to),
+        getTelemetryByModel(applied.from, applied.to),
+      ]);
       setSummary(s);
       setByModel(m);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить телеметрию');
     }
-  }
+  }, [applied]);
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void load();
+  }, [load]);
 
   if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;
 
@@ -61,7 +69,7 @@ export default function TelemetryPage() {
             onChange={(e) => setTo(new Date(e.target.value).toISOString())}
           />
         </label>
-        <button className="btn btn-primary" onClick={load}>
+        <button className="btn btn-primary" onClick={() => setApplied({ from, to })}>
           Обновить
         </button>
       </div>

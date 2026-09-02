@@ -19,7 +19,7 @@ class GenerateArgumentsDto {
 }
 
 class TransitionArgumentLifecycleDto {
-  toStatus: ArgumentLifecycleStatus;
+  toStatus!: ArgumentLifecycleStatus;
   conversationId?: string;
   note?: string;
 }

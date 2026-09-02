@@ -20,6 +20,7 @@
 // locality, что во всём §3.27.
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { TranscriptionService, AssemblyAiWebhookPayload } from '../conversations/transcription.service';
@@ -371,7 +372,7 @@ export class MaterialChatService {
   }
 
   private async resolveAssemblyAiKey(): Promise<string> {
-    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const provider = await requireAIProvider(this.prisma, 'assemblyai');
     return this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
   }
 

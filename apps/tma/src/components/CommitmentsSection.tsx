@@ -17,7 +17,7 @@
 // своего промпта/taskType — не входит в этот проход, добавление
 // обязательств здесь только вручную.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createCommitment, listCommitmentsByProject, listPeople, updateCommitment } from '../lib/features';
 import { Commitment, CommitmentOwner, ProjectPersonLink } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -32,18 +32,17 @@ export function CommitmentsSection({ projectId }: CommitmentsSectionProps) {
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listCommitmentsByProject(projectId)
       .then(setCommitments)
       .catch(() => setCommitments([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
+    void Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
       setLoading(false),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [reload, projectId]);
 
   async function handleToggle(commitment: Commitment) {
     const nextStatus = commitment.status === 'COMPLETED' ? 'IN_PROGRESS' : 'COMPLETED';
@@ -81,7 +80,7 @@ export function CommitmentsSection({ projectId }: CommitmentsSectionProps) {
           people={people}
           onDone={() => {
             setShowAddForm(false);
-            reload();
+            void reload();
           }}
           onCancel={() => setShowAddForm(false)}
         />

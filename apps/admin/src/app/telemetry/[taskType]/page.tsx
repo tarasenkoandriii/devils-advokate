@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { getTelemetryTaskDetail } from '../../../lib/endpoints';
 import type { AIJobDetail } from '../../../lib/types';
@@ -15,18 +15,17 @@ export default function TelemetryTaskDetailPage() {
   const [jobs, setJobs] = useState<AIJobDetail[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       setJobs(await getTelemetryTaskDetail(taskType, 50, status || undefined));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить вызовы');
     }
-  }
+  }, [taskType, status]);
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskType, status]);
+    void load();
+  }, [load]);
 
   if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;
 

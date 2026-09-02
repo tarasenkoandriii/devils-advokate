@@ -54,8 +54,8 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     if (!params.id) return;
-    loadProject(params.id).finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadProject(params.id).finally(() => setLoading(false));
+
   }, [params.id]);
 
   // MVP-фича 6: после сохранения цели разговора — предложить

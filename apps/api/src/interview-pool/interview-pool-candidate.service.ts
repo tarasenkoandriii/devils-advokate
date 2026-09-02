@@ -11,7 +11,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { CandidateStage } from '@prisma/client';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
 
 const SHARE_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // §4.6 ТЗ: "за замовчуванням 72 години"

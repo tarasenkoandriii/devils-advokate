@@ -203,7 +203,7 @@ export class MajorPurchaseOnboardingService {
     if (!text.trim()) {
       throw new BadRequestException('text не может быть пустым');
     }
-    const conversation = await this.assertOwnedConversation(userId, conversationId);
+    await this.assertOwnedConversation(userId, conversationId);
     const transcript = await this.prisma.transcript.findUnique({ where: { conversationId } });
     if (!transcript) {
       throw new NotFoundException(`Transcript for conversation ${conversationId} not found`);

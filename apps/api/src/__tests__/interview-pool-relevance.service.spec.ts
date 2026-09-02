@@ -67,7 +67,7 @@ function createFakePrisma() {
     },
     candidatePipelineStatus: {
       findMany: async ({ where, include }: any) => {
-        let rows = statuses.filter((s) => s.projectId === where.projectId);
+        const rows = statuses.filter((s) => s.projectId === where.projectId);
         return rows.map((s) => ({
           ...s,
           candidateProfile: include?.candidateProfile ? candidates.get(s.candidateProfileId) : undefined,

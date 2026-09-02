@@ -13,7 +13,7 @@ function createFakePrisma() {
         projects.set(p.id, p);
         return p;
       },
-      findMany: async ({ where, orderBy, take, skip }: any) => {
+      findMany: async ({ where, take, skip }: any) => {  // фейк не воспроизводит orderBy — порядок здесь не проверяется
         let items = [...projects.values()].filter((p) => p.ownerId === where.ownerId);
         items.sort((a, b) => b.updatedAt - a.updatedAt);
         items = items.slice(skip ?? 0, (skip ?? 0) + (take ?? items.length));

@@ -1,0 +1,16 @@
+{
+  // Конфиг сборки (nest build подхватывает его автоматически).
+  // Отличие от tsconfig.json одно: спеки и тестовые хелперы не
+  // компилируются в dist. Проверки типов у них те же — тайпчек
+  // (npm run typecheck) идёт по tsconfig.json, который спеки включает.
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "src/__tests__/**",
+    "**/*.spec.ts",
+    "prisma/**",
+    "scripts/**"
+  ]
+}

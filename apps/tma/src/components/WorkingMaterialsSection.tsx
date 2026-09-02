@@ -16,7 +16,7 @@
 // дисклеймер именно про то, что ФАЙЛ остаётся на устройстве, это
 // информационное сообщение, не отдельное действие "разрешить".
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
 import { listWorkingMaterials, submitWorkingMaterialVersion } from '../lib/features';
 import { extractMaterialText } from '../lib/material-extract';
@@ -37,16 +37,15 @@ export function WorkingMaterialsSection({ projectId }: WorkingMaterialsSectionPr
   const [error, setError] = useState<string | null>(null);
   const [addingVersionFor, setAddingVersionFor] = useState<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listWorkingMaterials(projectId)
       .then(setMaterials)
       .catch(() => setMaterials([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>, materialId?: string) {
     const file = e.target.files?.[0];

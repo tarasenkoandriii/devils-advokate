@@ -17,7 +17,7 @@
 // fileRef хранит только имя файла как клиентскую ссылку "напомнить,
 // какой файл имелся в виду", не путь загрузки.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { ChangeEvent } from 'react';
 import { createPersonFact, listPersonFacts } from '../lib/features';
 import { checkExifForGeoTag, stripExifMetadata } from '../lib/exif-check';
@@ -48,16 +48,15 @@ export function PersonFactsSection({ personId, projectId }: PersonFactsSectionPr
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listPersonFacts(personId)
       .then(setFacts)
       .catch(() => setFacts([]));
-  }
+  }, [personId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [personId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];

@@ -18,7 +18,8 @@
 // не было способа её заполнить, TMA UI показывал лейбл диаризации
 // ("SPEAKER_00") как есть.
 
-import { ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -117,18 +118,31 @@ export class ConversationsService implements OnModuleInit {
     // resolveAudioUrl() ниже.
     const audioUrl = await this.resolveAudioUrl(conversation, dto);
 
-    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const provider = await requireAIProvider(this.prisma, 'assemblyai');
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
+
+    // Повторный аудит 2026-09-01: версия модели резолвится ДО платного
+    // submitJob. Раньше порядок был обратный — при отсутствии строки
+    // AIModelVersion задача у AssemblyAI уже была поставлена (и
+    // оплачена), а запрос падал. Плюс orderBy: findFirst без него
+    // отдаёт строки в непредсказуемом порядке — тот же недетерминизм,
+    // который уже чинили в AIRouter.resolveModelVersion.
+    const modelVersion = await this.prisma.aIModelVersion.findFirst({
+      where: { model: { providerId: provider.id } },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!modelVersion) {
+      throw new ServiceUnavailableException(
+        `Для провайдера «${provider.name}» в базе нет ни одной модели (AIModelVersion). ` +
+          'Это конфигурация, а не сбой провайдера — выполните `npm run prisma:seed` против этой базы.',
+      );
+    }
 
     const webhookUrl = this.buildWebhookUrl(conversationId);
     const { externalJobId } = await this.transcription.submitJob(apiKey, {
       audioUrl,
       webhookUrl,
       languageCode: dto.languageCode,
-    });
-
-    const modelVersion = await this.prisma.aIModelVersion.findFirstOrThrow({
-      where: { model: { providerId: provider.id } },
     });
 
     // Пункт [multimodal] §7.2 — счётчик потребителей файла. AssemblyAI
@@ -186,7 +200,7 @@ export class ConversationsService implements OnModuleInit {
       return { acknowledged: true, matched: false };
     }
 
-    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const provider = await requireAIProvider(this.prisma, 'assemblyai');
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
     const result = await this.transcription.getTranscriptResult(apiKey, payload.transcript_id);
 
@@ -382,7 +396,7 @@ export class ConversationsService implements OnModuleInit {
     // вызовов: upload без transcribe.
     await this.consent.assertAudioMayLeaveDevice(userId, conversation.projectId);
 
-    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const provider = await requireAIProvider(this.prisma, 'assemblyai');
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
 
     const uploadUrl = await this.transcription.streamUpload(apiKey, fileStream);

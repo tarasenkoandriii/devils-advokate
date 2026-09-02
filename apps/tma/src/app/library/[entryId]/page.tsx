@@ -5,7 +5,7 @@
 // Тот же принцип, что /library/page.tsx — обычный веб-роут, без
 // Telegram-контекста.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { addLibraryExperience, getLibraryEntry, voteLibraryEntry } from '../../../lib/public-api';
 import { LibraryEntry } from '../../../lib/types';
@@ -21,17 +21,16 @@ export default function LibraryEntryPage() {
   const [experienceName, setExperienceName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  function reload() {
+  const reload = useCallback(() => {
     return getLibraryEntry(entryId)
       .then(setEntry)
       .catch(() => setNotFound(true));
-  }
+  }, [entryId]);
 
   useEffect(() => {
     if (!entryId) return;
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entryId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload, entryId]);
 
   async function handleVote(direction: 'up' | 'down') {
     try {

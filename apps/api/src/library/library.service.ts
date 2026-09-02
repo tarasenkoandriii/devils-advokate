@@ -39,7 +39,7 @@ export class LibraryService {
    * применялся в publicView() (Пункт 56)/OutcomeForecastingService
    * (Пункт 47): не адресные, не RECONCILIATION. */
   async submitProject(userId: string, projectId: string, title: string, category: string) {
-    const project = await assertProjectOwnership(this.prisma, userId, projectId);
+    await assertProjectOwnership(this.prisma, userId, projectId);
     if (!title.trim() || !category.trim()) {
       throw new BadRequestException('title и category обязательны');
     }

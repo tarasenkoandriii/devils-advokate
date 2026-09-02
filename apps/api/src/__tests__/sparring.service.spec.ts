@@ -113,6 +113,9 @@ function createFakePrisma() {
     },
     aIProvider: {
       findUniqueOrThrow: async () => ({ id: 'provider-1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' }),
+      // Повторный аудит 2026-09-01: чтение провайдера переведено на
+      // requireAIProvider (findUnique + внятная ошибка вместо P2025/500).
+      findUnique: async () => ({ id: 'provider-1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' }),
     },
     sparringVoiceReplyJob: {
       create: async ({ data }: any) => {
@@ -637,7 +640,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTts = new FakeTextToSpeechService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     const result = await svc.startSession(USER_ID, PROJECT_ID);
     assertEqual(result.messages[0].audioBase64, 'base64-audio-for::Опровержение оппонента', 'аудио реально синтезировано и сохранено на сообщении');
@@ -649,7 +652,7 @@ async function run() {
     seedProject(prisma);
     const fakeTts = new FakeTextToSpeechService();
     fakeTts.shouldFail = true;
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     const result = await svc.startSession(USER_ID, PROJECT_ID);
     assertEqual(result.messages[0].audioBase64, null, 'сбой синтеза — честный null, не исключение наружу');
@@ -660,7 +663,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTts = new FakeTextToSpeechService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     const started = await svc.startSession(USER_ID, PROJECT_ID);
     fakeTts.synthesizeCalls = []; // сбрасываем вызов из startSession(), интересует именно reply()
@@ -675,7 +678,7 @@ async function run() {
     seedProject(prisma);
     prisma._seedScheduledConversation({ id: 'sched-1', projectId: PROJECT_ID, personId: null, scheduledAt: new Date() });
     const fakeTts = new FakeTextToSpeechService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     await svc.preGenerateSparringOpener('sched-1', USER_ID);
 
@@ -689,7 +692,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     const fakeTts = new FakeTextToSpeechService();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     await svc.preGenerateSparringOpener('nonexistent-sched', USER_ID); // не должно бросить исключение
     assertEqual(fakeTts.synthesizeCalls.length, 0, 'ни AI, ни TTS не вызваны для несуществующей встречи');
@@ -701,7 +704,7 @@ async function run() {
     prisma._seedScheduledConversation({ id: 'sched-1', projectId: PROJECT_ID, personId: null, scheduledAt: new Date() });
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
     const fakeTts = new FakeTextToSpeechService();
-    const svc = new SparringService(prisma as any, failingRouter as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, failingRouter as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     await svc.preGenerateSparringOpener('sched-1', USER_ID); // не должно бросить исключение наружу
     const updated = prisma._getScheduledConversation('sched-1');
@@ -721,7 +724,7 @@ async function run() {
     });
     const fakeRouter = new FakeAIRouterService();
     const fakeTts = new FakeTextToSpeechService();
-    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, fakeTts as any);
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, fakeTts as any, fakeConsent() as any);
 
     const result = await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, undefined, undefined, 'sched-1');
 
@@ -760,4 +763,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

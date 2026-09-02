@@ -13,7 +13,7 @@
 // запись Person, иначе backend не сможет подмешать его коммуникационный
 // профиль/связи/прецеденты в промпт.
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { generateArchetypePerspective, listArchetypePerspectives, listPeople } from '../lib/features';
 import { ArchetypePerspective, ArchetypeType, ProjectPersonLink } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -46,18 +46,17 @@ export function ArchetypePerspectivesSection({ projectId }: ArchetypePerspective
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listArchetypePerspectives(projectId)
       .then(setPerspectives)
       .catch(() => setPerspectives([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
+    void Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
       setLoading(false),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [reload, projectId]);
 
   async function handleGenerate() {
     if (selectedType === 'CUSTOM' && !customDescription.trim()) return;

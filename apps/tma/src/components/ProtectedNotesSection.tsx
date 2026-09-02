@@ -17,7 +17,7 @@
 // (текст + planOrder "План Б, В..." + triggerCondition "когда это
 // предлагать").
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createProtectedNote, listProtectedNotes, updateProtectedNote, deleteProtectedNote } from '../lib/features';
 import { ProtectedNote, ProtectedNoteType } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -44,16 +44,15 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
 
-  function reload() {
+  const reload = useCallback(() => {
     return listProtectedNotes(projectId)
       .then(setNotes)
       .catch(() => setNotes([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleAdd() {
     const content = newContent.trim();

@@ -78,7 +78,12 @@ export class ChatImportService {
 
     const firstTimestampMs = Math.min(...input.messages.map((m) => m.timestampMs));
 
-    return this.prisma.$transaction(async (tx: typeof this.prisma) => {
+    // Тип tx намеренно выводится контекстно (как во всех остальных
+    // сервисах). Явное `typeof this.prisma` (PrismaService) шире
+    // клиента транзакции: под strict оно выбирало перегрузку
+    // $transaction с массивом промисов, и возвращаемый тип importChat
+    // вырождался в any[] — спека это молча проглатывала.
+    return this.prisma.$transaction(async (tx) => {
       const conversation = await tx.conversation.create({
         data: {
           projectId,

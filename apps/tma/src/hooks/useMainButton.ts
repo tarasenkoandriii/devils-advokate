@@ -34,7 +34,7 @@ export function useMainButton(options: UseMainButtonOptions): { isTelegramAvaila
     return () => {
       webApp.MainButton.offClick(handler);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   useEffect(() => {

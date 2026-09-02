@@ -70,7 +70,7 @@ function createFakePrisma() {
     },
     healthConfig: {
       findUnique: async ({ where, include }: any) => {
-        let config = where.id ? configs.get(where.id) : [...configs.values()].find((c) => c.projectId === where.projectId);
+        const config = where.id ? configs.get(where.id) : [...configs.values()].find((c) => c.projectId === where.projectId);
         if (!config) return null;
         if (include?.criteria) return { ...config, criteria: criteria.filter((c) => c.configId === config.id) };
         return config;
@@ -323,7 +323,7 @@ describe('HealthService', () => {
     const config = prisma._seedConfig({ projectId: project.id, goalDescription: 'x' });
     const provider = prisma._seedProvider({ configId: config.id, label: 'Хірург W' });
 
-    let fetchedUrls: string[] = [];
+    const fetchedUrls: string[] = [];
     (global as any).fetch = jest.fn(async (url: string) => {
       fetchedUrls.push(url);
       return { ok: true, headers: { get: () => null }, text: async () => '<html>Стаття про метод лікування</html>' };

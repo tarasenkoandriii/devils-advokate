@@ -1,5 +1,5 @@
 import { MaterialChatService } from '../material-chat/material-chat.service';
-import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 function createFakePrisma() {
   const projects = new Map<string, any>();
@@ -90,6 +90,9 @@ function createFakePrisma() {
     },
     aIProvider: {
       findUniqueOrThrow: async () => ({ id: 'provider-1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' }),
+      // Повторный аудит 2026-09-01: чтение провайдера переведено на
+      // requireAIProvider (findUnique + внятная ошибка вместо P2025/500).
+      findUnique: async () => ({ id: 'provider-1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' }),
     },
     materialChatVoiceReplyJob: {
       create: async ({ data }: any) => {
@@ -162,8 +165,23 @@ function seedBase(prisma: ReturnType<typeof createFakePrisma>) {
   prisma._seedMaterial({ id: MATERIAL_ID, projectId: PROJECT_ID, title: 'ТЗ для инвестора' });
 }
 
+// Аудит 2026-09-01 (тайпчек спек): MaterialChatService получил шестым
+// аргументом ConsentService (голос уходит внешнему провайдеру), но
+// спеки продолжали конструировать его пятью — спеки не были в
+// тайпчеке, и рассинхрон был не виден. В сценариях согласие считается
+// выданным; сама проверка живёт в consent.service.spec.ts, а факт
+// вызова фиксирует ключевой тест ниже — по образцу sparring.
+function fakeConsent(calls: string[] = []) {
+  return {
+    calls,
+    assertAudioMayLeaveDevice: async (userId: string, projectId?: string) => {
+      calls.push(`${userId}:${projectId ?? '-'}`);
+    },
+  };
+}
+
 function makeService(prisma: any, aiRouter: any = new FakeAIRouterService(), tts: any = new FakeTextToSpeechService()) {
-  return new MaterialChatService(prisma, aiRouter, {} as any, {} as any, tts);
+  return new MaterialChatService(prisma, aiRouter, {} as any, {} as any, tts, fakeConsent() as any);
 }
 
 async function run() {
@@ -371,7 +389,7 @@ async function run() {
       status: 'completed', id: 'ext-1',
       utterances: [{ speaker: 'A', text: 'Голосовой вопрос по материалу', start: 0, end: 1000 }],
     };
-    const svc = new MaterialChatService(prisma, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any);
+    const svc = new MaterialChatService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     await svc.handleVoiceReplyWebhook({ transcript_id: 'ext-1', status: 'completed' } as any);
 
@@ -389,7 +407,7 @@ async function run() {
     prisma._seedVoiceReplyJob({ id: 'job-1', materialChatSessionId: 'sess-1', externalTranscriptionJobId: 'ext-2' });
     const fakeTranscription = new FakeTranscriptionForWebhook();
     fakeTranscription.transcriptResultByJobId['ext-2'] = { status: 'error', id: 'ext-2', error: 'audio too short' };
-    const svc = new MaterialChatService(prisma, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any);
+    const svc = new MaterialChatService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
 
     await svc.handleVoiceReplyWebhook({ transcript_id: 'ext-2', status: 'error' } as any);
 
@@ -401,9 +419,34 @@ async function run() {
   test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): handleVoiceReplyWebhook() без transcript_id — не падає, GET не робиться', async () => {
     const prisma = createFakePrisma();
     const fakeTranscription = new FakeTranscriptionForWebhook();
-    const svc = new MaterialChatService(prisma, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any);
+    const svc = new MaterialChatService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     await svc.handleVoiceReplyWebhook({ status: 'completed' } as any);
     assertEqual(fakeTranscription.getResultCalls, [], 'без transcript_id зайвий зовнішній виклик не робиться');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (аудит 2026-09-01): голосовая реплика к материалу не уходит провайдеру без проверки согласий', async () => {
+    const prisma = createFakePrisma();
+    seedBase(prisma);
+    prisma._seedSession({ id: 'sess-1', workingMaterialId: MATERIAL_ID });
+    const order: string[] = [];
+    const consent = {
+      assertAudioMayLeaveDevice: async () => {
+        order.push('CONSENT_CHECKED');
+        throw new ForbiddenException('Consent required: RECORDING');
+      },
+    };
+    const transcription = { streamUpload: async () => { order.push('UPLOADED'); return 'url'; } };
+    const svc = new MaterialChatService(
+      prisma as any, new FakeAIRouterService() as any, transcription as any, fakeSecrets as any,
+      new FakeTextToSpeechService() as any, consent as any,
+    );
+
+    await assertThrowsAsync(
+      () => svc.streamUploadVoiceReply(USER_ID, 'sess-1', null as any),
+      ForbiddenException,
+      'streamUploadVoiceReply() без согласия',
+    );
+    assertEqual(order, ['CONSENT_CHECKED'], 'проверка согласия — до загрузки, ни одного байта провайдеру не ушло');
   });
 
   for (const [name, fn] of scenarios) {
@@ -424,4 +467,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

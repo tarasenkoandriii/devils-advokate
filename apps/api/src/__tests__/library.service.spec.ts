@@ -41,7 +41,7 @@ function createFakePrisma() {
     },
     libraryEntry: {
       findFirst: async ({ where }: any) => {
-        let result = entries.filter((e) => {
+        const result = entries.filter((e) => {
           if (where.sourceProjectId !== undefined && e.sourceProjectId !== where.sourceProjectId) return false;
           if (where.id !== undefined && e.id !== where.id) return false;
           if (where.status !== undefined && e.status !== where.status) return false;
@@ -297,4 +297,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

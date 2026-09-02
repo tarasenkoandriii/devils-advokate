@@ -45,7 +45,6 @@ export function UserVoiceRecordingSection({ sheet, onSaved, onClose }: UserVoice
   const [processedBlob, setProcessedBlob] = useState<Blob | null>(null);
   const [processedUrl, setProcessedUrl] = useState<string | null>(null);
   const [hasListened, setHasListened] = useState(false);
-  const [scrollIndex, setScrollIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const mediaRecorderRef = useState<{ current: MediaRecorder | null }>({ current: null })[0];
@@ -66,7 +65,6 @@ export function UserVoiceRecordingSection({ sheet, onSaved, onClose }: UserVoice
       recorder.start();
       mediaRecorderRef.current = recorder;
       setStage('recording');
-      setScrollIndex(0);
     } catch {
       setError('Доступ к микрофону не предоставлен');
     }
@@ -98,11 +96,18 @@ export function UserVoiceRecordingSection({ sheet, onSaved, onClose }: UserVoice
     }
   }
 
-  function handlePlay() {
+  async function handlePlay() {
     if (!processedUrl) return;
     const audio = new Audio(processedUrl);
     audio.onended = () => setHasListened(true);
-    audio.play();
+    try {
+      // Отказ автовоспроизведения раньше терялся: прослушивание —
+      // условие кнопки «Сохранить», и молчание выглядело как баг
+      // сохранения, а не как заблокированный звук.
+      await audio.play();
+    } catch {
+      setError('Браузер заблокировал воспроизведение — нажмите ещё раз');
+    }
   }
 
   async function handleSave() {

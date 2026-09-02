@@ -1,6 +1,6 @@
 // ТЗ §0 — шесть манифестов. Пути — полные, как в декораторах контроллеров
 // (interview-pool/investment — @Controller() без префикса; самоаудит ТЗ §4).
-import { DomainId, DomainManifest, EntitySpec, ExtraPanelSpec, FieldSpec, SessionSpec } from './types';
+import { DomainId, DomainManifest, ExtraPanelSpec, FieldSpec, SessionSpec } from './types';
 
 const opt = (values: string[], labels?: Record<string, string>) =>
   values.map((v) => ({ value: v, label: labels?.[v] ?? v }));
@@ -212,8 +212,37 @@ const interviewPool: DomainManifest = {
   ],
 };
 
+// ── Поиск работы ──
+// Повторный аудит 2026-09-01: седьмой манифест. Домен целиком был на
+// бэкенде (12 эндпоинтов), а в TMA его не существовало — квиз отправлял
+// в него и упирался в «Неизвестный сценарий». Сущности здесь на уровне
+// ПРОЕКТА, а не конфига (`/job-search/projects/:id/vacancies`), поэтому
+// generic EntityPanel (он параметризуется configId) не подходит и домен
+// рисует своя вёрстка JobSearchWorkspace — тот же приём, что у
+// investment/major-purchase.
+const jobSearch: DomainManifest = {
+  id: 'job-search', title: 'Поиск работы', icon: '💼',
+  tagline: 'CV из вашего опыта и сверка вакансий с вашими критериями — без оценок «подходит/не подходит»',
+  routes: standardRoutes('job-search'),
+  configFields: [
+    { name: 'desiredRole', label: 'Желаемая роль', type: 'text', required: true },
+    { name: 'city', label: 'Город', type: 'text' },
+    { name: 'region', label: 'Регион', type: 'text' },
+    { name: 'salaryExpectation', label: 'Зарплатные ожидания', type: 'money', currencyField: 'currency' },
+    CURRENCY,
+    { name: 'employmentFormat', label: 'Формат', type: 'text', hint: 'офис / гибрид / удалёнка — своими словами' },
+    { name: 'experienceSummary', label: 'Опыт кратко', type: 'textarea', hint: 'материал для CV; полный рассказ из онбординга тоже используется' },
+  ],
+  hasCriteria: true,
+  criteriaCategories: ['ROLE_FIT', 'COMPENSATION', 'LOCATION', 'CONDITIONS', 'OTHER'],
+  // Вакансии живут на проекте, не на конфиге — панель своя (см. выше).
+  entities: [],
+  extras: [],
+};
+
 export const DOMAIN_MANIFESTS: Record<DomainId, DomainManifest> = {
   dtp, 'family-law': familyLaw, health, investment, 'major-purchase': majorPurchase, 'interview-pool': interviewPool,
+  'job-search': jobSearch,
 };
 
 export const DOMAIN_LIST: DomainManifest[] = Object.values(DOMAIN_MANIFESTS);

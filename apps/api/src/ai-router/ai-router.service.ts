@@ -20,7 +20,6 @@ import { ContentScanService } from '../content-scan/content-scan.service';
 import {
   AIProviderCompletionParams,
   ContentBlock,
-  MediaRef,
   requiresMedia,
   selectProviderClient,
   EXTERNAL_INTERACTION_MAX_WAIT_MS,
@@ -74,7 +73,14 @@ export class AIRouterExhaustedError extends Error {
 
 export class AIRouterNoCapableModelError extends Error {
   constructor(taskType: string) {
-    super(`No active AIModelVersion found with capability for taskType="${taskType}"`);
+    // Пункт [router-simplify] 2026-09-01: причин ровно две, и обе — про
+    // конфигурацию, а не про провайдера. Точную (нет строк / нет ключа,
+    // и у кого именно) пишет resolveModelVersion в лог; здесь — общий
+    // текст, который видит вызывающий код.
+    super(
+      `Нет модели, которой можно отдать задачу "${taskType}": либо в базе нет активных ` +
+        'AIModelCapability (выполните prisma:seed), либо ни у одной активной модели не задан ключ провайдера',
+    );
     this.name = 'AIRouterNoCapableModelError';
   }
 }
@@ -394,53 +400,88 @@ export class AIRouterService {
     return { sanitizedPrompt: sanitized, scanResultIds, blocked: false };
   }
 
-  /** Подбор модели: явный выбор пользователя > первая active-модель
-   * с нужным taskType. Не углубляется в latencyClass/costClass/
-   * privacyClass на этом проходе — простейший рабочий вариант; эти
-   * критерии добавляются, когда появится первый реальный конфликт
-   * между несколькими подходящими моделями (не гадаем сортировку
-   * заранее — тот же принцип, что уже применялся в чекпоинте 1
-   * к inferenceType/taskType как строкам вместо enum). */
+  /**
+   * Подбор модели. Пункт [router-simplify] 2026-09-01 — переписан.
+   *
+   * Было: строка AIModelCapability на КАЖДУЮ пару (модель × taskType).
+   * Отсутствие строки под новую задачу означало «AI-провайдер
+   * недоступен» при полностью настроенных ключах — так и умерли разом
+   * семь доменов (AUDIT-AI-CAPABILITIES-2026-09-01.md). При этом
+   * измерение taskType не отвечало ни на один вопрос: текстовые модели
+   * умеют все текстовые задачи одинаково.
+   *
+   * Стало: кандидаты — активные модели, которым ЕСТЬ ЧЕМ платить, то
+   * есть чей ключ реально задан в окружении. taskType в подборе больше
+   * не участвует (остаётся в телеметрии и в тексте ошибок). Из БД
+   * читаются ровно два ответа, которых в ключах нет: можно ли модели
+   * давать медиа и не выключена ли она вручную.
+   *
+   * Порядок кандидатов — по createdAt: «первая настроенная выигрывает»,
+   * смена приоритета — деактивацией, явным действием. Автоматического
+   * перебора провайдеров при ошибке по-прежнему нет (fallback — только
+   * по заранее проставленному fallbackModelVersionId): «нет ключа» — не
+   * ошибка вызова, а отсутствие кандидата, и решается ДО вызова.
+   */
   private async resolveModelVersion(
     taskType: string,
     preferredId?: string,
     needsMedia = false,
   ): Promise<ModelVersionWithProvider> {
-    if (preferredId) {
-      const preferred = await this.prisma.aIModelVersion.findUnique({
-        where: { id: preferredId },
-        include: { model: { include: { provider: true } } },
-      });
-      if (!preferred) {
-        throw new AIRouterNoCapableModelError(taskType);
-      }
-      return preferred;
-    }
-
-    // Пункт [multimodal] §10.3 — мёртвые колонки vision/audio наконец
-    // читаются: без фильтра роутер отдал бы видео-задачу текстовой
-    // модели, и отказ выглядел бы как ошибка провайдера, а не
-    // конфигурации.
-    const capability = await this.prisma.aIModelCapability.findFirst({
+    const candidates = await this.prisma.aIModelCapability.findMany({
       where: {
-        taskType,
         availability: 'active',
         ...(needsMedia ? { OR: [{ vision: true }, { audio: true }] } : {}),
       },
-      include: {
-        modelVersion: { include: { model: { include: { provider: true } } } },
-      },
-      // Пункт [project-audit] 2026-09-01: findFirst без orderBy отдаёт
-      // строки в порядке, который Postgres не гарантирует, — при двух
-      // активных capability выбор модели был недетерминирован. Старейшая
-      // запись — стабильный дефолт: «первая настроенная выигрывает»,
-      // смена приоритета — деактивацией старой записи, явным действием.
+      include: { modelVersion: { include: { model: { include: { provider: true } } } } },
       orderBy: { createdAt: 'asc' },
     });
-    if (!capability) {
-      throw new AIRouterNoCapableModelError(taskType);
+
+    if (preferredId) {
+      // Явный выбор пользователя (§3.15 ТЗ) уважается, но выбирать он
+      // может только из того же множества: устаревший id из селектора
+      // движков не должен уводить запрос в провайдера без клиента.
+      const preferred = candidates.find((c) => c.modelVersionId === preferredId);
+      if (!preferred) {
+        throw new AIRouterNoCapableModelError(taskType);
+      }
+      if (!(await this.hasUsableKey(preferred.modelVersion.model.provider))) {
+        throw new AIRouterNoCapableModelError(taskType);
+      }
+      return preferred.modelVersion;
     }
-    return capability.modelVersion;
+
+    const withoutKey: string[] = [];
+    for (const candidate of candidates) {
+      const provider = candidate.modelVersion.model.provider;
+      if (await this.hasUsableKey(provider)) {
+        return candidate.modelVersion;
+      }
+      withoutKey.push(`${provider.name} (${provider.credentialRef ?? 'credentialRef не задан'})`);
+    }
+
+    // Диагноз в лог — иначе «нет кандидата» неотличимо от «провайдер
+    // отказал», а искать будут в ключах провайдера, который и так не
+    // выбран. Названы обе причины: моделей нет вовсе или ни у одной нет ключа.
+    this.logger.error(
+      candidates.length === 0
+        ? `Нет активных моделей${needsMedia ? ' с поддержкой медиа' : ''} для задачи ${taskType}: ` +
+            'в базе нет строк AIModelCapability — выполните `npm run prisma:seed`'
+        : `Ни у одной активной модели нет ключа (задача ${taskType}): ${withoutKey.join(', ')}`,
+    );
+    throw new AIRouterNoCapableModelError(taskType);
+  }
+
+  /** Ключ провайдера реально доступен в окружении. Ровно этот вопрос
+   *  раньше не задавался: роутер брал первую настроенную модель и падал
+   *  на 401 у провайдера, чьего ключа в проекте нет вообще. */
+  private async hasUsableKey(provider: { apiEndpoint: string | null; credentialRef: string | null }): Promise<boolean> {
+    if (!provider.apiEndpoint || !provider.credentialRef) return false;
+    try {
+      await this.secrets.resolve(provider.credentialRef);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async attemptWithRetryAndFallback(

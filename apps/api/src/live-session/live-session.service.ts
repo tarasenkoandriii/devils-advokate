@@ -18,6 +18,7 @@
 // "первоисточник не покидает устройство", что и везде в проекте.
 
 import { Injectable, NotFoundException, BadGatewayException } from '@nestjs/common';
+import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
@@ -53,7 +54,7 @@ export class LiveSessionService {
    * привязан к конкретному проекту (тот же довод, что ниже про клиента). */
   async mintTranscriptionToken(userId: string, expiresInSeconds = 300): Promise<{ token: string; expiresInSeconds: number }> {
     await this.consent.requireConsent(userId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
-    const provider = await this.prisma.aIProvider.findUniqueOrThrow({ where: { name: 'assemblyai' } });
+    const provider = await requireAIProvider(this.prisma, 'assemblyai');
     const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
 
     let response: Response;

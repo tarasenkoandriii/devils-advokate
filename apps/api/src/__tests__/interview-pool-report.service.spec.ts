@@ -153,7 +153,7 @@ describe('InterviewPoolReportService', () => {
   it('acceptance-тест §7 ТЗ: ComplianceFlag НІКОЛИ не потрапляє в content жодного звіту — перевірка на серіалізацію', async () => {
     const prisma = createFakePrisma();
     const project = prisma._seedProject({ ownerId: 'u1' });
-    const config = prisma._seedConfig({ projectId: project.id, jobTitle: 'Backend' });
+    prisma._seedConfig({ projectId: project.id, jobTitle: 'Backend' });
     const candidate = prisma._seedCandidate({ displayName: 'Кандидат' });
     prisma._seedStatus({ projectId: project.id, candidateProfileId: candidate.id });
     const service = makeService(prisma);

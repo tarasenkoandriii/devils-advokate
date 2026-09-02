@@ -75,7 +75,7 @@ export class CommunicationProfileService {
   ) {}
 
   async refresh(userId: string, personId: string) {
-    const person = await this.findOwnedPerson(userId, personId);
+    await this.findOwnedPerson(userId, personId);
 
     const [facts, conversations] = await Promise.all([
       this.prisma.personFact.findMany({

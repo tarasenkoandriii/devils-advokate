@@ -55,7 +55,7 @@ function createFakePrisma() {
     },
     familyLawConfig: {
       findUnique: async ({ where, include }: any) => {
-        let config = where.id ? configs.get(where.id) : [...configs.values()].find((c) => c.projectId === where.projectId);
+        const config = where.id ? configs.get(where.id) : [...configs.values()].find((c) => c.projectId === where.projectId);
         if (!config) return null;
         if (include?.criteria) return { ...config, criteria: criteria.filter((c) => c.configId === config.id) };
         return config;

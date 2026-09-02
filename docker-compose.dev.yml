@@ -94,6 +94,15 @@ x-api-env: &api-env
   VERCEL_BLOB_READ_WRITE_TOKEN: ${VERCEL_BLOB_READ_WRITE_TOKEN:-}
   WINDY_API_KEY: ${WINDY_API_KEY:-}
   SCHEDULER_DISPATCH_SECRET: ${SCHEDULER_DISPATCH_SECRET:-dev-dispatch-secret}
+  # Повторный аудит 2026-09-01: обе переменные были в .env.docker.example
+  # (включая пример curl прямо в комментарии), но в этот якорь не попали —
+  # а контейнер получает окружение только отсюда, --env-file кормит лишь
+  # интерполяцию ${...} самого compose. В стенде это выглядело так:
+  # мультимодальный разбор падал на «Secret not found for
+  # credentialRef GEMINI_API_KEY», а /internal/ai-jobs/* отвечал 500
+  # вместо 401 на команду из того же .env.docker.example.
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  AI_JOB_DISPATCH_SECRET: ${AI_JOB_DISPATCH_SECRET:-dev-dispatch-secret}
 
 services:
   postgres:

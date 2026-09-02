@@ -22,6 +22,18 @@ function scenarioTitle(s: IntakeScenario): string {
   return m ? `${m.icon} ${m.title}` : s;
 }
 
+/** Повторный аудит 2026-09-01: backend знает БОЛЬШЕ сценариев, чем в
+ *  TMA собрано экранов (job-search — сценарий классификатора и полный
+ *  модуль API, манифеста в приложении нет). Тип IntakeScenario этого не
+ *  ловит: строка приходит с сервера в рантайме. Без проверки dispatch
+ *  создавал реальный проект и уводил на /domains/job-search/<id>, где
+ *  экран отвечает «Неизвестный сценарий.» — данные созданы, вернуться к
+ *  ним из приложения нельзя. Проверка выводится из манифестов, поэтому
+ *  следующий такой сценарий обработается сам. */
+function isDispatchable(s: IntakeScenario | null): s is IntakeScenario {
+  return s === 'UNIVERSAL' || (s !== null && getManifest(s) != null);
+}
+
 export default function IntakePage() {
   const router = useRouter();
   const [aiConsent, setAiConsent] = useState<'loading' | 'needed' | 'ok'>('loading');
@@ -76,7 +88,12 @@ export default function IntakePage() {
   if (aiConsent === 'needed') return <main className="page"><h1>🎤 Подбор сценария</h1><ConsentGate onGranted={() => setAiConsent('ok')} /></main>;
 
   const decision = session?.decision ?? null;
-  const target: IntakeScenario | null = chosen ?? decision?.scenario ?? null;
+  const suggested: IntakeScenario | null = chosen ?? decision?.scenario ?? null;
+  // Сценарий без экрана в TMA не становится целью перехода — см.
+  // isDispatchable выше. Пользователю об этом говорится прямо, а не
+  // «Неизвестный сценарий» после создания проекта.
+  const target: IntakeScenario | null = isDispatchable(suggested) ? suggested : null;
+  const unsupported = suggested !== null && !isDispatchable(suggested) ? suggested : null;
   const targetManifest = target && target !== 'UNIVERSAL' ? getManifest(target) : null;
 
   return (
@@ -117,6 +134,12 @@ export default function IntakePage() {
             </dl>
           )}
 
+          {unsupported && (
+            <p className="generation-error">
+              Сценарий «{unsupported}» на сервере есть, но экран для него в приложении ещё не собран — перейти в него нельзя.
+              Всё сказанное не потеряно: выберите универсальный сценарий или другой из списка.
+            </p>
+          )}
           <p>Перейти в: <strong>{target ? scenarioTitle(target) : '—'}</strong></p>
           {picking && (
             <div className="entity-form__actions">

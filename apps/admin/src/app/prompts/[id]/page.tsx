@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import {
   listPromptVersions,
@@ -35,7 +35,7 @@ function PromptDetailInner() {
   const [casesJson, setCasesJson] = useState('[]');
   const [run, setRun] = useState<EvaluationRun | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!promptId) {
       setError('В URL отсутствует promptId — вернитесь на список промптов и откройте версию оттуда.');
       return;
@@ -53,12 +53,11 @@ function PromptDetailInner() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить версию');
     }
-  }
+  }, [versionId, promptId]);
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [versionId, promptId]);
+    void load();
+  }, [load]);
 
   async function saveDraft() {
     setBusy(true);

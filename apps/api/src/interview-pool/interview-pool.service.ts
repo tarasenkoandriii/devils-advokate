@@ -184,7 +184,7 @@ export class InterviewPoolService {
    * текстом попередньої вакансії, ДЕТЕРМІНОВАНО (порівняння рядків),
    * не AI-оцінка "наскільки вакансії схожі". */
   async addCandidate(userId: string, projectId: string, candidateProfileId: string, reuseHistory: boolean) {
-    const project = await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
+    await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
     await this.assertAccessibleCandidate(userId, candidateProfileId);
 
     const existing = await this.prisma.candidatePipelineStatus.findUnique({

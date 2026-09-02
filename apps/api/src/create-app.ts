@@ -82,7 +82,7 @@ export async function createNestApp(options: CreateAppOptions = {}): Promise<Nes
   // способного атаковать браузер разработчика тем же путём.
   const isProd = process.env.NODE_ENV === 'production';
   if (isProd && !corsOrigin) {
-    // eslint-disable-next-line no-console
+
     console.error(
       'CORS_ORIGIN is not set in production — cross-origin requests (including apps/admin) will be blocked. ' +
         'This is intentional: reflecting an arbitrary Origin together with credentials:true would be a CSRF/credential-leak vulnerability.',

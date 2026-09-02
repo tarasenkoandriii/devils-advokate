@@ -468,7 +468,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
       )}
 
       {needsAudioConsent && (
-        <ThirdPartyAudioConsentPrompt source="assistance-screen" onGranted={() => { setNeedsAudioConsent(false); handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
+        <ThirdPartyAudioConsentPrompt source="assistance-screen" onGranted={() => { setNeedsAudioConsent(false); void handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
       )}
       {!needsAudioConsent && captureState === 'idle' && (
         <button type="button" onClick={handleStart}>

@@ -441,7 +441,7 @@ export async function uploadConversationAudioToBlob(
   // отказывается подтверждать файл, лежащий вне него. Имя файла
   // сохраняется для читаемости стора, уникальность обеспечивает
   // addRandomSuffix на стороне токена, не мы.
-  const safeName = file.name.replace(/[^\w.\-]+/g, '_') || 'audio';
+  const safeName = file.name.replace(/[^\w.-]+/g, '_') || 'audio';
   const pathname = `conversation-audio/${conversationId}/${safeName}`;
 
   const blob = await upload(pathname, file, {

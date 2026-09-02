@@ -8,7 +8,7 @@
 
 COMPOSE = docker compose --env-file .env.docker -f docker-compose.dev.yml
 
-.PHONY: help env up down restart logs ps reset seed-dev shell-api psql test typecheck
+.PHONY: help env up down restart logs ps reset seed-dev shell-api psql test typecheck lint ci
 
 help:
 	@echo "make up         — поднять весь стенд (api + tma + admin + landing + postgres)"
@@ -21,6 +21,8 @@ help:
 	@echo "make psql       — psql внутри контейнера postgres"
 	@echo "make test       — тесты apps/api внутри контейнера"
 	@echo "make typecheck  — tsc по apps/api внутри контейнера"
+	@echo "make lint       — ESLint по всему монорепозиторию (на хосте)"
+	@echo "make ci         — lint + typecheck + тесты, как в CI (сборки — отдельно, npm run build)"
 
 # Создаётся автоматически при первом up — чтобы «забыл скопировать
 # .env.docker.example» не был отдельным шагом, на котором спотыкаются.
@@ -72,3 +74,16 @@ test: env
 # `npm run typecheck` — на хосте, он не требует ни БД, ни контейнеров.
 typecheck: env
 	$(COMPOSE) run --rm api npm run typecheck
+
+# ── Проверки перед пушем (на хосте, без докера) ──
+# Три из пяти джоб .github/workflows/ci.yml одной командой: красный CI
+# после пуша — почти всегда «не запустил это локально». Сборочная джоба
+# (nest + три next) сюда не входит намеренно — она медленная; при
+# правках next.config/зависимостей гоняйте ещё `npm run build`.
+# Требуется однократный npm ci и prisma generate (см. README).
+
+lint:
+	npm run lint
+
+ci:
+	npm run ci

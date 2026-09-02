@@ -45,7 +45,7 @@ function createFakePrisma() {
           : null;
         return { ...c, project, transcript: transcriptWithSegments };
       },
-      findMany: async ({ where, include, orderBy, take }: any) => {
+      findMany: async ({ where, include, take }: any) => {  // фейк не воспроизводит orderBy — порядок здесь не проверяется
         let result = [...conversations.values()].filter(
           (c) => c.projectId === where.projectId && c.id !== where.id.not && where.status.in.includes(c.status),
         );
@@ -594,4 +594,9 @@ async function run() {
   if (failed.length > 0) process.exit(1);
 }
 
-run();
+run().catch((err) => {
+  // Падение вне тела теста (в фейке, в модульном коде) — это
+  // провал файла, а не тихий unhandled rejection.
+  console.error(err);
+  process.exit(1);
+});

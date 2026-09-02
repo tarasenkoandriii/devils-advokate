@@ -24,11 +24,16 @@ export interface AvailableEngine {
 export class AIEnginesController {
   constructor(private readonly prisma: PrismaService) {}
 
+  // Пункт [router-simplify] 2026-09-01: capability больше не заводится
+  // на пару (модель × задача) — одна строка на модель. Параметр
+  // taskType в запросе поэтому ничего не фильтрует; он оставлен, чтобы
+  // не ломать вызовы фронтенда, и явно помечен как игнорируемый.
   @Get()
-  async list(@Query('taskType') taskType = 'argument-generation'): Promise<AvailableEngine[]> {
+  async list(@Query('taskType') _taskType?: string): Promise<AvailableEngine[]> {
     const capabilities = await this.prisma.aIModelCapability.findMany({
-      where: { taskType, availability: 'active' },
+      where: { availability: 'active' },
       include: { modelVersion: { include: { model: { include: { provider: true } } } } },
+      orderBy: { createdAt: 'asc' },
     });
 
     return capabilities.map((cap) => ({

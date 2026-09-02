@@ -43,7 +43,7 @@ export class ConversationAgendaService {
   ) {}
 
   async generate(userId: string, projectId: string) {
-    const project = await assertProjectOwnership(this.prisma, userId, projectId);
+    await assertProjectOwnership(this.prisma, userId, projectId);
     const objective = await this.prisma.decisionObjective.findUnique({ where: { projectId } });
 
     const pastConversations = await this.prisma.conversation.findMany({

@@ -75,7 +75,7 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled }: Props
     <div className="voice-text-input">
       <textarea rows={3} value={value} placeholder={placeholder} disabled={disabled} onChange={(e) => onChange(e.target.value)} />
       {needsAudioConsent ? (
-        <ThirdPartyAudioConsentPrompt source="voice-text-input" onGranted={() => { setNeedsAudioConsent(false); start(); }} onCancel={() => setNeedsAudioConsent(false)} />
+        <ThirdPartyAudioConsentPrompt source="voice-text-input" onGranted={() => { setNeedsAudioConsent(false); void start(); }} onCancel={() => setNeedsAudioConsent(false)} />
       ) : (
         <div className="voice-text-input__row">
           <button type="button" className={recording ? 'secondary voice-text-input__mic voice-text-input__mic--on' : 'secondary voice-text-input__mic'} disabled={disabled} onClick={recording ? stop : start}>

@@ -13,7 +13,24 @@ import { AdminSandboxService, makeSandboxWav } from '../admin-sandbox/admin-sand
 const OPERATOR = 'op-1';
 const REGULAR = 'user-2';
 
-function makeDeps(overrides: { operator?: boolean } = {}) {
+/** [router-simplify] 2026-09-01: модели, которые фейк БД отдаёт
+ *  роутеру и чек-листу. Раньше здесь был список taskType — измерения
+ *  больше нет, строка заводится на модель. */
+interface FakeModelRow { name: string; provider: string; credentialRef: string | null; vision?: boolean }
+// credentialRef подобраны под фейк секретов ниже: он знает только
+// YOUTUBE_API_KEY и ASSEMBLYAI_API_KEY. Для чек-листа важно не имя
+// провайдера, а наличие/отсутствие ключа.
+const DEFAULT_MODELS: FakeModelRow[] = [
+  { name: 'модель-с-ключом', provider: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' },
+  { name: 'gemini-flash', provider: 'google', credentialRef: 'GEMINI_API_KEY', vision: true },
+];
+
+function makeDeps(
+  overrides: {
+    operator?: boolean;
+    models?: FakeModelRow[];
+  } = {},
+) {
   const prisma = {
     user: {
       findUnique: jest.fn(async ({ where }: any) => ({
@@ -23,9 +40,25 @@ function makeDeps(overrides: { operator?: boolean } = {}) {
       })),
       count: jest.fn(async () => 3),
     },
+    aIModelCapability: {
+      // Чек-лист спрашивает то же, что роутер: активные модели + может
+      // ли модель в медиа. Именно разрыв «AIProvider есть, моделей под
+      // роутер нет» и дал «AI-провайдер недоступен» при живых ключах.
+      findMany: jest.fn(async ({ where }: any) => {
+        const media = Array.isArray(where?.OR);
+        return (overrides.models ?? DEFAULT_MODELS)
+          .filter((m) => (media ? m.vision === true : true))
+          .map((m) => ({
+            modelVersionId: `mv-${m.name}`,
+            vision: m.vision ?? false,
+            audio: false,
+            modelVersion: { model: { name: m.name, provider: { name: m.provider, credentialRef: m.credentialRef } } },
+          }));
+      }),
+    },
     aIProvider: {
       count: jest.fn(async () => 4),
-      findUnique: jest.fn(async () => ({ id: 'p1', name: 'assemblyai' })),
+      findUnique: jest.fn(async () => ({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' })),
       // [voice-note-ru]: sandboxVoiceNote берёт ключ по credentialRef провайдера.
       findUniqueOrThrow: jest.fn(async () => ({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' })),
     },
@@ -336,6 +369,73 @@ describe('AdminSandboxService.getStatus', () => {
     expect(dump).not.toContain('SUPERSECRET-VALUE-42');
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: пункт краснеет, когда в базе нет ни одной модели — и отправляет к сиду, а не к ключам', async () => {
+    // Реальный сценарий 2026-09-01: ключи в Vercel заданы все, а квиз
+    // отвечает «AI-провайдер недоступен», потому что строк под роутер в
+    // базе нет. Чек-лист обязан называть именно это.
+    const deps = makeDeps({ models: [] });
+    const svc = makeService(deps);
+
+    const { items } = await svc.getStatus(OPERATOR);
+    const capabilities = items.find((i) => i.key === 'capabilities');
+    expect(capabilities?.ok).toBe(false);
+    expect(capabilities?.detail).toContain('prisma:seed');
+    expect(capabilities?.detail).toContain('ключи тут ни при чём');
+    // Пункт «Сид БД» при этом зелёный — он про AIProvider. Именно
+    // поэтому нужен отдельный пункт: старый чек-лист был весь зелёный.
+    const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
+    expect(byKey['seed'].ok).toBe(true);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: модели есть, но ключа нет ни у одной — пункт красный и называет провайдеров', async () => {
+    const deps = makeDeps({ models: [{ name: 'gpt-4.1', provider: 'openai', credentialRef: 'OPENAI_API_KEY' }] });
+    const svc = makeService(deps);
+
+    const { items } = await svc.getStatus(OPERATOR);
+    const capabilities = items.find((i) => i.key === 'capabilities');
+    expect(capabilities?.ok).toBe(false);
+    expect(capabilities?.detail).toContain('OPENAI_API_KEY');
+    expect(capabilities?.detail).toContain('ключа нет ни у одной');
+  });
+
+  it('[router-simplify] провайдер без credentialRef считается «ключа нет», а не падает', async () => {
+    const deps = makeDeps({ models: [{ name: 'странная', provider: 'noname', credentialRef: null }] });
+    const svc = makeService(deps);
+
+    const { items } = await svc.getStatus(OPERATOR);
+    const capabilities = items.find((i) => i.key === 'capabilities');
+    expect(capabilities?.ok).toBe(false);
+    expect(capabilities?.detail).toContain('credentialRef не задан');
+  });
+
+  it('[router-simplify] медиа-модель запрашивается тем же фильтром vision/audio, что применяет роутер', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    await svc.getStatus(OPERATOR);
+
+    // Чек-лист берёт ВСЕ активные модели одним запросом и сам смотрит
+    // на vision/audio — как это делает роутер для медиа-запроса.
+    const calls = (deps.prisma.aIModelCapability.findMany as jest.Mock).mock.calls.map((c) => c[0]);
+    expect(calls.length).toBe(1);
+    expect(calls[0].where.availability).toBe('active');
+  });
+
+  it('пункт зелёный, когда есть хотя бы одна модель с ключом, и называет, кого возьмёт подбор', async () => {
+    const deps = makeDeps();
+    const svc = makeService(deps);
+
+    const { items } = await svc.getStatus(OPERATOR);
+    const capabilities = items.find((i) => i.key === 'capabilities');
+    expect(capabilities?.ok).toBe(true);
+    // Кто именно выигрывает — видно в зелёном состоянии: иначе снятый с
+    // производства слаг модели выигрывает подбор незаметно.
+    expect(capabilities?.detail).toContain('assemblyai/модель-с-ключом');
+    // Медиа-модель без ключа — это не красный пункт целиком, но об этом
+    // сказано: иначе «медиа не работает» ищут в другом месте.
+    expect(capabilities?.detail).toContain('GEMINI_API_KEY');
+  });
+
   it('отражает и заданные, и незаданные ключи', async () => {
     const deps = makeDeps();
     const svc = makeService(deps);
@@ -364,7 +464,11 @@ describe('AdminSandboxService.grantOwnConsents', () => {
 
     const res = await svc.grantOwnConsents(OPERATOR);
 
-    expect(res.granted.sort()).toEqual(['EPHEMERAL_SERVER', 'EXTERNAL_AI', 'HEALTH_DATA', 'THIRD_PARTY_AUDIO_RECORDING']);
+    // VOICE_PROCESSING добавлен повторным аудитом 2026-09-01: без него
+    // озвучка в песочнице отвечала 403 при живом ключе ElevenLabs.
+    expect(res.granted.sort()).toEqual([
+      'EPHEMERAL_SERVER', 'EXTERNAL_AI', 'HEALTH_DATA', 'THIRD_PARTY_AUDIO_RECORDING', 'VOICE_PROCESSING',
+    ]);
     expect(res.alreadyHad).toEqual(['RECORDING']);
     for (const call of (deps.consent.grant as jest.Mock).mock.calls) {
       expect(call[0].source).toBe('admin-sandbox');

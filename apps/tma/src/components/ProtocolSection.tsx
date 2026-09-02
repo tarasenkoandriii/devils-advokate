@@ -8,7 +8,7 @@
 // трогаем уже рабочий ShareButton.tsx, тот жёстко привязан к
 // question+arguments, здесь готовый текст протокола).
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { generateProtocol, listProtocols, safeSharePreflight, safeShareConfirm } from '../lib/features';
 import { haptic, shareViaTelegram } from '../lib/telegram';
 import { Protocol } from '../lib/types';
@@ -32,16 +32,15 @@ export function ProtocolSection({ projectId }: ProtocolSectionProps) {
   const [safeShareActionId, setSafeShareActionId] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
 
-  function reload() {
+  const reload = useCallback(() => {
     return listProtocols(projectId)
       .then(setProtocols)
       .catch(() => setProtocols([]));
-  }
+  }, [projectId]);
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+    void reload().finally(() => setLoading(false));
+  }, [reload]);
 
   async function handleGenerate() {
     setGenerating(true);

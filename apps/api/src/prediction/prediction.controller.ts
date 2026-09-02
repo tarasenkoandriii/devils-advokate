@@ -5,11 +5,11 @@ import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { PredictionService } from './prediction.service';
 
 class CreatePredictionDto {
-  predictedOutcome: string;
+  predictedOutcome!: string;
 }
 
 class RecordActualOutcomeDto {
-  actualOutcome: string;
+  actualOutcome!: string;
 }
 
 @Controller()

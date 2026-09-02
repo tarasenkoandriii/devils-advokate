@@ -110,8 +110,7 @@ function run() {
   });
 
   test('РЕГРЕСІЯ: connectLiveTranscription().stop() надсилає {"type":"Terminate"} ПЕРЕД закриттям сокету, не закриває його напряму (документація прямо вимагає — інакше AssemblyAI тарифікує сесію до 3-годинного стелі)', () => {
-    let capturedUrl: string | undefined;
-    let sentMessages: string[] = [];
+    const sentMessages: string[] = [];
     let closeCalled = false;
     class FakeWebSocket {
       static OPEN = 1;
@@ -119,7 +118,7 @@ function run() {
       readyState = 1; // OPEN — сессия уже установлена на момент вызова stop()
       onmessage: ((e: any) => void) | null = null;
       onerror: (() => void) | null = null;
-      constructor(url: string) { capturedUrl = url; }
+      constructor(_url: string) {} // URL этот тест не проверяет — проверяет Terminate
       send(data: string) { sentMessages.push(data); }
       close() { closeCalled = true; }
     }
@@ -159,6 +158,9 @@ function run() {
       onmessage: ((e: any) => void) | null = null;
       onerror: (() => void) | null = null;
       onclose: ((e: any) => void) | null = null;
+      // Тестовый дубль: экземпляр создаёт тестируемый код, и добраться
+      // до него можно только так — это не aliasing ради удобства.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
       constructor(_url: string) { lastInstance = this; }
       send() {}
       close() {}
@@ -190,6 +192,9 @@ function run() {
       onmessage: ((e: any) => void) | null = null;
       onerror: (() => void) | null = null;
       onclose: ((e: any) => void) | null = null;
+      // Тестовый дубль: экземпляр создаёт тестируемый код, и добраться
+      // до него можно только так — это не aliasing ради удобства.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
       constructor(_url: string) { lastInstance = this; }
       send() {}
       close() {}

@@ -20,6 +20,7 @@ import { FamilyLawWorkspace } from '../../../../components/domains/family-law/Fa
 import { HealthWorkspace } from '../../../../components/domains/health/HealthWorkspace';
 import { MajorPurchaseWorkspace } from '../../../../components/domains/major-purchase/MajorPurchaseWorkspace';
 import { InvestmentWorkspace } from '../../../../components/domains/investment/InvestmentWorkspace';
+import { JobSearchWorkspace } from '../../../../components/domains/job-search/JobSearchWorkspace';
 import { InterviewPoolOverview } from '../../../../components/domains/interview-pool/InterviewPoolOverview';
 import { LiveHintsSession } from '../../../../components/LiveHintsSession';
 
@@ -66,6 +67,7 @@ export default function DomainProjectPage() {
     : manifest.id === 'health' ? <HealthWorkspace config={config as any} manifest={manifest} />
     : manifest.id === 'major-purchase' ? <MajorPurchaseWorkspace config={config as any} manifest={manifest} />
     : manifest.id === 'investment' ? <InvestmentWorkspace config={config as any} manifest={manifest} projectId={params.projectId} />
+    : manifest.id === 'job-search' ? <JobSearchWorkspace config={config as any} manifest={manifest} projectId={params.projectId} onConfigUpdated={setConfig} />
     : null;
   if (domainWorkspace) {
     return (

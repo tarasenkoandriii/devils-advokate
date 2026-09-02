@@ -58,7 +58,12 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
 
   useEffect(() => {
     const messages = activeSession?.messages ?? [];
-    if (messages.length === 0 || !activeSession) return;
+    // Проверка `!activeSession` убрана как избыточная (аудит 2026-09-01):
+    // непустой messages уже означает, что сессия есть. Ссылка на
+    // activeSession целиком заставляла exhaustive-deps требовать его в
+    // зависимостях — ровно то, что раньше подавлялось директивой.
+    // Повтор озвучки по-прежнему отсекает lastPlayedMessageIdRef.
+    if (messages.length === 0) return;
     const last = messages[messages.length - 1];
     if (last.role !== 'ASSISTANT') return;
     if (last.id === lastPlayedMessageIdRef.current) return;
@@ -218,7 +223,7 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
         setVoiceStatus('idle');
       }
     }
-    check();
+    void check();
   }
 
   if (!expanded) {

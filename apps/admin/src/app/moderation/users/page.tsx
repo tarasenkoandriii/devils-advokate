@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, Fragment } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { listUsers, restrictUser, blockUser, getUserDetail } from '../../../lib/endpoints';
 import type { AdminUserRow, AdminUserDetail } from '../../../lib/types';
 
@@ -8,6 +8,12 @@ export default function UsersPage() {
   const [users, setUsers] = useState<AdminUserRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  // Применённый запрос — объект, а не строка: «Обновить» должна
+  // перезагружать список и когда текст не менялся, а новый объект даёт
+  // новую идентичность load и один-единственный запрос через эффект.
+  // Прямой вызов load() из кнопки давал бы два запроса (старое
+  // замыкание + эффект) и гонку, в которой старый ответ затирал новый.
+  const [applied, setApplied] = useState({ search: '' });
   const [restrictedOnly, setRestrictedOnly] = useState(false);
   const [blockedOnly, setBlockedOnly] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
@@ -32,18 +38,29 @@ export default function UsersPage() {
     }
   }
 
-  async function load() {
+  // Аудит 2026-09-01: поле поиска и ПРИМЕНЁННЫЙ запрос разделены.
+  // Подавленный exhaustive-deps скрывал две вещи: чекбоксы фильтров
+  // меняли состояние, но список не перезагружали (фильтр выглядел
+  // нерабочим), а после перевода на useCallback замыкание на search
+  // означало бы запрос на каждое нажатие клавиши. Теперь фильтры
+  // перезагружают список сразу, а строка поиска — по Enter/«Обновить».
+  const load = useCallback(async () => {
     try {
-      setUsers(await listUsers(search || undefined, restrictedOnly ? true : undefined, blockedOnly ? true : undefined));
+      setUsers(
+        await listUsers(
+          applied.search || undefined,
+          restrictedOnly ? true : undefined,
+          blockedOnly ? true : undefined,
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить пользователей');
     }
-  }
+  }, [applied, restrictedOnly, blockedOnly]);
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void load();
+  }, [load]);
 
   async function toggleRestrict(user: AdminUserRow) {
     const note = noteDrafts[user.id];
@@ -85,7 +102,7 @@ export default function UsersPage() {
           placeholder="Поиск по Telegram ID"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && load()}
+          onKeyDown={(e) => e.key === 'Enter' && setApplied({ search })}
         />
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
           <input type="checkbox" checked={restrictedOnly} onChange={(e) => setRestrictedOnly(e.target.checked)} />
@@ -95,7 +112,7 @@ export default function UsersPage() {
           <input type="checkbox" checked={blockedOnly} onChange={(e) => setBlockedOnly(e.target.checked)} />
           Только заблокированные
         </label>
-        <button className="btn" onClick={load}>
+        <button className="btn" onClick={() => setApplied({ search })}>
           Обновить
         </button>
       </div>

@@ -60,7 +60,7 @@ export class PrecedentSearchService {
   ) {}
 
   async findPrecedents(userId: string, personId: string, situationDescription: string, engineId?: string) {
-    const person = await this.assertOwnedPerson(userId, personId);
+    await this.assertOwnedPerson(userId, personId);
     if (!situationDescription.trim()) {
       throw new BadRequestException('situationDescription не может быть пустым — нужно знать, для какой ситуации искать прецедент');
     }

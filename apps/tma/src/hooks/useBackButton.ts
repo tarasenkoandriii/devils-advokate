@@ -25,7 +25,7 @@ export function useBackButton(onBack: () => void): { isTelegramAvailable: boolea
       webApp.BackButton.offClick(handler);
       webApp.BackButton.hide();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   return { isTelegramAvailable };
