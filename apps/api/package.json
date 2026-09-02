@@ -16,7 +16,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
-    "prisma:seed": "prisma db seed",
+    "prisma:seed": "prisma generate && prisma db seed",
     "prisma:seed:dev": "ts-node prisma/seed-dev.ts",
     "prisma:push": "prisma db push",
     "test": "npm run test:jest && npm run test:standalone",
