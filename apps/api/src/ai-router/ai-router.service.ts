@@ -429,11 +429,33 @@ export class AIRouterService {
   private async resolveResponseLanguage(request: AIRouterRequest): Promise<string> {
     const explicit = normalizeLanguageCode(request.responseLanguage);
     if (explicit) return explicit;
-    const user = await this.prisma.user.findUnique({
-      where: { id: request.userId },
-      select: { languageCode: true },
-    });
-    return normalizeLanguageCode(user?.languageCode) ?? DEFAULT_AI_RESPONSE_LANGUAGE;
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: request.userId },
+        select: { languageCode: true },
+      });
+      return normalizeLanguageCode(user?.languageCode) ?? DEFAULT_AI_RESPONSE_LANGUAGE;
+    } catch (error) {
+      // Найдено живым прогоном 2026-09-02: код с колонкой languageCode
+      // выкатился раньше, чем к базе применили ai_locale_2026_09_02.sql,
+      // и КАЖДЫЙ AI-вызов падал на «The column users.languageCode does
+      // not exist» — пользователь видел «AI-фоллбек не удался», то есть
+      // отставание миграции выглядело как сбой AI.
+      //
+      // Язык ответа — улучшение, а не условие работы: не знаем языка —
+      // отвечаем на дефолтном. Ровно тот же принцип, что и в остальных
+      // правках этой серии: пробел в конфигурации не должен выглядеть
+      // как отказ фичи. Предупреждение в лог — чтобы отставание базы
+      // всё-таки было видно тому, кто её и чинит.
+      this.logger.warn(
+        `Не удалось прочитать язык пользователя (${
+          error instanceof Error ? error.message : String(error)
+        }). Отвечаем на языке по умолчанию (${DEFAULT_AI_RESPONSE_LANGUAGE}). ` +
+          'Если в сообщении упомянута колонка users.languageCode — примените ' +
+          'prisma/manual-migrations/ai_locale_2026_09_02.sql по DIRECT_URL.',
+      );
+      return DEFAULT_AI_RESPONSE_LANGUAGE;
+    }
   }
 
   /**

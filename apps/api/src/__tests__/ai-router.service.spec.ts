@@ -352,6 +352,53 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     expect(system).toContain('русский');
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ [ai-locale]: база без колонки languageCode не убивает AI-вызов', async () => {
+    // РЕГРЕССИЯ 2026-09-02, найдена владельцем в проде: код с колонкой
+    // выкатился раньше, чем к базе применили ai_locale_2026_09_02.sql.
+    // Каждый AI-вызов падал на «The column users.languageCode does not
+    // exist», и пользователь видел «AI-фоллбек не удался» — то есть
+    // отставание миграции выглядело как сбой AI. Язык ответа —
+    // улучшение, а не условие работы: не прочитали — отвечаем на
+    // дефолтном, вызов идёт.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    prisma.user.findUnique = async () => {
+      throw new Error(
+        'Invalid `prisma.user.findUnique()` invocation: The column `users.languageCode` does not exist in the current database.',
+      );
+    };
+
+    let sentBody: any;
+    (global as any).fetch = async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return {
+        ok: true, status: 200, statusText: 'OK',
+        json: async () => openaiSuccessBody,
+        text: async () => JSON.stringify(openaiSuccessBody),
+      };
+    };
+
+    const router = buildRouter(prisma);
+    const result = await router.execute({
+      userId: USER_ID,
+      taskType: 'argument-generation',
+      systemPrompt: 'Сгенерируй аргументы.',
+      userPrompt: 'x',
+      jsonMode: true,
+    });
+
+    expect(result).toBeDefined();
+    const system = sentBody.messages.find((m: any) => m.role === 'system').content;
+    expect(system).toContain('Сгенерируй аргументы.');
+    expect(system).toContain('русский'); // дефолт, а не отсутствие инструкции
+  });
+
   it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: подбор пропускает модель без ключа и берёт следующую с ключом', async () => {
     // Ровно ситуация владельца: openai настроен первым, но ключа от него
     // в проекте нет — раньше роутер упирался в него и падал на 401.
