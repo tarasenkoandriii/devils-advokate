@@ -246,6 +246,25 @@ export class AnthropicClient implements AIProviderClient {
   }
 }
 
+/**
+ * Провайдеры, для которых в коде ЕСТЬ клиент. Один список на два
+ * применения: сам выбор клиента ниже и проверка кандидата в роутере.
+ *
+ * Заведён после регрессии 2026-09-02: строка AIProvider в базе не
+ * означает, что этому провайдеру есть чем отправить запрос. После
+ * Пункта [router-simplify] подбор перестал фильтровать по taskType, и
+ * оставшаяся с прежних времён активная capability транскрибации
+ * (assemblyai) стала кандидатом на ТЕКСТОВУЮ задачу — обе попытки
+ * падали на «No AIProviderClient registered for provider "assemblyai"».
+ * Отсутствие клиента — не ошибка вызова, а признак «не кандидат», ровно
+ * как отсутствие ключа.
+ */
+export const PROVIDERS_WITH_CLIENT = ['openai', 'xai', 'anthropic', 'google'] as const;
+
+export function isProviderClientRegistered(providerName: string): boolean {
+  return (PROVIDERS_WITH_CLIENT as readonly string[]).includes(providerName);
+}
+
 /** Выбор клиента по имени провайдера (`AIProvider.name` из схемы). */
 export function selectProviderClient(providerName: string): AIProviderClient {
   switch (providerName) {

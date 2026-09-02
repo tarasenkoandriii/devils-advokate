@@ -57,6 +57,8 @@ async function upsertProvider(data: {
  * прошлым прогоном как снятую, повторный сид вернёт в active, если она
  * снова в списке.
  */
+const upsertedCapabilityIds: string[] = [];
+
 async function upsertCapability(
   modelVersionId: string,
   data: { vision?: boolean; audio?: boolean; latencyClass?: string; costClass?: string },
@@ -68,11 +70,15 @@ async function upsertCapability(
     costClass: data.costClass ?? null,
     availability: 'active',
   };
-  return prisma.aIModelCapability.upsert({
+  const row = await prisma.aIModelCapability.upsert({
     where: { modelVersionId },
     update,
     create: { modelVersionId, ...update },
   });
+  // Список того, что сид реально ведёт, — по нему ниже гасится всё
+  // лишнее (снятые модели и провайдеры без клиента).
+  upsertedCapabilityIds.push(row.id);
+  return row;
 }
 
 async function main() {
@@ -198,7 +204,11 @@ async function main() {
     update: {},
     create: { providerId: assemblyai.id, name: 'best' },
   });
-  const assemblyaiVersion = await prisma.aIModelVersion.upsert({
+  // Версия нужна сама по себе: на неё ссылается AIJob расшифровок
+  // (conversations.service резолвит её по провайдеру). Переменная не
+  // используется дальше намеренно — capability для AssemblyAI сид не
+  // заводит, см. комментарий ниже.
+  await prisma.aIModelVersion.upsert({
     where: { modelId_version: { modelId: assemblyaiModel.id, version: 'best' } },
     update: {},
     create: { modelId: assemblyaiModel.id, version: 'best' },
@@ -286,48 +296,49 @@ async function main() {
     await upsertCapability(modelVersionId, { latencyClass: 'medium', costClass: 'medium' });
   }
 
-  // ── Деактивация capability моделей, которых в сиде больше нет ──
+  // ── Деактивация capability, которых сид в этом прогоне НЕ завёл ──
   //
-  // Повторный аудит 2026-09-01. Все upsert выше идут с `update: {}`, а
-  // aIModel ключуется по (providerId, name): смена слага модели создаёт
-  // НОВУЮ строку, старая остаётся. Capability заводятся только для
-  // новых версий, старые остаются `active` и с БОЛЕЕ РАННИМ createdAt —
-  // а роутер берёт `orderBy: createdAt asc`, «первая настроенная
-  // выигрывает». То есть снятая с производства модель продолжала бы
-  // выигрывать подбор вечно, молча.
+  // Сид — источник истины по тому, из кого роутер выбирает. Две причины,
+  // по которым строка может остаться лишней, и обе уже случились:
   //
-  // Это не гипотеза: смена grok-4 → grok-4.3 в этом файле уже
-  // произошла (см. комментарий у xaiModel), и на любой базе, засеянной
-  // до неё, маршрут до сих пор идёт на retired-слаг.
+  // 1. Смена слага модели. Все upsert выше идут с `update: {}`, а
+  //    aIModel ключуется по (providerId, name): новое имя создаёт НОВУЮ
+  //    строку, старая остаётся с более ранним createdAt — и выигрывает
+  //    подбор («первая настроенная»). Ровно это произошло при переходе
+  //    grok-4 → grok-4.3.
+  // 2. Провайдер, которому нечем отправить запрос. РЕГРЕССИЯ 2026-09-02:
+  //    после [router-simplify] сид перестал заводить capability для
+  //    assemblyai (транскрибация идёт мимо роутера), но СУЩЕСТВУЮЩУЮ
+  //    строку не гасил — а прежний фильтр по taskType, который её
+  //    отсекал, к тому моменту уже убрали. Роутер выбрал модель «best»
+  //    провайдера assemblyai на текстовую задачу и обе попытки упал на
+  //    «No AIProviderClient registered». Прежнее условие сравнивало
+  //    ВЕРСИИ моделей, а версия assemblyai сидом заводится — строка под
+  //    условие не попадала.
   //
-  // Сид — источник истины по моделям: всё, что он в этом прогоне НЕ
-  // засеял, переводится в `deprecated`. Строки не удаляются (история
-  // AIJob на них ссылается) и не трогаются capability чужих
-  // провайдеров, которых сид не ведёт.
-  const seededVersionIds = [
-    openaiVersion.id,
-    anthropicVersion.id,
-    xaiVersion.id,
-    googleVersion.id,
-    assemblyaiVersion.id,
-  ];
+  // Поэтому сравнение идёт не с «засеянными версиями», а с теми
+  // capability, которые этот прогон реально создал или обновил.
+  // Строки не удаляются (история AIJob на них ссылается) и не трогаются
+  // провайдеры, которых сид не ведёт.
   const seededProviderIds = [openai.id, anthropic.id, xai.id, google.id, assemblyai.id];
   const staleCapabilities = await prisma.aIModelCapability.findMany({
     where: {
       availability: 'active',
-      modelVersionId: { notIn: seededVersionIds },
+      id: { notIn: upsertedCapabilityIds },
       modelVersion: { model: { providerId: { in: seededProviderIds } } },
     },
-    include: { modelVersion: { include: { model: true } } },
+    include: { modelVersion: { include: { model: { include: { provider: true } } } } },
   });
   if (staleCapabilities.length > 0) {
     await prisma.aIModelCapability.updateMany({
       where: { id: { in: staleCapabilities.map((c) => c.id) } },
       data: { availability: 'deprecated' },
     });
-    const models = [...new Set(staleCapabilities.map((c) => c.modelVersion.model.name))];
+    const models = [
+      ...new Set(staleCapabilities.map((c) => `${c.modelVersion.model.provider.name}/${c.modelVersion.model.name}`)),
+    ];
     console.log(
-      `Деактивировано capability снятых моделей: ${staleCapabilities.length} (модели: ${models.join(', ')}). ` +
+      `Деактивировано capability, которых нет в сиде: ${staleCapabilities.length} (${models.join(', ')}). ` +
         'Строки не удалены — на них ссылается история AIJob.',
     );
   }

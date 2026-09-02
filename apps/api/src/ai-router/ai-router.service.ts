@@ -22,6 +22,7 @@ import {
   ContentBlock,
   requiresMedia,
   selectProviderClient,
+  isProviderClientRegistered,
   EXTERNAL_INTERACTION_MAX_WAIT_MS,
   ProviderHttpError,
 } from './ai-provider-client';
@@ -427,7 +428,7 @@ export class AIRouterService {
     preferredId?: string,
     needsMedia = false,
   ): Promise<ModelVersionWithProvider> {
-    const candidates = await this.prisma.aIModelCapability.findMany({
+    const rows = await this.prisma.aIModelCapability.findMany({
       where: {
         availability: 'active',
         ...(needsMedia ? { OR: [{ vision: true }, { audio: true }] } : {}),
@@ -435,6 +436,23 @@ export class AIRouterService {
       include: { modelVersion: { include: { model: { include: { provider: true } } } } },
       orderBy: { createdAt: 'asc' },
     });
+
+    // Регрессия 2026-09-02: активная строка провайдера, которому нечем
+    // отправить запрос (нет клиента в selectProviderClient), проходила в
+    // кандидаты и роняла обе попытки. Так осталась висеть capability
+    // транскрибации после [router-simplify]: раньше её отсекал фильтр по
+    // taskType. Отсутствие клиента — признак «не кандидат», а не сбой.
+    const candidates = rows.filter((c) => isProviderClientRegistered(c.modelVersion.model.provider.name));
+    const withoutClient = rows
+      .filter((c) => !isProviderClientRegistered(c.modelVersion.model.provider.name))
+      .map((c) => c.modelVersion.model.provider.name);
+    if (withoutClient.length > 0) {
+      this.logger.warn(
+        `Пропущены активные модели провайдеров без клиента: ${[...new Set(withoutClient)].join(', ')}. ` +
+          'Это конфигурация БД: деактивируйте их capability (availability != active) или уберите — ' +
+          'запрос им отправить нечем.',
+      );
+    }
 
     if (preferredId) {
       // Явный выбор пользователя (§3.15 ТЗ) уважается, но выбирать он

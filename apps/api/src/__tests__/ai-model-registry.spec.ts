@@ -9,8 +9,8 @@
 //
 // Пункт [router-simplify] убрал само измерение: строка одна на модель,
 // подбор идёт по наличию ключа, новая фича не требует правок в сиде
-// вообще — сверять стало нечего. Осталось три инварианта, каждый из
-// которых закрывает найденный в этот же день дефект.
+// вообще — сверять стало нечего. Остались инварианты сида, каждый из
+// которых закрывает конкретный найденный дефект.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -39,18 +39,33 @@ describe('сид: реестр провайдеров и моделей', () => 
     expect([...s.matchAll(/await upsertCapability\(/g)].length).toBeGreaterThanOrEqual(2);
   });
 
-  // Сид деактивирует capability моделей, которых в нём больше нет —
-  // иначе снятый с производства слаг (grok-4 после grok-4.3) выигрывает
-  // подбор вечно. Обратная сторона: забыли версию в seededVersionIds —
-  // и сид погасит собственные модели на следующем прогоне.
-  it('КЛЮЧЕВОЙ ТЕСТ: все версии моделей, которые сид создаёт, перечислены в seededVersionIds', () => {
+  // Сид деактивирует capability, которых сам не завёл — иначе снятый с
+  // производства слаг (grok-4 после grok-4.3) выигрывает подбор вечно.
+  // Гасятся только строки провайдеров, которых ведёт сам сид: чужие
+  // (заведённые оператором вручную) не трогаются.
+  it('деактивация ограничена провайдерами, которых ведёт сид', () => {
     const s = seed();
-    const created = [...s.matchAll(/const (\w+) = await prisma\.aIModelVersion\.upsert\(/g)].map((m) => m[1]);
-    const guard = s.match(/const seededVersionIds = \[([\s\S]*?)\];/);
+    const guard = s.match(/const seededProviderIds = \[([\s\S]*?)\];/);
     expect(guard).not.toBeNull();
     const listed = [...guard![1].matchAll(/(\w+)\.id/g)].map((m) => m[1]);
+    const created = [...s.matchAll(/const (\w+) = await upsertProvider\(/g)].map((m) => m[1]);
     expect(created.length).toBeGreaterThan(3);
     expect(created.filter((v) => !listed.includes(v))).toEqual([]);
+  });
+
+  // Регрессия 2026-09-02: прежнее условие сравнивало ВЕРСИИ моделей
+  // (`modelVersionId notIn seededVersionIds`), а версия assemblyai сидом
+  // заводится — её оставшаяся с прежних времён capability под условие не
+  // попадала, оставалась active и утаскивала текстовую задачу в
+  // провайдера без клиента. Сравнение должно идти по строкам, которые
+  // сид реально завёл в этом прогоне.
+  it('КЛЮЧЕВОЙ ТЕСТ: лишние capability гасятся по списку заведённых строк, а не по списку версий', () => {
+    const s = seed();
+    expect(s).toContain('upsertedCapabilityIds');
+    // Условие деактивации опирается на id заведённых строк…
+    expect(s).toMatch(/id:\s*\{\s*notIn:\s*upsertedCapabilityIds\s*\}/);
+    // …а не на версии моделей: этот вариант и пропустил assemblyai.
+    expect(s).not.toMatch(/modelVersionId:\s*\{\s*notIn:\s*seededVersionIds\s*\}/);
   });
 
   // Прямая страховка от возврата удалённого измерения: если кто-то

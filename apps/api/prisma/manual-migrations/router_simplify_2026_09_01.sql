@@ -82,6 +82,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS "ai_model_capabilities_modelVersionId_key"
 --    (selectProviderClient по имени провайдера), колонку не читал никто.
 ALTER TABLE ai_providers DROP COLUMN IF EXISTS "authMethod";
 
+-- 5. Гасим capability провайдеров, которым нечем отправить запрос.
+--    РЕГРЕССИЯ 2026-09-02: строка транскрибации (assemblyai, модель
+--    "best") осталась активной с прежних времён, а после снятия фильтра
+--    по taskType стала кандидатом на ТЕКСТОВУЮ задачу — обе попытки
+--    падали на «No AIProviderClient registered for provider
+--    "assemblyai"». Клиенты есть только у openai/xai/anthropic/google;
+--    у провайдеров вне этого списка capability для роутера бессмысленна.
+--    Сид делает то же самое, но эта строка чинит базу сразу, до сида.
+UPDATE ai_model_capabilities SET availability = 'deprecated'
+WHERE availability = 'active'
+  AND "modelVersionId" IN (
+    SELECT mv.id FROM ai_model_versions mv
+    JOIN ai_models m    ON m.id = mv."modelId"
+    JOIN ai_providers p ON p.id = m."providerId"
+    WHERE p.name NOT IN ('openai', 'xai', 'anthropic', 'google')
+  );
+
 COMMIT;
 
 -- 5. После применения: npm run prisma:seed --workspace=apps/api

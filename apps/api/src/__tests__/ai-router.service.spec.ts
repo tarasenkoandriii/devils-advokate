@@ -311,6 +311,47 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     expect(result.text).toContain('claude-arg');
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ (регрессия 2026-09-02): активная модель провайдера БЕЗ КЛИЕНТА пропускается, а не роняет обе попытки', async () => {
+    // Что было в проде: после снятия фильтра по taskType оставшаяся с
+    // прежних времён активная capability транскрибации (assemblyai,
+    // модель «best») стала кандидатом на ТЕКСТОВУЮ задачу. Обе попытки
+    // падали на «No AIProviderClient registered for provider
+    // "assemblyai"», пользователь видел «exhausted all attempts».
+    // Отсутствие клиента — признак «не кандидат», как и отсутствие ключа.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-assemblyai',
+      version: 'best',
+      model: { name: 'best', provider: { name: 'assemblyai', apiEndpoint: 'https://api.assemblyai.com/v2', credentialRef: 'ASSEMBLYAI_API_KEY' } },
+    });
+    prisma._seedModelVersion({
+      id: 'mv-anthropic',
+      version: 'claude-sonnet-5',
+      model: { name: 'claude-sonnet-5', provider: { name: 'anthropic', apiEndpoint: 'https://api.anthropic.com', credentialRef: 'ANTHROPIC_API_KEY' } },
+    });
+    // Транскрибация засеяна ПЕРВОЙ — то есть выигрывала бы подбор.
+    prisma._seedCapability({ modelVersionId: 'mv-assemblyai', availability: 'active' });
+    prisma._seedCapability({ modelVersionId: 'mv-anthropic', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    let calledEndpoint: string | undefined;
+    (global as any).fetch = async (url: string) => {
+      calledEndpoint = url;
+      return {
+        ok: true, status: 200, statusText: 'OK',
+        json: async () => anthropicSuccessBody,
+        text: async () => JSON.stringify(anthropicSuccessBody),
+      };
+    };
+
+    const router = buildRouter(prisma, { ASSEMBLYAI_API_KEY: 'k', ANTHROPIC_API_KEY: 'k' });
+    const result = await router.execute({ userId: USER_ID, taskType: 'fact-check-ai-fallback', userPrompt: 'test', jsonMode: true });
+
+    // Ушли к anthropic, а не в транскрибацию.
+    expect(calledEndpoint).toContain('anthropic');
+    expect(result.text).toContain('claude-arg');
+  });
+
   it('КЛЮЧЕВОЙ ТЕСТ [router-simplify]: если ключа нет ни у одной модели — отказ, а не вызов наугад', async () => {
     const prisma = createFakePrisma();
     prisma._seedModelVersion({
