@@ -56,10 +56,10 @@ export const en: Dictionary = {
     liveStatus: 'LIVE',
     mode: 'MODE: COURT HEARING',
     speaker: 'Witness: Anna Petrova',
-    alertTitle: 'HIGH LIKELIHOOD OF INACCURACY',
+    alertTitle: 'CONTRADICTS THE RECORD',
     alertDetail: 'Contradiction with prior statements and documents',
-    riskLow: 'Low risk',
-    riskHigh: 'High risk',
+    riskLow: 'No discrepancies found',
+    riskHigh: 'Worth clarifying',
     whyFlaggedTitle: "Why it's flagged",
     whyFlaggedReasons: [
       'Earlier statement contradicts current testimony',
@@ -82,8 +82,8 @@ export const en: Dictionary = {
   },
   bottomFeatures: [
     {
-      title: 'Real-time speech analysis',
-      description: 'Intonation, pauses, uncertainty, emotional markers.',
+      title: 'Speech observations',
+      description: 'Pauses, pace, volume — as observations, with no conclusions about the person.',
     },
     {
       title: 'Contradiction detection',
@@ -197,9 +197,9 @@ export const en: Dictionary = {
       {
         title: 'Privacy & Security',
         items: [
-          { icon: 'wifi', text: 'Works offline', description: 'Your data stays with you' },
+          { icon: 'wifi', text: 'Your data, your project', description: 'Visible to you and to whoever you hand it to yourself' },
           { icon: 'lock', text: 'Strong encryption', description: 'Industry-standard protection' },
-          { icon: 'servers', text: 'Local storage', description: 'No data in the cloud' },
+          { icon: 'servers', text: 'Outbound only with consent', description: 'Data reaches external AI services only after your explicit consent' },
           { icon: 'people', text: 'No tracking', description: 'No analytics, no profiling' },
           {
             icon: 'integrations',
@@ -393,18 +393,18 @@ export const en: Dictionary = {
         items: [
           {
             id: 'control_offline',
-            text: 'Works Offline',
-            description: 'Core processing can run locally on the device.',
+            text: 'Your data, your project',
+            description: 'The analysis lives in your project: you see it, and so do the people you grant access to.',
           },
           {
             id: 'control_encryption',
-            text: 'End-to-End Encryption',
-            description: 'Encrypted protection for audio, text, and attachments.',
+            text: 'Encrypted transport and storage',
+            description: 'Traffic goes over HTTPS, files sit in private storage with no public links. There is no end-to-end encryption: the server works with the text in order to analyse it.',
           },
           {
             id: 'control_storage',
-            text: 'Storage Choice',
-            description: 'Choose local or cloud storage under your control.',
+            text: 'You decide what is kept',
+            description: 'Project privacy mode, deleting conversations and deleting the account are all in your hands.',
           },
           {
             id: 'control_share',
@@ -483,8 +483,8 @@ export const en: Dictionary = {
       "This is the part most tools treat as legal boilerplate. We treat it as the reason people trust us with conversations they can't afford to get wrong.",
     points: [
       {
-        title: 'Raw recordings never touch our servers',
-        description: 'They stay on your device. Always.',
+        title: 'We do not keep your audio',
+        description: 'The file lives in private storage only for the duration of transcription and is deleted right after — on an event, not on a timer. No public link to it ever exists.',
       },
       {
         title: 'Safe Share shows you the preview first',
@@ -527,7 +527,7 @@ export const en: Dictionary = {
     items: [
       {
         q: 'Who can see my conversations?',
-        a: 'Only you. Raw recordings stay on your device — see the Privacy section above for the specifics.',
+        a: 'Only you. We do not keep your audio: the file exists only for the duration of transcription and is deleted right after — see the Privacy section above for the specifics.',
       },
       {
         q: 'Is it legal to record a conversation?',

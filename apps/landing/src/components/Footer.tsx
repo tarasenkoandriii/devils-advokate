@@ -1,6 +1,7 @@
 import { Dictionary } from '../lib/i18n/dictionary';
 import { Locale } from '../lib/i18n/config';
 import { LanguageSwitcher } from './LanguageSwitcher';
+import { getJobsDictionary } from '../lib/i18n/jobs';
 
 // §3.9 ТЗ: юридические реквизиты (ФОП/ЄДРПОУ — паттерн из других
 // проектов), ссылки на Privacy Policy/ToS, переключатель языка,
@@ -28,8 +29,19 @@ export function Footer({ dict, lang }: { dict: Dictionary; lang: Locale }) {
               текста; ссылка на него убрана, потому что битая ссылка на
               юридический документ хуже её отсутствия. Когда текст
               появится, вернуть строку вместе со страницей, а не раньше
-              (см. отчёт аудита, раздел «Лендинг»). */}
-          <a href="#privacy-policy">{dict.footer.privacyPolicy}</a>
+              (см. отчёт аудита, раздел «Лендинг»).
+
+              АУДИТ 2026-09-02: голый якорь работал только на главной —
+              секция политики рендерится там. С /{'{lang}'}/jobs, где футер
+              тот же, клик был no-op: ссылка на юридический документ,
+              ведущая в никуда. Теперь якорь абсолютный по локали. */}
+          <a href={`/${lang}#privacy-policy`}>{dict.footer.privacyPolicy}</a>
+          {/* АУДИТ 2026-09-02: /{'{lang}'}/jobs была страницей-сиротой —
+              ни одной внутренней ссылки во всём лендинге, только запись
+              в sitemap. Футер общий у обеих страниц, поэтому ссылка
+              здесь связывает их в обе стороны. Текст берётся из
+              словаря /jobs — он самодостаточен по решению ТЗ §3. */}
+          <a href={`/${lang}/jobs`}>{getJobsDictionary(lang).navLabel}</a>
           {contactHandle && (
             <a href={`https://t.me/${contactHandle}`} target="_blank" rel="noopener noreferrer">
               {dict.footer.contact}

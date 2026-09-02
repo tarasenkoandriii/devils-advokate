@@ -32,6 +32,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { ArgumentStance, CompromiseSheetAudioSource, CompromiseSheetPhase } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'compromise-sheet';
 
@@ -126,7 +127,7 @@ export class CompromiseSheetService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }

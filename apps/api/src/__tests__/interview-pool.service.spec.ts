@@ -19,7 +19,10 @@ function createFakePrisma() {
 
   const client: any = {
     _seedProject(p: any) {
-      const project = { id: nextId(), ...p };
+      // Пункт [interview-pool-mode] 2026-09-02: доступ теперь проверяет
+      // и режим проекта (как в job-search) — фейку нужен режим по
+      // умолчанию, иначе тесты домена проверяли бы чужой сценарий.
+      const project = { id: nextId(), mode: 'INTERVIEW_POOL', ...p };
       projects.set(project.id, project);
       return project;
     },

@@ -13,7 +13,10 @@ function createFakePrisma() {
 
   const client: any = {
     _seedProject(p: any) {
-      const project = { id: nextId(), ...p };
+      // Пункт [interview-pool-mode] 2026-09-02: доступ теперь проверяет
+      // и режим проекта (как в job-search) — фейку нужен режим по
+      // умолчанию, иначе тесты домена проверяли бы чужой сценарий.
+      const project = { id: nextId(), mode: 'INTERVIEW_POOL', ...p };
       projects.set(project.id, project);
       return project;
     },
@@ -42,6 +45,28 @@ function createFakePrisma() {
         const conv = { id: nextId(), ...data };
         conversations.set(conv.id, conv);
         return conv;
+      },
+      // Пункт [onboarding-continuity] 2026-09-02: хелпер сначала ищет
+      // уже существующий онбординг-разговор проекта — фейку нужен
+      // findFirst, иначе повторный вызов снова плодил бы разговоры.
+      findFirst: async ({ where, include }: any) => {
+        const found = [...conversations.values()]
+          .filter((c: any) => c.projectId === where.projectId && c.sourceType === where.sourceType)
+          // Ревью 2026-09-02: хелпер отсекает чужие TEXT_IMPORT-разговоры
+          // (импорт переписки) по участнику SELF и наличию транскрипта —
+          // фейк обязан считать так же, иначе тест «не подхватываем чужой
+          // разговор» проходил бы сам собой.
+          .filter((c: any) => !where.participants || [...participants.values()].some(
+            (p: any) => p.conversationId === c.id && p.isSelf && p.diarizationLabel === 'SELF',
+          ))
+          .filter((c: any) => !where.transcript || transcripts.get(c.id) != null)[0];
+        if (!found) return null;
+        if (!include) return found;
+        return {
+          ...found,
+          transcript: transcripts.get(found.id) ?? null,
+          participants: [...participants.values()].filter((p: any) => p.conversationId === found.id && p.isSelf),
+        };
       },
       findUnique: async ({ where, include }: any) => {
         const conv = conversations.get(where.id);

@@ -10,6 +10,7 @@ import { DomainManifest } from '../../lib/domains/types';
 import { EntityForm } from './EntityForm';
 import { VoiceTextInput } from './VoiceTextInput';
 import { haptic } from '../../lib/telegram';
+import { AiErrorNotice } from './AiErrorNotice';
 
 interface Props {
   manifest: DomainManifest;
@@ -26,7 +27,9 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
   const [checklist, setChecklist] = useState<any>(null);
   const [draft, setDraft] = useState<string>('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Пункт [ai-errors-ui] 2026-09-02: см. JobSearchWorkspace — 403 без
+  // согласия должен открывать согласие, а не показывать служебный текст.
+  const [error, setError] = useState<unknown>(null);
   const [extracted, setExtracted] = useState<Record<string, any> | null>(null);
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [category, setCategory] = useState<'REAL_ESTATE' | 'VEHICLE'>('REAL_ESTATE');
@@ -48,7 +51,7 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
           if (!cancelled) setChecklist(cl);
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Не удалось открыть онбординг');
+        if (!cancelled) setError(err);
       }
     }
     void load();
@@ -84,7 +87,7 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
       haptic('light');
       if (manifest.routes.checklist) setChecklist(await domainApi.checklist(manifest, conversationId, manifest.id === 'major-purchase' ? { category } : undefined).catch(() => checklist));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось сохранить ответ');
+      setError(err);
     } finally { setBusy(false); }
   }
 
@@ -100,7 +103,7 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
       haptic('success');
     } catch (err) {
       haptic('error');
-      setError(err instanceof Error ? err.message : 'AI не смог извлечь конфиг — добавьте ответов и попробуйте снова');
+      setError(err);
     } finally { setBusy(false); }
   }
 
@@ -114,7 +117,7 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
   return (
     <section className="domain-onboarding">
       <h2>Онбординг · {manifest.title}</h2>
-      {error && <p className="generation-error">{error}</p>}
+      <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
 
       {manifest.id === 'major-purchase' && (
         <label className="entity-form__field"><span>Что покупаете (для чек-листа вопросов)</span>

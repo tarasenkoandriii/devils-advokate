@@ -6,7 +6,7 @@
 // висновок про винуватця ДТП (§1/§3.2 ТЗ, той самий принцип "радник,
 // не суддя", що в чотирьох попередніх модулях).
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MoneyLike, sumMoney } from '../common/money';
@@ -18,6 +18,7 @@ import { ConsentType, DtpEvidenceMediaType, DtpCriterionCategory } from '@prisma
 import { assertOwnedDtpProject } from './dtp-access';
 import { ExtractedDtpConfigDraft } from './dtp-onboarding.service';
 import { resolveBlobToken } from '../common/blob-token';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const BREAKDOWN_TASK_TYPE = 'dtp-consultation-breakdown';
 // 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
@@ -206,7 +207,7 @@ export class DtpService {
         validateOutput: isValidBreakdown,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация разбора отклонена проверкой безопасности содержимого.');
       }

@@ -5,12 +5,13 @@
 // а живий судовий процес (Nippon Life v. OpenAI, §2.1 ТЗ). НІКОЛИ
 // жодного скорингу/сортування/UPL-формулювання, БЕЗ ЖОДНОГО ВИНЯТКУ.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { FamilyLawCriterionCategory } from '@prisma/client';
 import { assertOwnedFamilyLawProject } from './family-law-access';
 import { ExtractedFamilyLawConfigDraft } from './family-law-onboarding.service';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const BREAKDOWN_TASK_TYPE = 'family-law-consultation-breakdown';
 
@@ -210,7 +211,7 @@ export class FamilyLawService {
         validateOutput: isValidBreakdown,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация разбора отклонена проверкой безопасности содержимого.');
       }

@@ -16,7 +16,10 @@ function createFakePrisma() {
 
   return {
     _seedProject(p: any) {
-      const project = { id: nextId(), ...p };
+      // Пункт [interview-pool-mode] 2026-09-02: доступ теперь проверяет
+      // и режим проекта (как в job-search) — фейку нужен режим по
+      // умолчанию, иначе тесты домена проверяли бы чужой сценарий.
+      const project = { id: nextId(), mode: 'INTERVIEW_POOL', ...p };
       projects.set(project.id, project);
       return project;
     },
@@ -119,6 +122,10 @@ function createFakePrisma() {
       },
     },
     candidateFollowUpRequest: {
+      // Пункт 2026-09-02: пересчёт теперь сверяется с уже созданными
+      // запросами — без этого он плодил дубли при каждом прогоне.
+      findMany: async ({ where }: any) =>
+        followUpRequests.filter((r: any) => r.statusId === where.statusId),
       createMany: async ({ data }: any) => {
         data.forEach((d: any) => followUpRequests.push({ id: nextId(), fulfilled: false, ...d }));
       },
@@ -176,6 +183,39 @@ describe('InterviewPoolRelevanceService', () => {
     expect(capturedSystemPrompt.toLowerCase()).toContain('стать');
     expect(capturedSystemPrompt.toLowerCase()).toContain('вік');
     expect(capturedSystemPrompt.toLowerCase()).toContain('рас');
+  });
+
+  it('КЛЮЧОВИЙ ТЕСТ 2026-09-02: повторний перерахунок НЕ дублює домашні завдання', async () => {
+    // §4.3 ТЗ: знімок формується після КОЖНОЇ завершеної співбесіди і
+    // прогоняє ВСІХ кандидатів пулу. Без дедуплікації другий прогін
+    // створював другі копії тих самих запитів, третій — треті: список
+    // «домашніх завдань» кандидата ріс лінійно від числа перерахунків,
+    // а закриті завдання «воскресали» поруч із дублями.
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id, jobTitle: 'Backend Engineer' });
+    prisma._seedQuestion({ configId: config.id, text: 'Q1', isRequired: true, orderIndex: 0 });
+    const candidate = prisma._seedCandidate({ ownerUserId: 'u1', displayName: 'Кандидат' });
+    const status = prisma._seedStatus({ projectId: project.id, candidateProfileId: candidate.id, stage: 'SCHEDULED' });
+    prisma._seedStageProgress({ statusId: status.id, conversationId: 'conv-1', completedAt: new Date() });
+    prisma._seedSegment({ id: 'seg-1', conversationId: 'conv-1', text: 'Відповідь кандидата' });
+
+    const aiRouter = {
+      execute: async () => ({
+        text: JSON.stringify({
+          criteriaBreakdown: [],
+          attentionPoints: [],
+          followUpRequests: ['Надати приклад конфігурації Kubernetes'],
+        }),
+      }),
+    };
+    const service = makeService(prisma, aiRouter);
+
+    await service.regenerate('u1', project.id);
+    await service.regenerate('u1', project.id);
+    await service.regenerate('u1', project.id);
+
+    expect(prisma._getFollowUpRequests().length).toBe(1);
   });
 
   it('acceptance-тест §7 ТЗ: followUpRequests непорожній → CandidatePipelineStatus.stage автоматично AWAITING_FOLLOWUP, ЖОДНЕ інше значення system не встановлює сам', async () => {

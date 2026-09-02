@@ -34,6 +34,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { MotiveConfidenceLevel } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'motive-analysis';
 const DAILY_LIMIT_PER_USER = 10; // "суммарно по разным людям" — общий счётчик, не по одному человеку
@@ -155,7 +156,7 @@ export class MotiveAnalysisService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }

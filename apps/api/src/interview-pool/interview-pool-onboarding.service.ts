@@ -10,12 +10,10 @@
 // Conversation.projectId обов'язковий, §5 ТЗ помилково проєктував
 // projectId як опційний параметр.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import {
-  ConversationProcessingStatus,
-  ConversationSourceType,
   ProjectMode,
   EmploymentLoad,
   WorkArrangement,
@@ -23,6 +21,8 @@ import {
   AgeRequirement,
 } from '@prisma/client';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { ensureOnboardingConversation } from '../common/onboarding-conversation';
 
 const TASK_TYPE = 'interview-pool-onboarding-extract';
 
@@ -147,21 +147,10 @@ export class InterviewPoolOnboardingService {
   async createOnboardingConversation(userId: string, projectId: string) {
     await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
 
-    return this.prisma.$transaction(async (tx) => {
-      const conversation = await tx.conversation.create({
-        data: {
-          projectId,
-          sourceType: ConversationSourceType.TEXT_IMPORT,
-          status: ConversationProcessingStatus.TRANSCRIBED,
-          occurredAt: new Date(),
-        },
-      });
-      const participant = await tx.conversationParticipant.create({
-        data: { conversationId: conversation.id, diarizationLabel: 'SELF', isSelf: true },
-      });
-      const transcript = await tx.transcript.create({ data: { conversationId: conversation.id } });
-      return { conversation, participant, transcript };
-    });
+    // Пункт [onboarding-continuity] 2026-09-02: разговор ОДИН на проект.
+    // Раньше каждый вызов создавал новый, и ответы голосового квиза
+    // оставались в первом, недостижимом с экрана домена (см. хелпер).
+    return ensureOnboardingConversation(this.prisma, projectId);
   }
 
   async appendAnswer(userId: string, conversationId: string, text: string) {
@@ -209,7 +198,7 @@ export class InterviewPoolOnboardingService {
         validateOutput: isValidExtraction,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Извлечение отклонено проверкой безопасности содержимого.');
       }

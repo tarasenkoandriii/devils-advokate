@@ -8,10 +8,11 @@ import { domainApi } from '../../lib/domains/api';
 import { EntityForm } from './EntityForm';
 
 import { haptic } from '../../lib/telegram';
+import { ShareLinkView } from './InterviewPoolWorkspace';
 
 export function InvestmentGroupPanel({ projectId, config }: { projectId: string; config: any }) {
   const [group, setGroup] = useState<any>(null);
-  const [invite, setInvite] = useState<string | null>(null);
+  const [invite, setInvite] = useState<{ link: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [myGroups, setMyGroups] = useState<any[] | null>(null);
@@ -29,9 +30,11 @@ export function InvestmentGroupPanel({ projectId, config }: { projectId: string;
         <>
           <p>Группа: <strong>{myGroups?.find((g) => g.id === groupId)?.name ?? group?.name ?? groupId}</strong></p>
           <div className="entity-form__actions">
-            <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/investment-groups/${groupId}/invite-link`, {}); setInvite(r.token ?? r.inviteToken ?? JSON.stringify(r)); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); } }}>Ссылка-приглашение</button>
+            <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/investment-groups/${groupId}/invite-link`, {}); setInvite({ link: String(r.deepLink ?? r.token ?? ''), expiresAt: String(r.expiresAt ?? '') }); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); } }}>Ссылка-приглашение</button>
           </div>
-          {invite && <pre className="domain-json">{invite}</pre>}
+          {/* Ревью 2026-09-02: показывался сырой ТОКЕН, а построенная
+              сервером ссылка не использовалась вообще. */}
+          {invite && <ShareLinkView link={invite.link} expiresAt={invite.expiresAt} onClose={() => setInvite(null)} />}
           <EntityForm fields={[{ name: 'pledgedAmount', label: 'Мой взнос', type: 'money', required: true }]} submitLabel="Объявить взнос"
             onSubmit={async (v) => { await domainApi.postJson(`/investment-groups/${groupId}/pledge`, v); haptic('success'); setTick((t) => t + 1); }} />
           <GroupProgress projectId={projectId} tick={tick} />
@@ -166,7 +169,16 @@ export function ShareAllPanel({ projectId }: { projectId: string }) {
         <label key={s.id}><input type="checkbox" checked={Boolean(checked[s.candidateProfileId])} onChange={(e) => setChecked({ ...checked, [s.candidateProfileId]: e.target.checked })} /> {s.candidateProfile?.displayName ?? s.candidateProfileId} — согласие подтверждаю</label>
       ))}
       <button type="button" className="primary" disabled={ids.length === 0} onClick={async () => { try { setResult(await domainApi.postJson(`/interview-pool/projects/${projectId}/share-all`, { candidateConsentConfirmed: ids })); haptic('success'); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); } }}>Передать выбранных ({ids.length})</button>
-      {result && <p className="dtp-status dtp-status--ok">Передано: {Array.isArray(result) ? result.length : result.shared ?? result.count ?? ids.length} профил(ей).</p>}
+      {/* Ревью 2026-09-02: ответ содержит deepLink на весь пакет, а
+          показывался только счётчик — ссылку, по которой получатель
+          принимает профили, отправить было нечем. Поля shared/count в
+          ответе нет, счёт берём из includedCount. */}
+      {result && (
+        <>
+          <p className="dtp-status dtp-status--ok">Передано: {result.includedCount ?? ids.length} профил(ей){result.excludedCount ? `, без согласия пропущено: ${result.excludedCount}` : ''}.</p>
+          {result.deepLink && <ShareLinkView link={String(result.deepLink)} expiresAt={String(result.expiresAt ?? '')} onClose={() => setResult(null)} />}
+        </>
+      )}
     </div>
   );
 }

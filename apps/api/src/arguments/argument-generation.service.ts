@@ -11,11 +11,12 @@
 // вообще заполняют. Не обязателен: без DecisionObjective поведение то
 // же, что и раньше (просто question/goal).
 
-import { Injectable, BadGatewayException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadGatewayException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, DecisionObjective } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'argument-generation';
 
@@ -105,9 +106,12 @@ export class ArgumentGenerationService {
       // - ForbiddenException (нет согласия на внешний AI) пробрасывается как есть
       // - блокировка по prompt injection — 400, это ошибка ввода, не сбоя инфраструктуры
       // - всё остальное (недоступность провайдера, exhausted retries) — 502
-      if (err instanceof ForbiddenException) {
-        throw err;
-      }
+      // [ai-errors] 2026-09-02: общий шлюз — 403 согласия, 429 суточного
+      // лимита и «нет модели» (сид не прогнан / нет ключа) доезжают до
+      // пользователя со своим смыслом, а не под видом «провайдер
+      // недоступен». Это главная AI-фича проекта, и здесь подмена
+      // диагноза стоила дороже всего.
+      rethrowClientVisibleAiError(err);
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException(
           'Запрос отклонён проверкой безопасности содержимого — переформулируйте вопрос без служебных инструкций внутри текста.',

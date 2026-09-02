@@ -73,6 +73,37 @@ export function QuestionnairePanel({ projectId, config }: { projectId: string; c
   );
 }
 
+/** Ссылка-приглашение с явным сроком жизни. Аудит 2026-09-02: раньше
+ *  сервер её возвращал, а интерфейс молчал — «поделиться» выглядело
+ *  выполненным, но отправить получателю было нечего. */
+export function ShareLinkView({ link, expiresAt, onClose }: { link: string; expiresAt: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const until = expiresAt ? new Date(expiresAt) : null;
+  return (
+    <div className="domain-panel">
+      <p>Ссылка на профиль — отправьте её получателю:</p>
+      <pre className="domain-json">{link}</pre>
+      {until && !Number.isNaN(until.getTime()) && (
+        <p className="card-section__empty">Действительна до {until.toLocaleString('ru-RU')}. После этого ссылку нужно создать заново.</p>
+      )}
+      <div className="entity-form__actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            // clipboard может быть недоступен (нет разрешения, старый
+            // WebView) — тогда ссылка всё равно видна и выделяется.
+            void navigator.clipboard?.writeText(link).then(() => setCopied(true)).catch(() => setCopied(false));
+          }}
+        >
+          {copied ? 'Скопировано ✓' : 'Скопировать'}
+        </button>
+        <button type="button" className="secondary" onClick={onClose}>Скрыть</button>
+      </div>
+    </div>
+  );
+}
+
 export function CandidatesPanel({ projectId, config }: { projectId: string; config: any }) {
   const { data: statuses, error, refresh } = useJson<any[]>(`${P(projectId)}/candidates`);
   const [mode, setMode] = useState<'none' | 'new' | 'existing'>('none');
@@ -89,13 +120,23 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
     await domainApi.postJson(`${P(projectId)}/candidates`, { candidateProfileId: profile.id });
     setMode('none'); refresh();
   }
+  const [shareLink, setShareLink] = useState<{ link: string; expiresAt: string } | null>(null);
+
   async function loadAgenda(candidateProfileId: string) {
     try { setAgenda((a) => ({ ...a, [candidateProfileId]: undefined })); const d = await domainApi.getJson(`${P(projectId)}/candidates/${candidateProfileId}/agenda`); setAgenda((a) => ({ ...a, [candidateProfileId]: d })); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Повестка недоступна'); }
   }
   async function share(candidateProfileId: string) {
     if (!window.confirm('Подтверждаете, что кандидат дал согласие на передачу профиля в команду?')) return;
-    try { await domainApi.postJson(`/candidate-profiles/${candidateProfileId}/share`, { candidateConsentConfirmed: true }); haptic('success'); refresh(); }
+    try {
+      const r = await domainApi.postJson(`/candidate-profiles/${candidateProfileId}/share`, { candidateConsentConfirmed: true });
+      haptic('success');
+      // Аудит 2026-09-02: ответ {deepLink, expiresAt} раньше молча
+      // выбрасывался — токен создавался и тикал 72 часа, а отправить
+      // ссылку было нечем: в интерфейсе она не показывалась нигде.
+      setShareLink({ link: String(r.deepLink ?? ''), expiresAt: String(r.expiresAt ?? '') });
+      refresh();
+    }
     catch (e) { setErr(e instanceof Error ? e.message : 'Не удалось поделиться'); }
   }
 
@@ -103,6 +144,7 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
     <div className="domain-panel">
       {(error || err) && <p className="generation-error">{error ?? err}</p>}
       {statuses && statuses.length === 0 && <p className="card-section__empty">Кандидатов пока нет.</p>}
+      {shareLink && <ShareLinkView link={shareLink.link} expiresAt={shareLink.expiresAt} onClose={() => setShareLink(null)} />}
       <ul className="domain-entities">
         {(statuses ?? []).map((s: any) => {
           const cp = s.candidateProfile ?? {};
@@ -205,7 +247,7 @@ export function RelevancePanel({ projectId, config }: { projectId: string; confi
 
 export function TeamPanel({ config }: { config: any }) {
   const [team, setTeam] = useState<any>(null);
-  const [invite, setInvite] = useState<string | null>(null);
+  const [invite, setInvite] = useState<{ link: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { data: myTeams, refresh: refreshTeams } = useJson<any[]>('/recruiting-teams');
   const teamId = team?.id ?? config.recruitingTeamId ?? (myTeams && myTeams.length === 1 ? myTeams[0].id : undefined);
@@ -220,15 +262,28 @@ export function TeamPanel({ config }: { config: any }) {
         <>
           <p>Команда: <strong>{myTeams?.find((t) => t.id === teamId)?.name ?? team?.name ?? teamId}</strong></p>
           <div className="entity-form__actions">
-            <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/recruiting-teams/${teamId}/invite-link`, {}); setInvite(r.token ?? r.inviteToken ?? JSON.stringify(r)); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); } }}>Ссылка-приглашение</button>
+            <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/recruiting-teams/${teamId}/invite-link`, {}); setInvite({ link: String(r.deepLink ?? r.token ?? ''), expiresAt: String(r.expiresAt ?? '') }); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); } }}>Ссылка-приглашение</button>
           </div>
-          {invite && <pre className="domain-json">{invite}</pre>}
+          {/* Ревью 2026-09-02: показывали голый токен в <pre> — тот же
+              компонент, что у передачи кандидата: сама ссылка, срок
+              жизни и кнопка копирования. */}
+          {invite && <ShareLinkView link={invite.link} expiresAt={invite.expiresAt} onClose={() => setInvite(null)} />}
           <JsonPanel title="Кандидаты команды" route={`/recruiting-teams/${teamId}/candidates`} />
         </>
       ) : (
         <>
           <EntityForm fields={[{ name: 'name', label: 'Название команды', type: 'text', required: true }]} submitLabel="Создать команду" onSubmit={async (v) => { setTeam(await domainApi.postJson('/recruiting-teams', v)); refreshTeams(); }} />
-          <EntityForm fields={[{ name: 'token', label: 'Токен приглашения', type: 'text', required: true }]} submitLabel="Вступить по токену" onSubmit={async (v) => { const t = String(v.token); const r = await domainApi.postJson(`/recruiting-teams/${t}/join`, { token: t }); setTeam(r.team ?? r); refreshTeams(); }} />
+          <EntityForm fields={[{ name: 'token', label: 'Токен приглашения', type: 'text', required: true }]} submitLabel="Вступить по токену" onSubmit={async (v) => {
+            const t = String(v.token);
+            // Аудит 2026-09-02: joinTeam возвращает RecruitingTeamMember,
+            // и setTeam(r) клал сюда id ЧЛЕНСТВА — панель дальше дёргала
+            // /recruiting-teams/<memberId>/candidates и получала 404, а
+            // имя команды рисовалось сырым id. Берём teamId из членства
+            // и перезапрашиваем список команд.
+            const r = await domainApi.postJson(`/recruiting-teams/${t}/join`, { token: t });
+            setTeam({ id: r.teamId ?? r.team?.id ?? r.id, name: r.team?.name });
+            refreshTeams();
+          }} />
         </>
       )}
     </div>

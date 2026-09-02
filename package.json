@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "npm run typecheck --workspace=apps/api && npm run typecheck --workspace=apps/tma && tsc --noEmit -p apps/admin/tsconfig.json && tsc --noEmit -p apps/landing/tsconfig.json",
-    "test": "npm test --workspace=apps/api && npm test --workspace=apps/tma",
+    "test": "npm test --workspace=apps/api && npm test --workspace=apps/tma && npm test --workspace=apps/landing",
     "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/tma && npm run build --workspace=apps/admin && npm run build --workspace=apps/landing",
     "ci": "npm run lint && npm run typecheck && npm test",
     "db:check": "node scripts/check-db-url.js",

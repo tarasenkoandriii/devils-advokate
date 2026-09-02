@@ -15,7 +15,14 @@ export interface IntakeSessionView {
 export interface IntakeDispatchResult extends IntakeSessionView { projectId: string; conversationId: string | null }
 
 export const intakeApi = {
-  start: (text: string) => apiPost<IntakeSessionView>('/intake/sessions', { text }),
+  // Пункт [job-landing-attribution] 2026-09-02: метка источника с
+  // лендинга уходит вместе с первым ответом (§4 ТЗ job-landing).
+  start: (text: string, attribution?: { source?: string; campaign?: string }) =>
+    apiPost<IntakeSessionView>('/intake/sessions', {
+      text,
+      ...(attribution?.source ? { source: attribution.source } : {}),
+      ...(attribution?.campaign ? { campaign: attribution.campaign } : {}),
+    }),
   answer: (id: string, text: string) => apiPost<IntakeSessionView>(`/intake/sessions/${id}/answers`, { text }),
   get: (id: string) => apiGet<IntakeSessionView>(`/intake/sessions/${id}`),
   dispatch: (id: string, scenario: IntakeScenario, contractType?: 'PRENUP' | 'DIVORCE_SETTLEMENT') =>

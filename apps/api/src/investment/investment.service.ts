@@ -5,13 +5,14 @@
 // сортування варіантів між собою, НІКОЛИ поля covered/score/rank —
 // структурна відсутність у типах нижче, не програмна заборона.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { InvestmentCriterionCategory } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { assertInvestmentProjectAccess } from './investment-access';
 import { ExtractedInvestmentConfigDraft } from './investment-onboarding.service';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const BREAKDOWN_TASK_TYPE = 'investment-meeting-breakdown';
 
@@ -181,7 +182,7 @@ export class InvestmentService {
         validateOutput: isValidBreakdown,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация разбора отклонена проверкой безопасности содержимого.');
       }

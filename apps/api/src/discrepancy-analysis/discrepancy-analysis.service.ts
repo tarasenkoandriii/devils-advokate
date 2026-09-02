@@ -49,7 +49,7 @@
 // конкретному Person — Пункт 26) и внутри разговора — только с ЕГО
 // ЖЕ другими репликами, не путать говорящих между собой.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -57,6 +57,7 @@ import { ConversationProcessingStatus, ConversationSignal, ConversationSignalTyp
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { SecretsService } from '../secrets/secrets.service';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 // Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
 // Google Fact Check Tools API — четвёртый источник сверки §3.16 ТЗ
@@ -310,7 +311,7 @@ export class DiscrepancyAnalysisService {
         validateOutput: isValidDiscrepancyPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Анализ отклонён проверкой безопасности содержимого транскрипта.');
       }
@@ -438,7 +439,7 @@ export class DiscrepancyAnalysisService {
         validateOutput: isValidSourceCheckPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Анализ отклонён проверкой безопасности содержимого.');
       }

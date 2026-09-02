@@ -31,7 +31,7 @@
 // (Пункт 48) и MIN_CATEGORY_SAMPLE_SIZE в DecisionOutcomeService
 // (Пункт 52) — явно задокументированное число, не скрытая магия.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -43,6 +43,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { ARCHETYPE_DESCRIPTIONS } from '../archetype-perspective/archetype-perspective.service';
 import { ArchetypeType, SparringMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'sparring-session';
 const MAX_MESSAGES_PER_SESSION = 40; // 20 обменов репликами — разумный потолок для тренировочной сессии, не бесконечный чат
@@ -339,7 +340,7 @@ export class SparringService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }

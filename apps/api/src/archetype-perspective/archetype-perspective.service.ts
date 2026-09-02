@@ -29,11 +29,12 @@
 // зрения на СИТУАЦИЮ пользователя, тот же формат вывода, что и у
 // архетипов, не новый.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArchetypeType } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'archetype-perspective';
 
@@ -175,7 +176,7 @@ export class ArchetypePerspectiveService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException(
           'Запрос отклонён проверкой безопасности содержимого — переформулируйте вопрос без служебных инструкций внутри текста.',

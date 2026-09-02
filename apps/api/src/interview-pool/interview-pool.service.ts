@@ -1,11 +1,12 @@
 // Пункт [interview-pool] (devils-advocate-interview-pool-tz.md §4.1/§4.7/§5).
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { CandidateStage } from '@prisma/client';
 import { ExtractedPoolConfigDraft } from './interview-pool-onboarding.service';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const QUESTIONNAIRE_TASK_TYPE = 'interview-pool-questionnaire-draft';
 const AGENDA_REUSE_TASK_TYPE = 'interview-pool-agenda-reuse-detection';
@@ -137,6 +138,13 @@ export class InterviewPoolService {
         validateOutput: isValidQuestionnaire,
       });
     } catch (err) {
+      // [ai-errors] 2026-09-02: здесь ОСОЗНАННО НЕ общий шлюз
+      // rethrowClientVisibleAiError. Это точка ЧЕСТНОЙ ДЕГРАДАЦИИ:
+      // отсутствие модели (не засеяна база, нет ключа) обязано
+      // деградировать, как и любой другой сбой AI, а не ронять фичу
+      // целиком — иначе шлюз, задуманный как «конфигурация не должна
+      // выглядеть отказом», сам превратил бы конфигурацию в отказ.
+      // Наружу уходит только отсутствие прав.
       if (err instanceof ForbiddenException) throw err;
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация опросника отклонена проверкой безопасности содержимого.');
@@ -317,7 +325,7 @@ export class InterviewPoolService {
       const ids = JSON.parse(result.text) as string[];
       return new Set(ids);
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err; // відсутність згоди на AI — реальна проблема прав, не ховається за деградацією
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть // відсутність згоди на AI — реальна проблема прав, не ховається за деградацією
       return null;
     }
   }

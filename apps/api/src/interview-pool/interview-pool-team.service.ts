@@ -6,6 +6,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RecruitingTeamRole } from '@prisma/client';
+import { buildStartDeepLink } from '../common/telegram-deep-link';
 
 const INVITE_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // 72 години, той самий горизонт, що share-токени §4.6 ТЗ
 
@@ -47,7 +48,7 @@ export class InterviewPoolTeamService {
     await this.prisma.recruitingTeamInvite.create({
       data: { teamId, token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) },
     });
-    return { deepLink: `t.me/<bot>?start=team_${token}`, token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) };
+    return { deepLink: buildStartDeepLink(`team_${token}`), token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) };
   }
 
   async joinTeam(userId: string, token: string) {

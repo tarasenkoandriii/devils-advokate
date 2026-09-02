@@ -79,6 +79,11 @@ x-api-env: &api-env
   # честно откажет на своём эндпоинте, а не уронит запуск всего API.
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
   ADMIN_LOGIN_BOT_TOKEN: ${ADMIN_LOGIN_BOT_TOKEN:-}
+  # Пункт [deep-links] 2026-09-02: из этого строятся ссылки-приглашения
+  # (передача кандидата, инвайт в команду, инвест-группа). Не заданы —
+  # соответствующие эндпоинты честно отвечают 503 с именем переменной.
+  TELEGRAM_MINI_APP_URL: ${TELEGRAM_MINI_APP_URL:-}
+  TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   XAI_API_KEY: ${XAI_API_KEY:-}

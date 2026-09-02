@@ -1,6 +1,12 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { InterviewPoolCandidateService } from '../interview-pool/interview-pool-candidate.service';
 
+// Пункт [deep-links] 2026-09-02: ссылки-приглашения строятся из
+// окружения. Раньше в них стоял литерал `t.me/<bot>` — ссылка в никуда
+// при живом токене; теперь без переменной сервис честно отвечает 503,
+// поэтому тестам нужна заданная переменная.
+process.env.TELEGRAM_BOT_USERNAME = 'da_test_bot';
+
 function createFakePrisma() {
   const candidates = new Map<string, any>();
   const statuses: any[] = [];
@@ -18,7 +24,10 @@ function createFakePrisma() {
       return candidate;
     },
     _seedProject(p: any) {
-      const project = { id: nextId(), ...p };
+      // Пункт [interview-pool-mode] 2026-09-02: доступ теперь проверяет
+      // и режим проекта (как в job-search) — фейку нужен режим по
+      // умолчанию, иначе тесты домена проверяли бы чужой сценарий.
+      const project = { id: nextId(), mode: 'INTERVIEW_POOL', ...p };
       projects.set(project.id, project);
       return project;
     },
@@ -126,6 +135,9 @@ describe('InterviewPoolCandidateService', () => {
     const result = await service.shareCandidate('u1', candidate.id, true);
 
     expect(result.deepLink).toContain('share_');
+    // Аудит 2026-09-02: раньше здесь был литерал «t.me/<bot>» — тест
+    // проходил, а ссылка вела в никуда. Проверяем реальный адрес.
+    expect(result.deepLink).toContain('https://t.me/da_test_bot?start=share_');
     expect(prisma._getShares().length).toBe(1);
     expect(prisma._getShares()[0].shareToken).toBeDefined();
     expect(prisma._getShares()[0].batchToken).toBeUndefined();

@@ -14,11 +14,12 @@
 // кандидатов те, что уже фигурировали в LiveHintEvent этой сессии
 // (projectId), не только lifecycleStatus=USED.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentLifecycleStatus, ArgumentStance, LiveHintType } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'live-hint';
 const INTERVIEW_TASK_TYPE = 'live-hint-interview';
@@ -131,7 +132,7 @@ export class LiveHintsService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }
@@ -209,7 +210,7 @@ export class LiveHintsService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }

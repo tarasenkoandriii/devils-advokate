@@ -101,7 +101,7 @@ export default tseslint.config(
   {
     // Спеки: standalone-раннер печатает результат в консоль,
     // самодельные фейки — это any по своей природе.
-    files: ['apps/api/src/__tests__/**/*.ts', 'apps/tma/src/__tests__/**/*.ts'],
+    files: ['apps/api/src/__tests__/**/*.ts', 'apps/tma/src/__tests__/**/*.ts', 'apps/landing/src/__tests__/**/*.ts'],
     rules: {
       'no-console': 'off',
       '@typescript-eslint/no-unsafe-function-type': 'off',

@@ -7,7 +7,7 @@ import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SecretsService } from '../secrets/secrets.service';
 import { IntakeScenario, IntakeService } from './intake.service';
 import { safeSecretEqual } from '../common/timing-safe-equal';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class TextDto {
   // Пункт [validation] 2026-09-01: ответ квиза уходит в LLM-контекст —
@@ -17,6 +17,23 @@ export class TextDto {
   @MinLength(1)
   @MaxLength(8000)
   text!: string;
+
+  // Пункт [job-landing-attribution] 2026-09-02: откуда пришёл человек
+  // (параметр запуска Telegram с лендинга) и по какой кампании.
+  // Приходит от КЛИЕНТА, поэтому набор символов и длина — те же, что
+  // Telegram допускает в параметре запуска: это метка, а не текст, и
+  // произвольная строка тут не нужна ни для чего.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^[A-Za-z0-9_-]+$/, { message: 'source: допустимы только A-Za-z0-9_-' })
+  source?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Matches(/^[A-Za-z0-9_-]+$/, { message: 'campaign: допустимы только A-Za-z0-9_-' })
+  campaign?: string;
 }
 
 class DispatchDto {
@@ -39,7 +56,7 @@ export class IntakeController {
   @Post('sessions')
   @UseGuards(TelegramAuthGuard, NotRestrictedGuard)
   start(@CurrentUser() userId: string, @Body() dto: TextDto) {
-    return this.intake.start(userId, dto.text);
+    return this.intake.start(userId, dto.text, { source: dto.source, campaign: dto.campaign });
   }
 
   @Get('sessions/:id')

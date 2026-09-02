@@ -10,7 +10,7 @@
 import type { Metadata } from 'next';
 import { locales, type Locale } from '../../../lib/i18n/config';
 import { getJobsDictionary } from '../../../lib/i18n/jobs';
-import { telegramStartUrl } from '../../../lib/telegram-url';
+import { StartInTelegram } from '../../../components/jobs/StartInTelegram';
 import { AudienceTabs } from '../../../components/jobs/AudienceTabs';
 import { Footer } from '../../../components/Footer';
 import { getDictionary } from '../../../lib/i18n/get-dictionary';
@@ -19,20 +19,37 @@ export function generateStaticParams() {
   return locales.map((lang) => ({ lang }));
 }
 
+/** og:locale по спецификации — language_TERRITORY, а не код языка. */
+const OG_LOCALES: Record<Locale, string> = { ru: 'ru_RU', uk: 'uk_UA', en: 'en_US' };
+
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com';
+
+/** B2B-контакт (ТЗ §4). Пусто → кнопки «Написать нам» просто нет. */
+const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? '';
+
 export async function generateMetadata({ params }: { params: { lang: Locale } }): Promise<Metadata> {
   const dict = getJobsDictionary(params.lang);
   return {
     title: dict.meta.title,
     description: dict.meta.description,
     // Переопределяет alternates лейаута: hreflang должен указывать на
-    // /jobs каждого языка, не на главную (аудит ТЗ §3).
+    // /jobs каждого языка, не на главную (аудит ТЗ §3). Аудит
+    // 2026-09-02 добавил self-canonical и x-default: три языковые копии
+    // близки по структуре, и без них выбор основной версии остаётся на
+    // усмотрение поисковика.
     alternates: {
-      languages: Object.fromEntries(locales.map((l) => [l, `/${l}/jobs`])),
+      canonical: `/${params.lang}/jobs`,
+      languages: {
+        ...Object.fromEntries(locales.map((l) => [l, `/${l}/jobs`])),
+        'x-default': '/en/jobs',
+      },
     },
     openGraph: {
       title: dict.meta.title,
       description: dict.meta.description,
-      locale: params.lang,
+      // og:locale ждёт language_TERRITORY, не голый код языка.
+      locale: OG_LOCALES[params.lang],
+      url: `/${params.lang}/jobs`,
       type: 'website',
       images: ['/images/og.jpg'],
     },
@@ -51,31 +68,77 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
   // словарь (юридические ссылки, переключатель языка).
   const mainDict = getDictionary(params.lang);
 
-  const faqJsonLd = {
+  // ТЗ §3 требует ОБА типа: WebPage описывает саму страницу, FAQPage —
+  // её раздел вопросов. Аудит 2026-09-02: WebPage отсутствовал, хотя
+  // комментарий ниже утверждал обратное. @graph — чтобы оба типа жили в
+  // одном блоке и ссылались друг на друга.
+  const jsonLd = {
     '@context': 'https://schema.org',
-    '@type': 'FAQPage',
-    mainEntity: dict.faq.items.map((item) => ({
-      '@type': 'Question',
-      name: item.q,
-      acceptedAnswer: { '@type': 'Answer', text: item.a },
-    })),
+    '@graph': [
+      {
+        '@type': 'WebPage',
+        '@id': `${SITE_URL}/${params.lang}/jobs#webpage`,
+        url: `${SITE_URL}/${params.lang}/jobs`,
+        name: dict.meta.title,
+        description: dict.meta.description,
+        inLanguage: params.lang,
+      },
+      {
+        '@type': 'FAQPage',
+        '@id': `${SITE_URL}/${params.lang}/jobs#faq`,
+        isPartOf: { '@id': `${SITE_URL}/${params.lang}/jobs#webpage` },
+        mainEntity: dict.faq.items.map((item) => ({
+          '@type': 'Question',
+          name: item.q,
+          acceptedAnswer: { '@type': 'Answer', text: item.a },
+        })),
+      },
+    ],
   };
 
   return (
     <main className="jobs">
-      {/* JSON-LD только FAQPage + WebPage; JobPosting отсутствует намеренно. */}
+      {/* JSON-LD: WebPage + FAQPage. JobPosting отсутствует намеренно —
+          на странице нет вакансий (граница «не джоб-борд»).
+          Экранирование «<» обязательно: без него правка словаря с
+          символом «<» разорвала бы тег script. */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(jsonLd).replace(/</g, '\\u003c'),
+        }}
       />
 
       {/* ── Hero с переключателем аудитории ── */}
       <section className="section jobs-hero">
         <div className="container">
+          {/* Аудит 2026-09-02: страница была тупиком — ни одной ссылки
+              ни на неё, ни с неё. Ссылка на главную нужна и человеку, и
+              краулеру. */}
+          <a className="jobs-hero__home" href={`/${params.lang}`}>
+            Devil&apos;s Advocate
+          </a>
           <span className="jobs-hero__badge">{dict.hero.badge}</span>
           <h1 className="jobs-hero__headline">{dict.hero.headline}</h1>
           <p className="jobs-hero__subheadline">{dict.hero.subheadline}</p>
-          <AudienceTabs candidatesLabel={dict.hero.tabCandidates} agenciesLabel={dict.hero.tabAgencies} />
+          <AudienceTabs
+            candidatesLabel={dict.hero.tabCandidates}
+            agenciesLabel={dict.hero.tabAgencies}
+            navLabel={dict.hero.tabsLabel}
+          />
+
+          {/* Полоса границ. ТЗ §5 п.3 требует «Честные границы» не ниже
+              второго экрана, а §2 ставит развёрнутую секцию четвёртой —
+              требования противоречили друг другу, и аудит 2026-09-02
+              зафиксировал невыполнение. Решение: заголовки границ идут
+              сразу под hero (первый экран), развёрнутая секция остаётся
+              на своём месте по §2. Один источник текста — расхождения
+              между полосой и секцией невозможны. */}
+          <ul className="jobs-hero__boundaries" aria-label={dict.boundaries.title}>
+            {dict.boundaries.items.map((item) => (
+              <li key={item.title}>{item.title}</li>
+            ))}
+          </ul>
         </div>
       </section>
 
@@ -83,7 +146,7 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
       <section className="section jobs-audience" id="candidates">
         <div className="container">
           <h2>{dict.candidates.title}</h2>
-          <ol className="jobs-steps">
+          <ol className="jobs-steps" role="list">
             {dict.candidates.steps.map((step, i) => (
               <li key={step.title} className="jobs-steps__item">
                 <span className="jobs-steps__num">{i + 1}</span>
@@ -92,9 +155,9 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
               </li>
             ))}
           </ol>
-          <a href={telegramStartUrl('jobs_landing')} className="button button--primary" target="_blank" rel="noopener noreferrer">
+          <StartInTelegram start="jobs_landing" ariaLabel={`${dict.candidates.cta} — ${dict.hero.tabCandidates}`}>
             {dict.candidates.cta}
-          </a>
+          </StartInTelegram>
         </div>
       </section>
 
@@ -110,9 +173,20 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
               </div>
             ))}
           </div>
-          <a href={telegramStartUrl('recruiting_landing')} className="button button--primary" target="_blank" rel="noopener noreferrer">
-            {dict.agencies.cta}
-          </a>
+          <div className="jobs-final-buttons">
+            <StartInTelegram start="recruiting_landing" ariaLabel={`${dict.agencies.cta} — ${dict.hero.tabAgencies}`}>
+              {dict.agencies.cta}
+            </StartInTelegram>
+            {/* ТЗ §4: «Плюс ссылка „Написать нам“ (mailto), пока нет
+                B2B-формы» — её не было вовсе (аудит 2026-09-02). Адрес
+                из окружения: захардкоженный плейсхолдер хуже отсутствия
+                ссылки, поэтому без переменной кнопки просто нет. */}
+            {CONTACT_EMAIL && (
+              <a href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(dict.agencies.title)}`} className="button button--ghost">
+                {dict.agencies.contactCta}
+              </a>
+            )}
+          </div>
         </div>
       </section>
 
@@ -164,12 +238,12 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
         <div className="container final-cta__inner">
           <h2>{dict.finalCta.title}</h2>
           <div className="jobs-final-buttons">
-            <a href={telegramStartUrl('jobs_landing')} className="button button--primary" target="_blank" rel="noopener noreferrer">
+            <StartInTelegram start="jobs_landing" ariaLabel={`${dict.finalCta.candidates} — ${dict.hero.tabCandidates}`}>
               {dict.finalCta.candidates}
-            </a>
-            <a href={telegramStartUrl('recruiting_landing')} className="button button--primary" target="_blank" rel="noopener noreferrer">
+            </StartInTelegram>
+            <StartInTelegram start="recruiting_landing" ariaLabel={`${dict.finalCta.agencies} — ${dict.hero.tabAgencies}`}>
               {dict.finalCta.agencies}
-            </a>
+            </StartInTelegram>
           </div>
         </div>
       </section>

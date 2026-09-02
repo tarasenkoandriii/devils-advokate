@@ -15,7 +15,7 @@
 // порівняльний рівень, доменно-незалежний (заборона не потребує
 // знання, ДТП це чи розлучення чи консультація лікаря).
 
-import { BadGatewayException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadGatewayException, Injectable, ForbiddenException } from '@nestjs/common';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 
 export type CrossConsultationStatus = 'NO_DISCREPANCY_FOUND' | 'DISCREPANCY_FOUND' | 'INSUFFICIENT_DATA';
@@ -95,6 +95,13 @@ export class CriteriaComparisonService {
         validateOutput: isValidComparison,
       });
     } catch (err) {
+      // [ai-errors] 2026-09-02: здесь ОСОЗНАННО НЕ общий шлюз
+      // rethrowClientVisibleAiError. Это точка ЧЕСТНОЙ ДЕГРАДАЦИИ:
+      // отсутствие модели (не засеяна база, нет ключа) обязано
+      // деградировать, как и любой другой сбой AI, а не ронять фичу
+      // целиком — иначе шлюз, задуманный как «конфигурация не должна
+      // выглядеть отказом», сам превратил бы конфигурацию в отказ.
+      // Наружу уходит только отсутствие прав.
       if (err instanceof ForbiddenException) throw err;
       if (err instanceof AIRouterContentBlockedError) {
         // Чесна деградація — блокування контенту не повинно видаватись

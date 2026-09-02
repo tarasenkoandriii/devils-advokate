@@ -22,11 +22,12 @@
 // применялся в Turning Points/Do Not Say: один промпт со списком всех
 // фактов с их id, ответ — список найденных конфликтных пар.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { FactStatus, SourceConflict } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'source-conflict-detection';
 
@@ -109,7 +110,7 @@ export class SourceConflictService {
         validateOutput: isValidConflictsPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Анализ отклонён проверкой безопасности содержимого фактов.');
       }

@@ -143,6 +143,14 @@ function serializeInput(userPrompt: string | ContentBlock[]): Array<Record<strin
 }
 
 export class GeminiClient implements AIBackgroundProviderClient {
+  /** Только фоновая полоса. Пункт [router-lanes] 2026-09-02: без этого
+   * объявления подбор считал Gemini кандидатом на ЛЮБУЮ текстовую
+   * задачу — его capability заводится сидом РАНЬШЕ текстовых моделей, а
+   * порядок кандидатов «первая настроенная выигрывает» идёт по
+   * createdAt. При заданном GEMINI_API_KEY каждый синхронный AI-вызов
+   * проекта падал бы на «GeminiClient is background-only». */
+  readonly lanes = ['background'] as const;
+
   /** Синхронный complete() намеренно не реализован: для текстовых
    * taskType этот клиент не используется вовсе (ТЗ §5), а медиа-вызов
    * не помещается в maxDuration функции (§4.1). Явная ошибка честнее

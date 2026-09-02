@@ -9,10 +9,27 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { locales, localeNames, localeFlags, type Locale } from '../lib/i18n/config';
+
+/**
+ * АУДИТ 2026-09-02: переключатель уводил на КОРЕНЬ локали. С
+ * /ru/jobs выбор «UK» открывал /uk — то есть на второй языковой
+ * странице продукта смена языка теряла саму страницу, при том что
+ * hreflang обещает краулеру /uk/jobs. Теперь меняется только первый
+ * сегмент пути, остальное сохраняется.
+ */
+function withLocale(pathname: string | null, locale: Locale): string {
+  if (!pathname) return `/${locale}`;
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments.length === 0) return `/${locale}`;
+  const rest = (locales as readonly string[]).includes(segments[0]) ? segments.slice(1) : segments;
+  return `/${[locale, ...rest].join('/')}`;
+}
 
 export function LanguageSwitcher({ current }: { current: Locale }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -53,7 +70,7 @@ export function LanguageSwitcher({ current }: { current: Locale }) {
           {locales.map((locale) => (
             <li key={locale} role="option" aria-selected={locale === current}>
               <Link
-                href={`/${locale}`}
+                href={withLocale(pathname, locale)}
                 hrefLang={locale}
                 className={
                   locale === current

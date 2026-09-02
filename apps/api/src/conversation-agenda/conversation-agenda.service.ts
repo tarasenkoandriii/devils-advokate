@@ -15,11 +15,12 @@
 // что MissingInformationCheck/BestNextMoveRecommendation: повторная
 // генерация создаёт НОВУЮ запись, не переписывает старую.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ConversationProcessingStatus } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'conversation-agenda-generation';
 
@@ -86,7 +87,7 @@ export class ConversationAgendaService {
         validateOutput: isValidAgendaPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Формирование повестки отклонено проверкой безопасности содержимого.');
       }

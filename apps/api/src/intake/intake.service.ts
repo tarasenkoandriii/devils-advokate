@@ -4,7 +4,7 @@
 // пользователем dispatch-ит в выбранный сценарий, replay-я накопленные
 // ответы через appendAnswer() домена — extract() домена дальше работает
 // на них как на своих. Ниже порога — универсальный сценарий, не ошибка.
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { IntakeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -16,6 +16,7 @@ import { InterviewPoolOnboardingService } from '../interview-pool/interview-pool
 import { InvestmentOnboardingService } from '../investment/investment-onboarding.service';
 import { MajorPurchaseOnboardingService } from '../major-purchase/major-purchase-onboarding.service';
 import { JobSearchOnboardingService } from '../job-search/job-search-onboarding.service';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 export const INTAKE_TASK_TYPE = 'intake-classify';
 /** Порог уверенности, ниже которого — UNIVERSAL (ТЗ §2.2 п.4; тест на границу). */
@@ -115,7 +116,7 @@ export class IntakeService {
         validateOutput: isValidClassification,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Описание отклонено проверкой безопасности содержимого.');
       }
@@ -159,12 +160,20 @@ export class IntakeService {
     };
   }
 
-  async start(userId: string, text: string) {
+  async start(
+    userId: string,
+    text: string,
+    // Пункт [job-landing-attribution] 2026-09-02: метка источника с
+    // лендинга (§4 ТЗ job-landing). Ни на что в логике квиза не влияет
+    // — это ответ на вопрос «какая посадочная привела человека»,
+    // которого до этого не было где хранить.
+    attribution: { source?: string; campaign?: string } = {},
+  ) {
     if (!text.trim()) throw new BadRequestException('text не может быть пустым');
     const answers: IntakeAnswer[] = [{ question: null, text: text.trim(), at: new Date().toISOString() }];
     const cls = await this.classify(userId, answers);
     const session = await this.prisma.intakeSession.create({
-      data: { userId, answers: answers as any, suggestedScenario: cls.scenario, confidence: cls.confidence, followUpQuestion: cls.followUpQuestion, extracted: cls.extracted as any },
+      data: { userId, answers: answers as any, suggestedScenario: cls.scenario, confidence: cls.confidence, followUpQuestion: cls.followUpQuestion, extracted: cls.extracted as any, source: attribution.source ?? null, campaign: attribution.campaign ?? null },
     });
     return this.present(session);
   }

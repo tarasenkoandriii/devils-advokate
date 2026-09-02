@@ -1,6 +1,12 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { InvestmentGroupService } from '../investment/investment-group.service';
 
+// Пункт [deep-links] 2026-09-02: ссылки-приглашения строятся из
+// окружения. Раньше в них стоял литерал `t.me/<bot>` — ссылка в никуда
+// при живом токене; теперь без переменной сервис честно отвечает 503,
+// поэтому тестам нужна заданная переменная.
+process.env.TELEGRAM_BOT_USERNAME = 'da_test_bot';
+
 function createFakePrisma() {
   const groups = new Map<string, any>();
   const members: any[] = [];

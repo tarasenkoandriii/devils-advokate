@@ -17,6 +17,7 @@ import { ConsentService } from '../consent/consent.service';
 import { ConsentType, HealthCriterionCategory } from '@prisma/client';
 import { assertOwnedHealthProject } from './health-access';
 import { ExtractedHealthConfigDraft } from './health-onboarding.service';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const BREAKDOWN_TASK_TYPE = 'health-consultation-breakdown';
 
@@ -203,7 +204,7 @@ export class HealthService {
         validateOutput: isValidBreakdown,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация разбора отклонена проверкой безопасности содержимого.');
       }

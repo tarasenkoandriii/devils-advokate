@@ -12,6 +12,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
+import { buildStartDeepLink } from '../common/telegram-deep-link';
 
 const SHARE_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // §4.6 ТЗ: "за замовчуванням 72 години"
 
@@ -63,12 +64,24 @@ export class InterviewPoolCandidateService {
     return this.prisma.candidateFollowUpRequest.findMany({ where: { statusId }, orderBy: { createdAt: 'desc' } });
   }
 
-  async markFollowUpFulfilled(userId: string, requestId: string, fulfilled: boolean) {
+  /** АУДИТ 2026-09-02 — ОБХОД ЗАМОРОЗКИ ПРОЕКТА. Маршрут объявляет
+   *  `:statusId`, но обработчик его не использовал: статус брался из
+   *  самой записи. ProjectFrozenGuard же резолвит проект ИМЕННО из
+   *  параметра маршрута. Подставив в `:statusId` статус незамороженного
+   *  проекта, а в `:id` — запрос из замороженного, можно было менять
+   *  данные замороженного проекта. Теперь параметр маршрута обязан
+   *  совпадать с владельцем записи. */
+  async markFollowUpFulfilled(userId: string, statusId: string, requestId: string, fulfilled: boolean) {
     const request = await this.prisma.candidateFollowUpRequest.findUnique({
       where: { id: requestId },
       include: { status: true },
     });
     if (!request) {
+      throw new NotFoundException(`CandidateFollowUpRequest ${requestId} not found`);
+    }
+    if (request.statusId !== statusId) {
+      // Несовпадение неотличимо от несуществующей записи — не
+      // раскрываем, что запрос существует в другом проекте.
       throw new NotFoundException(`CandidateFollowUpRequest ${requestId} not found`);
     }
     await this.assertOwnedStatus(userId, request.statusId);
@@ -95,7 +108,7 @@ export class InterviewPoolCandidateService {
         candidateConsentConfirmed: true,
       },
     });
-    return { deepLink: `t.me/<bot>?start=share_${shareToken}`, expiresAt };
+    return { deepLink: buildStartDeepLink(`share_${shareToken}`), expiresAt };
   }
 
   /** Пакетний шеринг усього пулу. §2.5 ТЗ: "не можна погодити всіх
@@ -135,7 +148,7 @@ export class InterviewPoolCandidateService {
       })),
     });
 
-    return { deepLink: `t.me/<bot>?start=team_share_${batchToken}`, expiresAt, includedCount: included.length, excludedCount };
+    return { deepLink: buildStartDeepLink(`team_share_${batchToken}`), expiresAt, includedCount: included.length, excludedCount };
   }
 
   /** §4.6 ТЗ — попередній перегляд БЕЗ pipelineStatuses/relevanceEntries,

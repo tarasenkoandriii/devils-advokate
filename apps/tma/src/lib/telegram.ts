@@ -52,6 +52,13 @@ export interface TelegramHapticFeedback {
 
 export interface TelegramWebApp {
   initData: string;
+  /** Пункт [job-landing-attribution] 2026-09-02: сюда Telegram кладёт
+   *  параметр запуска (`start=` у ссылки на бота, `startapp=` у прямой
+   *  ссылки на Mini App) — им лендинг сообщает, с какой посадочной
+   *  пришёл человек. Для АВТОРИЗАЦИИ по-прежнему используется только
+   *  подписанный initData: unsafe-копия годится для метки источника, но
+   *  не для утверждений о правах. */
+  initDataUnsafe?: { start_param?: string };
   ready: () => void;
   expand: () => void;
   close: () => void;

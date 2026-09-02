@@ -19,13 +19,14 @@
 //    сверка возвращает покрытие критериев + нейтральные заметки,
 //    решение «откликаться ли» принимает кандидат.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { JobSearchCriterionCategory, JobVacancyLocationMatch } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { ExtractedJobSearchConfigDraft } from './job-search-onboarding.service';
 import { assertOwnedJobSearchProject } from './job-search-access';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const CV_TASK_TYPE = 'job-search-cv-draft';
 const MATCH_TASK_TYPE = 'job-search-vacancy-match';
@@ -194,7 +195,7 @@ export class JobSearchService {
         validateOutput: isValidCvDraft,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация CV отклонена проверкой безопасности содержимого.');
       }
@@ -206,6 +207,11 @@ export class JobSearchService {
 
     return this.prisma.jobSearchConfig.update({
       where: { id: config.id },
+      // include ОБЯЗАТЕЛЕН (аудит 2026-09-02): экран заменяет конфиг
+      // ответом целиком, и без критериев «Обзор» после генерации CV
+      // показывал «критериев нет», а раскрытие свёренной вакансии
+      // падало на criteria.find(...) — белый экран.
+      include: { criteria: { orderBy: { orderIndex: 'asc' } } },
       data: {
         cvDraft: draft as never,
         cvText,
@@ -247,6 +253,7 @@ export class JobSearchService {
     }
     return this.prisma.jobSearchConfig.update({
       where: { id: config.id },
+      include: { criteria: { orderBy: { orderIndex: 'asc' } } }, // см. generateCvDraft
       data: { cvReviewedAt: new Date() },
     });
   }
@@ -265,7 +272,10 @@ export class JobSearchService {
 
     let rawText: string;
     try {
-      rawText = await fetchUrlText(sourceUrl);
+      // Свой потолок (аудит 2026-09-02): у страниц вакансий условия
+      // часто в самом хвосте, а дефолт fetchUrlText (8000) резал текст
+      // раньше, чем срабатывал наш MAX_VACANCY_TEXT_CHARS.
+      rawText = await fetchUrlText(sourceUrl, MAX_VACANCY_TEXT_CHARS);
     } catch (err) {
       if (err instanceof UnsafeUrlError || err instanceof UrlFetchError) {
         throw new BadRequestException(err.message);
@@ -340,13 +350,24 @@ export class JobSearchService {
         projectId: config.projectId,
         taskType: MATCH_TASK_TYPE,
         systemPrompt: MATCH_SYSTEM_PROMPT,
-        userPrompt: `CV кандидата:\n${config.cvText}\n\nЛокация поиска: ${location}\n\nКритерии:\n${criteriaText || '(критериев нет)'}\n\nТекст страницы вакансии (${vacancy.siteHost}):\n${vacancy.rawText}`,
+        // Ожидания и формат занятости — В ПРОМПТ (аудит 2026-09-02).
+        // Категория критерия COMPENSATION существует и заполняется
+        // онбордингом, но цифры модели не давали: критерий «зарплата не
+        // ниже ожидаемой» почти всегда помечался unknown — то есть
+        // обещанный разбор «по вашим критериям» по этому критерию
+        // молчал. Это ФАКТ для покрытия, а не вердикт: «подходит /
+        // не подходит» по-прежнему запрещено системным промптом.
+        userPrompt:
+          `CV кандидата:\n${config.cvText}\n\nЛокация поиска: ${location}\n` +
+          (config.salaryExpectation ? `Ожидания по оплате: ${config.salaryExpectation}${config.currency ? ` ${config.currency}` : ''}\n` : '') +
+          (config.employmentFormat ? `Желаемый формат занятости: ${config.employmentFormat}\n` : '') +
+          `\nКритерии:\n${criteriaText || '(критериев нет)'}\n\nТекст страницы вакансии (${vacancy.siteHost}):\n${vacancy.rawText}`,
         jsonMode: true,
         maxTokens: 1500,
         validateOutput: isValidMatch,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Сверка отклонена проверкой безопасности содержимого.');
       }
@@ -395,7 +416,13 @@ export class JobSearchService {
         if (v.salaryMentioned) withSalary += 1;
         if (requiredIds.size > 0) {
           const breakdown = (v.matchBreakdown as Array<{ criterionId: string; coverage: string }> | null) ?? [];
-          const coveredRequired = breakdown.filter((b) => requiredIds.has(b.criterionId) && b.coverage === 'covered').length;
+          // Set, а не length (аудит 2026-09-02): модель иногда
+          // возвращает один criterionId дважды, и тогда счётчик
+          // превышал число обязательных критериев — вакансия
+          // переставала считаться полностью покрывающей их.
+          const coveredRequired = new Set(
+            breakdown.filter((b) => requiredIds.has(b.criterionId) && b.coverage === 'covered').map((b) => b.criterionId),
+          ).size;
           if (coveredRequired === requiredIds.size) fullRequiredCoverage += 1;
         }
       } else {

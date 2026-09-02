@@ -1425,8 +1425,45 @@ p {
  * сигнатурной триадой (линия слева, не заливка). */
 
 .jobs-hero {
-  padding-top: 96px;
+  padding-top: 72px;
   text-align: center;
+}
+
+/* Ссылка на главную: страница больше не тупик (аудит 2026-09-02). */
+.jobs-hero__home {
+  display: inline-block;
+  margin-bottom: 20px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+.jobs-hero__home:hover {
+  color: var(--text);
+}
+
+/* Полоса «честных границ» на ПЕРВОМ экране — ТЗ §5 п.3. Развёрнутая
+ * секция остаётся четвёртой по §2; здесь только заголовки, из того же
+ * словаря. */
+.jobs-hero__boundaries {
+  list-style: none;
+  padding: 0;
+  margin: 28px auto 0;
+  max-width: 760px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 10px;
+}
+
+.jobs-hero__boundaries li {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--signal-caution);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 .jobs-hero__badge {
@@ -1539,6 +1576,15 @@ p {
 .jobs-points__title {
   margin: 0 0 8px;
   font-size: 17px;
+}
+
+/* ТЗ §2 п.4: границы — дифференциатор, «не мелкий шрифт». Секция
+ * отделена фоном: аудит 2026-09-02 нашёл, что класс стоял в разметке,
+ * а стилей под него не было — секция ничем не отличалась от соседних. */
+.jobs-boundaries {
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .jobs-boundaries__intro {

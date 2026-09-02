@@ -15,7 +15,7 @@
 // отзывов выходит из области видимости сразу после вызова, не
 // попадает ни в один аргумент create().
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { SecretsService } from '../secrets/secrets.service';
@@ -110,7 +110,14 @@ export class VenueRecommendationService {
           validateOutput: isValidSuitabilityPayload,
         });
       } catch (err) {
-        if (err instanceof ForbiddenException) throw err;
+        // [ai-errors] 2026-09-02: здесь ОСОЗНАННО НЕ общий шлюз
+      // rethrowClientVisibleAiError. Это точка ЧЕСТНОЙ ДЕГРАДАЦИИ:
+      // отсутствие модели (не засеяна база, нет ключа) обязано
+      // деградировать, как и любой другой сбой AI, а не ронять фичу
+      // целиком — иначе шлюз, задуманный как «конфигурация не должна
+      // выглядеть отказом», сам превратил бы конфигурацию в отказ.
+      // Наружу уходит только отсутствие прав.
+      if (err instanceof ForbiddenException) throw err;
         if (err instanceof AIRouterContentBlockedError) continue; // одно заведение отклонено фильтром — пропускаем, не роняем всё
         continue; // AI недоступен для этого конкретного заведения — пропускаем, пробуем следующее
       }

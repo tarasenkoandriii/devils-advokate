@@ -2,7 +2,7 @@
 // порівняльне ранжування по всьому пулу — "радник, не суддя"
 // реалізовано технічно тут, не тільки продекларовано (§2.3 ТЗ).
 
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { CandidateStage } from '@prisma/client';
@@ -81,6 +81,8 @@ export class InterviewPoolRelevanceService {
       throw new BadRequestException('У цього пулу ще немає зафіксованої анкети — нічого порівнювати');
     }
 
+    const knownQuestionIds = new Set(config.questions.map((q: { id: string }) => q.id));
+
     const statuses = await this.prisma.candidatePipelineStatus.findMany({
       where: { projectId },
       include: {
@@ -109,7 +111,13 @@ export class InterviewPoolRelevanceService {
         data: {
           snapshotId: snapshot.id,
           candidateProfileId: status.candidateProfileId,
-          criteriaBreakdown: assessment.criteriaBreakdown as any,
+          // Фильтр по существующим вопросам (аудит 2026-09-02): в
+          // job-search такой есть и прокомментирован, здесь забыли.
+          // Выдуманный моделью questionnaireItemId попадал в БД и в
+          // интерфейс, где вместо текста вопроса рисовался сырой id.
+          criteriaBreakdown: assessment.criteriaBreakdown.filter((b: { questionnaireItemId: string }) =>
+            knownQuestionIds.has(b.questionnaireItemId),
+          ) as any,
           attentionPoints: assessment.attentionPoints,
           followUpRequestsDraft: assessment.followUpRequests,
         },
@@ -119,13 +127,33 @@ export class InterviewPoolRelevanceService {
       // робить сама: організаційний трекінг "чекаємо на матеріали",
       // не рішення про найм.
       if (assessment.followUpRequests.length > 0) {
-        await this.prisma.candidateFollowUpRequest.createMany({
-          data: assessment.followUpRequests.map((text) => ({ statusId: status.id, requestText: text })),
+        // АУДИТ 2026-09-02: пересчёт вызывается после КАЖДОЙ завершённой
+        // собеседования и прогоняет всех кандидатов — без дедупликации
+        // второй прогон создавал вторые копии тех же запросов, третий —
+        // третьи. Отмеченные выполненными «воскресали» рядом с дублями,
+        // и кандидат вечно висел в «ждём материалы».
+        const openRequests = await this.prisma.candidateFollowUpRequest.findMany({
+          where: { statusId: status.id },
+          select: { requestText: true, fulfilled: true },
         });
-        await this.prisma.candidatePipelineStatus.update({
-          where: { id: status.id },
-          data: { stage: CandidateStage.AWAITING_FOLLOWUP },
-        });
+        const knownTexts = new Set(openRequests.map((r: { requestText: string }) => r.requestText));
+        const newRequests = assessment.followUpRequests.filter((text) => !knownTexts.has(text));
+        if (newRequests.length > 0) {
+          await this.prisma.candidateFollowUpRequest.createMany({
+            data: newRequests.map((text) => ({ statusId: status.id, requestText: text })),
+          });
+        }
+        // Стадию двигаем, только если реально чего-то ждём: все запросы
+        // закрыты — не возвращать кандидата назад по воронке.
+        const stillWaiting =
+          newRequests.length > 0 ||
+          openRequests.some((r: { fulfilled: boolean }) => !r.fulfilled);
+        if (stillWaiting) {
+          await this.prisma.candidatePipelineStatus.update({
+            where: { id: status.id },
+            data: { stage: CandidateStage.AWAITING_FOLLOWUP },
+          });
+        }
       }
     }
 
@@ -195,6 +223,13 @@ export class InterviewPoolRelevanceService {
       });
       return JSON.parse(result.text) as RawCandidateAssessment;
     } catch (err) {
+      // [ai-errors] 2026-09-02: здесь ОСОЗНАННО НЕ общий шлюз
+      // rethrowClientVisibleAiError. Это точка ЧЕСТНОЙ ДЕГРАДАЦИИ:
+      // отсутствие модели (не засеяна база, нет ключа) обязано
+      // деградировать, как и любой другой сбой AI, а не ронять фичу
+      // целиком — иначе шлюз, задуманный как «конфигурация не должна
+      // выглядеть отказом», сам превратил бы конфигурацию в отказ.
+      // Наружу уходит только отсутствие прав.
       if (err instanceof ForbiddenException) throw err;
       if (err instanceof AIRouterContentBlockedError) return null;
       // Чесна деградація — збій одного AI-виклику не повинен провалити

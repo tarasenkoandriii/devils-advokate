@@ -352,6 +352,82 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     expect(system).toContain('русский');
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ [router-lanes]: Gemini не берётся на синхронную текстовую задачу, даже будучи первым', async () => {
+    // Найдено аудитом 2026-09-02. Сид заводит capability google РАНЬШЕ
+    // текстовых моделей, а порядок кандидатов — «первая настроенная
+    // выигрывает» (createdAt). При заданном GEMINI_API_KEY подбор
+    // отдавал Gemini ЛЮБУЮ текстовую задачу, а GeminiClient.complete()
+    // всегда бросает «background-only» — падали бы все ~85 AI-фич
+    // проекта. Тот же класс регрессии, что с assemblyai, но фильтр «есть
+    // ли клиент» его не ловит: клиент есть, он просто другой полосы.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-gemini',
+      version: 'gemini-3.7-flash',
+      model: { name: 'gemini-flash', provider: { name: 'google', apiEndpoint: 'https://generativelanguage.googleapis.com', credentialRef: 'GEMINI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-gemini', availability: 'active', vision: true, audio: true });
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    let calledUrl = '';
+    (global as any).fetch = async (url: string) => {
+      calledUrl = String(url);
+      return {
+        ok: true, status: 200, statusText: 'OK',
+        json: async () => openaiSuccessBody,
+        text: async () => JSON.stringify(openaiSuccessBody),
+      };
+    };
+
+    // Ключи есть У ОБОИХ — то есть выбор решает именно полоса.
+    const router = buildRouter(prisma, { GEMINI_API_KEY: 'g-test', OPENAI_API_KEY: 'sk-test' });
+    const job = await router.execute({
+      userId: USER_ID,
+      taskType: 'argument-generation',
+      userPrompt: 'x',
+      jsonMode: true,
+    });
+
+    expect(job.text).toContain('arg1');
+    expect(calledUrl).toContain('api.openai.com'); // не generativelanguage
+    expect(prisma._getJob(job.jobId).modelVersionId).toBe('mv-openai');
+  });
+
+  it('[router-lanes]: медиа-задача через enqueue() уходит именно в Gemini', async () => {
+    // Обратная сторона того же фильтра: фоновую полосу обслуживает
+    // только Gemini, и текстовые модели не должны её перехватывать.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-openai',
+      version: 'gpt-4.1',
+      model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', availability: 'active' });
+    prisma._seedModelVersion({
+      id: 'mv-gemini',
+      version: 'gemini-3.7-flash',
+      model: { name: 'gemini-flash', provider: { name: 'google', apiEndpoint: 'https://generativelanguage.googleapis.com', credentialRef: 'GEMINI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-gemini', availability: 'active', vision: true, audio: true });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'THIRD_PARTY_AUDIO', granted: true, revokedAt: null });
+
+    const router = buildRouter(prisma, { GEMINI_API_KEY: 'g-test', OPENAI_API_KEY: 'sk-test' });
+    const { jobId } = await router.enqueue({
+      userId: USER_ID,
+      taskType: 'media-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'abc' } } as any],
+    });
+
+    expect(prisma._getJob(jobId).modelVersionId).toBe('mv-gemini');
+  });
+
   it('КЛЮЧЕВОЙ ТЕСТ [ai-locale]: база без колонки languageCode не убивает AI-вызов', async () => {
     // РЕГРЕССИЯ 2026-09-02, найдена владельцем в проде: код с колонкой
     // выкатился раньше, чем к базе применили ai_locale_2026_09_02.sql.

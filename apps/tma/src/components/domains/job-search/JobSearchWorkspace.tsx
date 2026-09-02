@@ -19,6 +19,7 @@ import { DomainManifest } from '../../../lib/domains/types';
 import { EntityForm } from '../EntityForm';
 import { money } from '../dtp/dtp-types';
 import { CriteriaByCategory, Criterion, useList, useOne } from '../shared/ConsultationPipeline';
+import { AiErrorNotice } from '../AiErrorNotice';
 
 interface JobSearchConfig {
   id: string;
@@ -91,7 +92,10 @@ const TABS = [
 function VacancyCard({ v, criteria, onChanged }: { v: Vacancy; criteria: Criterion[]; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Пункт [ai-errors-ui] 2026-09-02: храним САМУ ошибку, а не текст —
+  // по httpStatus 403 экран показывает согласие вместо служебной
+  // строки «Consent required: EXTERNAL_AI (userId=…)».
+  const [error, setError] = useState<unknown>(null);
   const criterionText = (id: string) => criteria.find((c) => c.id === id)?.text ?? id;
 
   async function match() {
@@ -101,7 +105,7 @@ function VacancyCard({ v, criteria, onChanged }: { v: Vacancy; criteria: Criteri
       await domainApi.postJson(`/job-search/vacancies/${v.id}/match`, {});
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось сверить вакансию');
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -118,7 +122,7 @@ function VacancyCard({ v, criteria, onChanged }: { v: Vacancy; criteria: Criteri
       </button>
       {open && (
         <div className="dtp-card__body">
-          {error && <p className="generation-error">{error}</p>}
+          <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
           <p>
             <a href={v.sourceUrl} target="_blank" rel="noreferrer">{v.sourceUrl}</a>
           </p>
@@ -173,7 +177,10 @@ export function JobSearchWorkspace({
   const [tick, setTick] = useState(0);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Пункт [ai-errors-ui] 2026-09-02: храним САМУ ошибку, а не текст —
+  // по httpStatus 403 экран показывает согласие вместо служебной
+  // строки «Consent required: EXTERNAL_AI (userId=…)».
+  const [error, setError] = useState<unknown>(null);
   const bump = () => setTick((t) => t + 1);
 
   const { data: vacancies, error: vacError } = useList<Vacancy>(
@@ -190,9 +197,16 @@ export function JobSearchWorkspace({
     setError(null);
     try {
       const updated = await domainApi.postJson(`/job-search/projects/${projectId}/cv/${kind}`, {});
-      onConfigUpdated(updated);
+      // МЕРДЖ, а не замена (аудит 2026-09-02). Ответ эндпоинта — тот же
+      // конфиг, но замена целиком означала: любое поле, которого в нём
+      // не окажется, исчезает из состояния экрана. Так и было с
+      // критериями — «Обзор» после генерации CV писал «критериев нет», а
+      // раскрытие свёренной вакансии падало на criteria.find(). Сервер
+      // теперь отдаёт критерии, но полагаться на форму ответа целиком —
+      // ровно та же ошибка. Так же сделано в family-law.
+      onConfigUpdated({ ...config, ...(updated as Record<string, unknown>) });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось выполнить действие');
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -233,7 +247,7 @@ export function JobSearchWorkspace({
 
       {tab === 'cv' && (
         <section className="domain-panel">
-          {error && <p className="generation-error">{error}</p>}
+          <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
           <p className="card-section__empty">
             Резюме составляет AI по вашему рассказу на онбординге. Пока вы его не утвердили — это черновик;
             повторная генерация снимает утверждение.
@@ -264,7 +278,7 @@ export function JobSearchWorkspace({
 
       {tab === 'vacancies' && (
         <section className="domain-panel">
-          {vacError && <p className="generation-error">{vacError}</p>}
+          <AiErrorNotice error={vacError} />
           <p className="card-section__empty">
             Добавьте ссылку на вакансию — текст страницы сохраняется как есть, без пересказа. Сверка с резюме —
             отдельным действием по каждой вакансии.
@@ -290,7 +304,7 @@ export function JobSearchWorkspace({
 
       {tab === 'stats' && (
         <section className="domain-panel">
-          {statsError && <p className="generation-error">{statsError}</p>}
+          <AiErrorNotice error={statsError} />
           {!stats && !statsError && <p className="card-section__empty">Загрузка…</p>}
           {stats && (
             <>

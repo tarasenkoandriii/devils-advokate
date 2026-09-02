@@ -12,7 +12,7 @@
 // общих поведенческих корреляций... а не жёсткое правило". AI
 // формулирует конкретное обоснование, не абстрактный ярлык.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -20,6 +20,7 @@ import { ConsentService } from '../consent/consent.service';
 import { geocodeCity, getForecast, type Coordinates, type ForecastResult } from './open-meteo-client';
 import { getWindyForecast } from './windy-client';
 import { ConsentType, WeatherRecommendation } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'weather-recommendation';
 const WINDY_API_KEY_REF = 'WINDY_API_KEY';
@@ -183,7 +184,7 @@ export class WeatherForecastService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }

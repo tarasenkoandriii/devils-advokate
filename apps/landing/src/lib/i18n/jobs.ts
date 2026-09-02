@@ -17,6 +17,8 @@ export interface JobsDictionary {
     subheadline: string;
     tabCandidates: string;
     tabAgencies: string;
+    /** Название группы ссылок-аудиторий для скринридера. */
+    tabsLabel: string;
   };
   candidates: {
     title: string;
@@ -26,8 +28,13 @@ export interface JobsDictionary {
   agencies: {
     title: string;
     cta: string;
+    /** ТЗ §4: «Написать нам» для B2B, пока нет формы лидов. */
+    contactCta: string;
     points: Array<{ title: string; description: string }>;
   };
+  /** Ссылка на эту страницу из футера основного лендинга: страница была
+   *  сиротой — ни одной внутренней ссылки (аудит 2026-09-02). */
+  navLabel: string;
   boundaries: {
     title: string;
     intro: string;
@@ -45,6 +52,7 @@ export interface JobsDictionary {
 }
 
 const ru: JobsDictionary = {
+  navLabel: 'Поиск работы и найм',
   meta: {
     title: "Devil's Advocate — подготовка к поиску работы и найму",
     description:
@@ -57,6 +65,7 @@ const ru: JobsDictionary = {
       'Кандидату — CV из его собственных слов и разбор вакансий по его критериям. Агентству — одинаковые вопросы всем кандидатам и прозрачное покрытие вместо «AI-балла».',
     tabCandidates: 'Ищу работу',
     tabAgencies: 'Нанимаю',
+    tabsLabel: 'Выберите аудиторию',
   },
   candidates: {
     title: 'Кандидату: три шага',
@@ -82,6 +91,7 @@ const ru: JobsDictionary = {
   agencies: {
     title: 'Агентству и HR-команде',
     cta: 'Начать в Telegram',
+    contactCta: 'Написать нам',
     points: [
       {
         title: 'Одна анкета — все кандидаты',
@@ -172,6 +182,7 @@ const ru: JobsDictionary = {
 };
 
 const uk: JobsDictionary = {
+  navLabel: 'Пошук роботи та найм',
   meta: {
     title: "Devil's Advocate — підготовка до пошуку роботи та найму",
     description:
@@ -184,6 +195,7 @@ const uk: JobsDictionary = {
       'Кандидату — CV з його власних слів і розбір вакансій за його критеріями. Агенції — однакові питання всім кандидатам і прозоре покриття замість «AI-балу».',
     tabCandidates: 'Шукаю роботу',
     tabAgencies: 'Наймаю',
+    tabsLabel: 'Оберіть аудиторію',
   },
   candidates: {
     title: 'Кандидату: три кроки',
@@ -209,6 +221,7 @@ const uk: JobsDictionary = {
   agencies: {
     title: 'Агенції та HR-команді',
     cta: 'Почати в Telegram',
+    contactCta: 'Написати нам',
     points: [
       {
         title: 'Одна анкета — всі кандидати',
@@ -265,6 +278,7 @@ const uk: JobsDictionary = {
 };
 
 const en: JobsDictionary = {
+  navLabel: 'Jobs and hiring',
   meta: {
     title: "Devil's Advocate — prepare for a job search or for hiring",
     description:
@@ -277,6 +291,7 @@ const en: JobsDictionary = {
       'Candidates get a CV built from their own words and vacancy breakdowns against their criteria. Agencies get identical questions for every candidate and transparent coverage instead of an “AI score”.',
     tabCandidates: 'I’m job hunting',
     tabAgencies: 'I’m hiring',
+    tabsLabel: 'Choose your audience',
   },
   candidates: {
     title: 'For candidates: three steps',
@@ -302,6 +317,7 @@ const en: JobsDictionary = {
   agencies: {
     title: 'For agencies and HR teams',
     cta: 'Start in Telegram',
+    contactCta: 'Email us',
     points: [
       { title: 'One questionnaire — every candidate', description: 'AI proposes questions for the role, a human approves them. Every candidate in the pool answers the same set — comparison becomes fair.' },
       { title: 'Coverage instead of an “AI score”', description: 'A transparent metric: how many required questions were actually asked and covered in completed interviews. No hidden rating of people.' },
@@ -335,7 +351,7 @@ const en: JobsDictionary = {
       { q: 'Which job sites are supported?', a: 'Any of them: you bring a link to a vacancy page and the product analyses exactly that page. No site is “integrated” or privileged.' },
       { q: 'Does AI decide whether I fit a vacancy?', a: 'No. The breakdown shows the coverage of your criteria and what to clarify. The words “fit” or “no fit” are deliberately absent.' },
       { q: 'How do agencies compare candidates?', a: 'By coverage of the same approved questionnaire across completed interviews — a transparent countable metric, not a hidden score.' },
-      { q: 'What does it cost?', a: 'The product is launching — current terms are in the bot. There are no paid CV “boosts” or ranking priorities, and there never will be a hidden kind.' },
+      { q: 'What does it cost?', a: 'The product is launching — current terms are in the bot. There are no paid CV “boosts” or ranking priorities.' },
     ],
   },
   finalCta: { title: 'Ready to try?', candidates: 'I’m job hunting', agencies: 'I’m hiring' },

@@ -16,7 +16,11 @@ const ARR: Record<string, string> = { OFFICE: 'офис', REMOTE: 'удалён�
 const GENDER: Record<string, string> = { NOT_IMPORTANT: 'не важен', MALE: 'мужчины', FEMALE: 'женщины', OTHER: 'иное' };
 
 export function InterviewPoolOverview({ config, projectId }: { config: IpConfig; projectId: string }) {
-  const { data: flags } = useList<ComplianceFlag>(`/interview-pool/projects/${projectId}/compliance-flags`);
+  // АУДИТ 2026-09-02: поле error отбрасывалось, и при сбое загрузки
+  // блок флагов оказывался ПУСТЫМ — неотличимо от «спорных формулировок
+  // не найдено». Для проверки на дискриминационные требования молчание
+  // опаснее ошибки: пользователь уверен, что всё чисто.
+  const { data: flags, error: flagsError } = useList<ComplianceFlag>(`/interview-pool/projects/${projectId}/compliance-flags`);
   const restrictive = config.genderRequirement !== 'NOT_IMPORTANT' || config.ageRequirement === 'RANGE';
   return (
     <section className="dtp-overview">
@@ -42,7 +46,8 @@ export function InterviewPoolOverview({ config, projectId }: { config: IpConfig;
       )}
 
       <h3>Флаги соответствия</h3>
-      {flags && flags.length === 0 && <p className="dtp-status dtp-status--ok">В описании вакансии спорных формулировок не найдено.</p>}
+      {flagsError && <p className="generation-error">Не удалось загрузить флаги соответствия: {String(flagsError)}. Это НЕ значит, что спорных формулировок нет — проверка не выполнена.</p>}
+      {!flagsError && flags && flags.length === 0 && <p className="dtp-status dtp-status--ok">В описании вакансии спорных формулировок не найдено.</p>}
       {flags && flags.length > 0 && <p className="dtp-status dtp-status--warn">{flags.length} формулировк{flags.length === 1 ? 'а' : flags.length < 5 ? 'и' : ''} стоит пересмотреть до публикации — приложение не запрещает, только показывает.</p>}
       {flags?.map((f) => (
         <div key={f.id} className="dtp-card" style={{ width: '100%' }}><div className="dtp-card__body">

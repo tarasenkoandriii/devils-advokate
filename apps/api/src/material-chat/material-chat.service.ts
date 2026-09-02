@@ -19,7 +19,7 @@
 // (title, критика, editPrompt последней версии) — тот же принцип
 // locality, что во всём §3.27.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -30,6 +30,7 @@ import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { MaterialChatMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'material-chat';
 const MAX_MESSAGES_PER_SESSION = 40; // тот же потолок, что у спарринга (Пункт 55) — та же цена растущей истории в каждом вызове
@@ -230,7 +231,7 @@ export class MaterialChatService {
         preferredModelVersionId: engineId,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Запрос отклонён проверкой безопасности содержимого.');
       }

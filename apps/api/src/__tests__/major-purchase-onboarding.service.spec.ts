@@ -51,6 +51,28 @@ function createFakePrisma() {
         conversations.set(conv.id, conv);
         return conv;
       },
+      // Пункт [onboarding-continuity] 2026-09-02: хелпер сначала ищет
+      // уже существующий онбординг-разговор проекта — фейку нужен
+      // findFirst, иначе повторный вызов снова плодил бы разговоры.
+      findFirst: async ({ where, include }: any) => {
+        const found = [...conversations.values()]
+          .filter((c: any) => c.projectId === where.projectId && c.sourceType === where.sourceType)
+          // Ревью 2026-09-02: хелпер отсекает чужие TEXT_IMPORT-разговоры
+          // (импорт переписки) по участнику SELF и наличию транскрипта —
+          // фейк обязан считать так же, иначе тест «не подхватываем чужой
+          // разговор» проходил бы сам собой.
+          .filter((c: any) => !where.participants || [...participants.values()].some(
+            (p: any) => p.conversationId === c.id && p.isSelf && p.diarizationLabel === 'SELF',
+          ))
+          .filter((c: any) => !where.transcript || transcripts.get(c.id) != null)[0];
+        if (!found) return null;
+        if (!include) return found;
+        return {
+          ...found,
+          transcript: transcripts.get(found.id) ?? null,
+          participants: [...participants.values()].filter((p: any) => p.conversationId === found.id && p.isSelf),
+        };
+      },
       findUnique: async ({ where, include }: any) => {
         const conv = conversations.get(where.id);
         if (!conv) return null;

@@ -11,6 +11,17 @@ function createFakePrisma() {
   const nextId = () => `id-${++idCounter}`;
 
   const client: any = {
+    /** Импортированная переписка: тот же sourceType TEXT_IMPORT и
+     *  транскрипт, но участники — IMPORTED_*, не SELF. Ревью
+     *  2026-09-02: именно её онбординг НЕ должен принимать за свой. */
+    _seedImportedChat(projectId: string) {
+      const conv = { id: nextId(), projectId, sourceType: 'TEXT_IMPORT', createdAt: new Date(0) };
+      conversations.set(conv.id, conv);
+      const p1 = { id: nextId(), conversationId: conv.id, diarizationLabel: 'IMPORTED_0', isSelf: false };
+      participants.set(p1.id, p1);
+      transcripts.set(conv.id, { id: nextId(), conversationId: conv.id });
+      return conv;
+    },
     _seedProject(p: any) {
       const project = { id: nextId(), ...p };
       projects.set(project.id, project);
@@ -33,6 +44,28 @@ function createFakePrisma() {
         const conv = { id: nextId(), ...data };
         conversations.set(conv.id, conv);
         return conv;
+      },
+      // Пункт [onboarding-continuity] 2026-09-02: хелпер сначала ищет
+      // уже существующий онбординг-разговор проекта — фейку нужен
+      // findFirst, иначе повторный вызов снова плодил бы разговоры.
+      findFirst: async ({ where, include }: any) => {
+        const found = [...conversations.values()]
+          .filter((c: any) => c.projectId === where.projectId && c.sourceType === where.sourceType)
+          // Ревью 2026-09-02: хелпер отсекает чужие TEXT_IMPORT-разговоры
+          // (импорт переписки) по участнику SELF и наличию транскрипта —
+          // фейк обязан считать так же, иначе тест «не подхватываем чужой
+          // разговор» проходил бы сам собой.
+          .filter((c: any) => !where.participants || [...participants.values()].some(
+            (p: any) => p.conversationId === c.id && p.isSelf && p.diarizationLabel === 'SELF',
+          ))
+          .filter((c: any) => !where.transcript || transcripts.get(c.id) != null)[0];
+        if (!found) return null;
+        if (!include) return found;
+        return {
+          ...found,
+          transcript: transcripts.get(found.id) ?? null,
+          participants: [...participants.values()].filter((p: any) => p.conversationId === found.id && p.isSelf),
+        };
       },
       findUnique: async ({ where, include }: any) => {
         const conv = conversations.get(where.id);
@@ -152,6 +185,48 @@ describe('DtpOnboardingService', () => {
 
     expect(draft.criteria.some((c) => c.category === 'INSURANCE_COVERAGE')).toBe(false);
     expect(draft.criteria.length).toBe(2);
+  });
+
+  it('КЛЮЧОВИЙ ТЕСТ [onboarding-continuity]: повторний виклик повертає ТОЙ САМИЙ розмову, а не створює нову', async () => {
+    // Знайдено аудитом 2026-09-02. Екран домену в TMA викликає це
+    // щоразу, коли не знає conversationId, — а не знав він його завжди:
+    // intake повертав id, перехід на екран його викидав. Кожен вхід
+    // створював порожню розмову, і відповіді голосової вікторини
+    // залишалися в першій, недосяжній. Обіцянка «дані не доведеться
+    // вводити повторно» не працювала жодного разу.
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const service = makeService(
+      prisma,
+      createFakeAiRouter(JSON.stringify({ goalDescription: 'Опис', criteria: [] })),
+    );
+
+    const first = await service.createOnboardingConversation('u1', project.id);
+    await service.appendAnswer('u1', first.conversation.id, 'Відповідь з вікторини');
+    const second = await service.createOnboardingConversation('u1', project.id);
+
+    expect(second.conversation.id).toBe(first.conversation.id);
+    expect(second.reused).toBe(true);
+    // І сама відповідь на місці — extract її бачить (на порожній
+    // розмові він відхиляє запит, див. наступний тест).
+    await expect(service.extract('u1', second.conversation.id)).resolves.toBeDefined();
+  });
+
+  it('КЛЮЧОВИЙ ТЕСТ [onboarding-continuity]: імпортована переписка НЕ приймається за онбординг-розмову', async () => {
+    // Ревью 2026-09-02: chat-import створює розмови з тим самим
+    // sourceType TEXT_IMPORT, статусом і транскриптом. Якби хелпер
+    // розрізняв їх лише за sourceType, відповіді онбордингу дописалися б
+    // у транскрипт чужої переписки, а extract прочитав би весь чат як
+    // відповіді користувача.
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const imported = prisma._seedImportedChat(project.id);
+    const service = makeService(prisma, createFakeAiRouter(JSON.stringify({ goalDescription: 'Опис', criteria: [] })));
+
+    const created = await service.createOnboardingConversation('u1', project.id);
+
+    expect(created.conversation.id).not.toBe(imported.id);
+    expect(created.reused).toBe(false);
   });
 
   it('extract на порожній розмові відхиляється, не викликає AI даремно', async () => {

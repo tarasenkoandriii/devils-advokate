@@ -5,7 +5,7 @@
 // (comparison-table / budget / json-панели). Всё из манифеста.
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { getManifest } from '../../../../lib/domains/manifests';
 import { domainApi } from '../../../../lib/domains/api';
 import { DomainOnboarding } from '../../../../components/domains/DomainOnboarding';
@@ -27,6 +27,11 @@ import { LiveHintsSession } from '../../../../components/LiveHintsSession';
 export default function DomainProjectPage() {
   const params = useParams<{ domain: string; projectId: string }>();
   const router = useRouter();
+  // Пункт [onboarding-continuity] 2026-09-02: ?c=<conversationId> —
+  // разговор, в который intake уже сложил ответы голосового квиза. Без
+  // него экран открывал НОВЫЙ пустой разговор, и «Извлечь конфиг»
+  // отвечал «в этом онбординг-разговоре пока нет ответов».
+  const conversationIdFromIntake = useSearchParams().get('c');
   const manifest = getManifest(params.domain);
   const [config, setConfig] = useState<Record<string, any> | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +57,7 @@ export default function DomainProjectPage() {
     return (
       <main className="page">
         <p><Link href={`/domains/${manifest.id}`}>← {manifest.title}</Link></p>
-        <DomainOnboarding manifest={manifest} projectId={params.projectId} conversationId={null} onConfigCreated={(c) => { setConfig(c); setTab('overview'); }} />
+        <DomainOnboarding manifest={manifest} projectId={params.projectId} conversationId={conversationIdFromIntake} onConfigCreated={(c) => { setConfig(c); setTab('overview'); }} />
       </main>
     );
   }

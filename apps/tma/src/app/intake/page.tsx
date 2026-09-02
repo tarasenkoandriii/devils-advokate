@@ -15,6 +15,7 @@ import { ConsentGate } from '../../components/ConsentGate';
 import { hasConsent, listConsents } from '../../lib/features';
 import { useBackButton } from '../../hooks/useBackButton';
 import { haptic } from '../../lib/telegram';
+import { currentStartAttribution } from '../../lib/start-param';
 
 function scenarioTitle(s: IntakeScenario): string {
   if (s === 'UNIVERSAL') return 'Универсальный сценарий';
@@ -32,6 +33,18 @@ function scenarioTitle(s: IntakeScenario): string {
  *  следующий такой сценарий обработается сам. */
 function isDispatchable(s: IntakeScenario | null): s is IntakeScenario {
   return s === 'UNIVERSAL' || (s !== null && getManifest(s) != null);
+}
+
+/** Метка источника для первой сессии квиза (§4 ТЗ job-landing).
+ *
+ *  ТОЛЬКО для посадочных. Ревью 2026-09-02: без этого условия в
+ *  intake_sessions.source уезжал бы токен приглашения
+ *  (`share_<секрет>`) — действующий секрет в аналитической колонке и в
+ *  отчётном SQL. Атрибуция осмысленна лишь там, где источник известен. */
+function startAttribution(): { source?: string; campaign?: string } | undefined {
+  const parsed = currentStartAttribution();
+  if (!parsed || !parsed.audience) return undefined;
+  return { source: parsed.source, ...(parsed.campaign ? { campaign: parsed.campaign } : {}) };
 }
 
 export default function IntakePage() {
@@ -54,7 +67,9 @@ export default function IntakePage() {
     if (!draft.trim()) return;
     setBusy(true); setError(null);
     try {
-      const next = session ? await intakeApi.answer(session.id, draft.trim()) : await intakeApi.start(draft.trim());
+      const next = session
+        ? await intakeApi.answer(session.id, draft.trim())
+        : await intakeApi.start(draft.trim(), startAttribution());
       setSession(next); setDraft(''); haptic('light');
       if (next.decision) setChosen(next.decision.scenario);
     } catch (e) {
@@ -69,7 +84,17 @@ export default function IntakePage() {
     try {
       const res = await intakeApi.dispatch(session.id, scenario, scenario === 'family-law' ? (contractType || session.extracted?.contractType || undefined) : undefined);
       haptic('success');
-      router.push(scenario === 'UNIVERSAL' ? `/projects/${res.projectId}` : `/domains/${scenario}/${res.projectId}`);
+      // Пункт [onboarding-continuity] 2026-09-02: conversationId
+      // ПРОКИДЫВАЕТСЯ дальше. Раньше он здесь терялся, экран домена
+      // открывал новый пустой разговор, и ответы квиза оставались в
+      // первом — «данные не придётся вводить повторно» не работало ни
+      // разу. Сервер теперь тоже не плодит разговоры, но параметр
+      // избавляет от лишнего запроса и делает связь явной.
+      router.push(
+        scenario === 'UNIVERSAL'
+          ? `/projects/${res.projectId}`
+          : `/domains/${scenario}/${res.projectId}${res.conversationId ? `?c=${res.conversationId}` : ''}`,
+      );
     } catch (e) {
       haptic('error');
       setError(e instanceof Error ? e.message : 'Не удалось передать в сценарий');

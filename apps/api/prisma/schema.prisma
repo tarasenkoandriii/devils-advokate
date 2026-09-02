@@ -6245,11 +6245,25 @@ model IntakeSession {
   dispatchedProjectId String?
   dispatchedAt        DateTime?
 
+  // Пункт [job-landing-attribution] 2026-09-02 — пререквизит §4 ТЗ
+  // job-landing, до этого прямо зафиксированный как невыполненный:
+  // лендинг слал start-параметр, а класть его было некуда, и вопрос
+  // «какая посадочная привела человека» оставался без ответа при живой
+  // рекламе. source — сырой параметр запуска Telegram
+  // (jobs_landing / recruiting_landing), campaign — метка источника
+  // рекламы (utm_source лендинга). Оба необязательны: прямой вход в
+  // бота параметров не несёт, и это нормальное состояние.
+  source   String?
+  campaign String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, status])
   @@index([status, updatedAt])
+  // Отчёт «сколько сессий пришло с /jobs и чем закончились» — по этому
+  // индексу; без него это seq scan по всей таблице.
+  @@index([source, createdAt])
   @@map("intake_sessions")
 }
 

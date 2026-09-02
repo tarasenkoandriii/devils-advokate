@@ -32,10 +32,11 @@
 // description у Turning Points, не отдельным полем на каждый сигнал
 // ради одного значения на batch-вызов.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'manipulation-detection';
 
@@ -112,7 +113,7 @@ export class ManipulationDetectorService {
         validateOutput: isValidManipulationPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Анализ отклонён проверкой безопасности содержимого транскрипта.');
       }

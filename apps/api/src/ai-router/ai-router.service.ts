@@ -17,12 +17,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { ContentScanService } from '../content-scan/content-scan.service';
+import { providerHasUsableKey } from '../common/provider-key';
 import {
   AIProviderCompletionParams,
   ContentBlock,
   requiresMedia,
   selectProviderClient,
+  providerSupportsLane,
   isProviderClientRegistered,
+  AILane,
   EXTERNAL_INTERACTION_MAX_WAIT_MS,
   ProviderHttpError,
 } from './ai-provider-client';
@@ -198,7 +201,7 @@ export class AIRouterService {
       );
     }
 
-    const prepared = await this.prepareJob(request, true);
+    const prepared = await this.prepareJob(request, 'sync', true);
     if (prepared.reused) {
       return prepared.reused;
     }
@@ -224,7 +227,7 @@ export class AIRouterService {
    * но вместо вызова провайдера джоба остаётся QUEUED с сериализованным
    * запросом; исполняет её воркер (submitQueued/pollRunning). */
   async enqueue(request: AIRouterRequest): Promise<{ jobId: string }> {
-    const prepared = await this.prepareJob(request);
+    const prepared = await this.prepareJob(request, 'background');
 
     const payload: PendingRequestPayload = {
       userId: prepared.sanitizedRequest.userId,
@@ -253,7 +256,7 @@ export class AIRouterService {
   /** Общий пролог execute()/enqueue() — ТЗ §4.4 требует именно общий
    * метод, а не копию: копия проверки в каждой точке — способ
    * разъехаться, уже дважды стоивший дыр (см. ConsentService). */
-  private async prepareJob(request: AIRouterRequest, allowReuse = false) {
+  private async prepareJob(request: AIRouterRequest, lane: AILane, allowReuse = false) {
     // Согласие на внешний AI — для любых вызовов.
     await this.consent.requireConsent(request.userId, ConsentType.EXTERNAL_AI, request.projectId);
 
@@ -294,6 +297,7 @@ export class AIRouterService {
     const modelVersion = await this.resolveModelVersion(
       sanitizedRequest.taskType,
       sanitizedRequest.preferredModelVersionId,
+      lane,
       requiresMedia(sanitizedRequest.userPrompt),
     );
 
@@ -482,7 +486,8 @@ export class AIRouterService {
    */
   private async resolveModelVersion(
     taskType: string,
-    preferredId?: string,
+    preferredId: string | undefined,
+    lane: AILane,
     needsMedia = false,
   ): Promise<ModelVersionWithProvider> {
     const rows = await this.prisma.aIModelCapability.findMany({
@@ -499,10 +504,32 @@ export class AIRouterService {
     // кандидаты и роняла обе попытки. Так осталась висеть capability
     // транскрибации после [router-simplify]: раньше её отсекал фильтр по
     // taskType. Отсутствие клиента — признак «не кандидат», а не сбой.
-    const candidates = rows.filter((c) => isProviderClientRegistered(c.modelVersion.model.provider.name));
-    const withoutClient = rows
-      .filter((c) => !isProviderClientRegistered(c.modelVersion.model.provider.name))
-      .map((c) => c.modelVersion.model.provider.name);
+    //
+    // Пункт [router-lanes] 2026-09-02 — вторая половина того же
+    // признака. Клиент есть не значит «этой задаче подходит»: Gemini
+    // обслуживает только фоновую полосу, и на текстовом синхронном
+    // вызове падал бы на «GeminiClient is background-only». А его
+    // capability сид заводит РАНЬШЕ текстовых моделей, то есть при
+    // заданном GEMINI_API_KEY он выигрывал подбор у всех.
+    const candidates: typeof rows = [];
+    const otherLane: string[] = [];
+    const withoutClient: string[] = [];
+    for (const row of rows) {
+      const name = row.modelVersion.model.provider.name;
+      if (providerSupportsLane(name, lane)) candidates.push(row);
+      else if (isProviderClientRegistered(name)) otherLane.push(name);
+      else withoutClient.push(name);
+    }
+    // Разные уровни намеренно (ревью 2026-09-02): «Gemini не берётся на
+    // синхронную задачу» — норма при засеянной базе, и WARN об этом на
+    // КАЖДОМ вызове приучал бы не читать логи. А вот активная строка
+    // провайдера, которому нечем отправить запрос, — конфигурация БД,
+    // которую надо чинить.
+    if (otherLane.length > 0) {
+      this.logger.debug(
+        `Пропущены модели другой полосы (${lane}): ${[...new Set(otherLane)].join(', ')}`,
+      );
+    }
     if (withoutClient.length > 0) {
       this.logger.warn(
         `Пропущены активные модели провайдеров без клиента: ${[...new Set(withoutClient)].join(', ')}. ` +
@@ -549,14 +576,8 @@ export class AIRouterService {
   /** Ключ провайдера реально доступен в окружении. Ровно этот вопрос
    *  раньше не задавался: роутер брал первую настроенную модель и падал
    *  на 401 у провайдера, чьего ключа в проекте нет вообще. */
-  private async hasUsableKey(provider: { apiEndpoint: string | null; credentialRef: string | null }): Promise<boolean> {
-    if (!provider.apiEndpoint || !provider.credentialRef) return false;
-    try {
-      await this.secrets.resolve(provider.credentialRef);
-      return true;
-    } catch {
-      return false;
-    }
+  private hasUsableKey(provider: { apiEndpoint: string | null; credentialRef: string | null }): Promise<boolean> {
+    return providerHasUsableKey(this.secrets, provider);
   }
 
   private async attemptWithRetryAndFallback(

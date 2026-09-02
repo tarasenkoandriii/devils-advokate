@@ -19,11 +19,12 @@
 // не жёсткий технический гейт с конкретным местом внедрения. Честно
 // зафиксировано как out of scope, не встроено молча наполовину.
 
-import { BadGatewayException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadGatewayException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { buildUserPrompt } from '../arguments/argument-generation.service';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'missing-information-detection';
 
@@ -70,7 +71,7 @@ export class MissingInformationService {
         validateOutput: isValidQuestionsPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw err;
       }

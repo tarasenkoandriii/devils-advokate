@@ -113,7 +113,24 @@ export interface AIProviderCompletionResult {
   usage?: { promptTokens?: number; completionTokens?: number };
 }
 
+/**
+ * Полоса исполнения. Пункт [router-lanes] 2026-09-02.
+ *
+ * Синхронная — execute(): ответ нужен в пределах serverless-функции.
+ * Фоновая — enqueue(): задача ставится в очередь, её добирают
+ * submitQueued/pollRunning; только эта полоса умеет медиа.
+ *
+ * Полоса — СВОЙСТВО КЛИЕНТА, а не провайдера или задачи: GeminiClient
+ * реализует complete(), но синхронный путь у него намеренно закрыт
+ * (медиа-вызов не помещается в maxDuration). Утиная проверка «есть ли
+ * метод complete» этого не видит — поэтому каждый клиент объявляет свои
+ * полосы сам, и забыть объявление нельзя: поле обязательное.
+ */
+export type AILane = 'sync' | 'background';
+
 export interface AIProviderClient {
+  /** Полосы, которые этот клиент реально обслуживает. */
+  readonly lanes: readonly AILane[];
   complete(
     params: AIProviderCompletionParams,
     credentials: { apiKey: string; apiEndpoint: string },
@@ -125,6 +142,8 @@ export interface AIProviderClient {
  * xAI Grok (Grok API OpenAI-совместим), поэтому один клиент на оба.
  */
 export class OpenAiCompatibleClient implements AIProviderClient {
+  readonly lanes = ['sync'] as const;
+
   async complete(
     params: AIProviderCompletionParams,
     credentials: { apiKey: string; apiEndpoint: string },
@@ -191,6 +210,8 @@ export class OpenAiCompatibleClient implements AIProviderClient {
  * Bearer, system как отдельное top-level поле, content — массив блоков).
  */
 export class AnthropicClient implements AIProviderClient {
+  readonly lanes = ['sync'] as const;
+
   async complete(
     params: AIProviderCompletionParams,
     credentials: { apiKey: string; apiEndpoint: string },
@@ -263,6 +284,20 @@ export const PROVIDERS_WITH_CLIENT = ['openai', 'xai', 'anthropic', 'google'] as
 
 export function isProviderClientRegistered(providerName: string): boolean {
   return (PROVIDERS_WITH_CLIENT as readonly string[]).includes(providerName);
+}
+
+/**
+ * Обслуживает ли клиент провайдера нужную полосу. Пункт [router-lanes]
+ * 2026-09-02 — второй признак «не кандидат» рядом с отсутствием клиента
+ * и отсутствием ключа.
+ *
+ * Спрашиваем сам клиент, а не список имён: список пришлось бы держать в
+ * синхронности с selectProviderClient вручную, а это ровно тот способ
+ * разъехаться, который уже стоил проекту двух регрессий подряд.
+ */
+export function providerSupportsLane(providerName: string, lane: AILane): boolean {
+  if (!isProviderClientRegistered(providerName)) return false;
+  return selectProviderClient(providerName).lanes.includes(lane);
 }
 
 /** Выбор клиента по имени провайдера (`AIProvider.name` из схемы). */

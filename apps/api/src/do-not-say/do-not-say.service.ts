@@ -33,11 +33,12 @@
 // проекта разом, встроенный в ConversationCardService.get() —
 // карточка и есть тот самый проактивный пре-разговорный экран (§3.44).
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SelfRiskCategory } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'do-not-say-detection';
 
@@ -114,7 +115,7 @@ export class DoNotSayService {
         validateOutput: isValidDoNotSayPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Анализ отклонён проверкой безопасности содержимого транскрипта.');
       }

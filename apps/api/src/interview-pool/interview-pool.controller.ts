@@ -237,10 +237,13 @@ export class InterviewPoolController {
   @Patch('interview-pool/pipeline-statuses/:statusId/follow-up/:id')
   async markFollowUp(
     @CurrentUser() userId: string,
+    @Param('statusId') statusId: string,
     @Param('id') requestId: string,
     @Body() dto: MarkFollowUpDto,
   ) {
-    return this.candidates.markFollowUpFulfilled(userId, requestId, dto.fulfilled);
+    // statusId из маршрута ОБЯЗАН совпадать с владельцем записи: по
+    // нему ProjectFrozenGuard определяет проект (аудит 2026-09-02).
+    return this.candidates.markFollowUpFulfilled(userId, statusId, requestId, dto.fulfilled);
   }
 
   @Get('interview-pool/pipeline-statuses/:statusId/follow-up')

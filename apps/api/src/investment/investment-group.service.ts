@@ -9,6 +9,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MoneyLike, sumMoney } from '../common/money';
 import { InvestmentGroupRole } from '@prisma/client';
+import { buildStartDeepLink } from '../common/telegram-deep-link';
 
 const INVITE_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // той самий горизонт, що RecruitingTeamInvite
 
@@ -47,7 +48,7 @@ export class InvestmentGroupService {
     await this.prisma.investmentGroupInvite.create({
       data: { groupId, token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) },
     });
-    return { deepLink: `t.me/<bot>?start=investment_group_${token}`, token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) };
+    return { deepLink: buildStartDeepLink(`investment_group_${token}`), token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) };
   }
 
   async joinGroup(userId: string, token: string) {

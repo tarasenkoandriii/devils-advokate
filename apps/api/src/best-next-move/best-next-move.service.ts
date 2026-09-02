@@ -27,10 +27,11 @@
 // инструкции) — дефолтный промпт запрашивает их всегда, но парсинг
 // не падает, если AI их не прислал.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConversationProcessingStatus } from '@prisma/client';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const TASK_TYPE = 'best-next-move-detection';
 
@@ -118,7 +119,7 @@ export class BestNextMoveService {
         validateOutput: isValidRecommendationPayload,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Анализ отклонён проверкой безопасности содержимого транскрипта.');
       }

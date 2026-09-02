@@ -1,11 +1,13 @@
 // Пункт [dtp] (devils-advocate-dtp-tz.md §5.1): онбординг-квіз — той
 // самий текстовий шлях без STT, що вже п'ять разів реалізований.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { ConversationProcessingStatus, ConversationSourceType, ProjectMode, DtpCriterionCategory } from '@prisma/client';
+import { ProjectMode, DtpCriterionCategory } from '@prisma/client';
 import { assertOwnedDtpProject } from './dtp-access';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { ensureOnboardingConversation } from '../common/onboarding-conversation';
 
 const TASK_TYPE = 'dtp-onboarding-extract';
 
@@ -75,21 +77,10 @@ export class DtpOnboardingService {
   async createOnboardingConversation(userId: string, projectId: string) {
     await assertOwnedDtpProject(this.prisma, userId, projectId);
 
-    return this.prisma.$transaction(async (tx) => {
-      const conversation = await tx.conversation.create({
-        data: {
-          projectId,
-          sourceType: ConversationSourceType.TEXT_IMPORT,
-          status: ConversationProcessingStatus.TRANSCRIBED,
-          occurredAt: new Date(),
-        },
-      });
-      const participant = await tx.conversationParticipant.create({
-        data: { conversationId: conversation.id, diarizationLabel: 'SELF', isSelf: true },
-      });
-      const transcript = await tx.transcript.create({ data: { conversationId: conversation.id } });
-      return { conversation, participant, transcript };
-    });
+    // Пункт [onboarding-continuity] 2026-09-02: разговор ОДИН на проект.
+    // Раньше каждый вызов создавал новый, и ответы голосового квиза
+    // оставались в первом, недостижимом с экрана домена (см. хелпер).
+    return ensureOnboardingConversation(this.prisma, projectId);
   }
 
   async appendAnswer(userId: string, conversationId: string, text: string) {
@@ -137,7 +128,7 @@ export class DtpOnboardingService {
         validateOutput: isValidExtraction,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Извлечение отклонено проверкой безопасности содержимого.');
       }

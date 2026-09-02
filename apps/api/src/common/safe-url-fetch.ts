@@ -71,7 +71,13 @@ export function isUrlSafeToFetch(rawUrl: string): boolean {
 
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_RESPONSE_BYTES = 2_000_000; // 2MB — достаточно для текстовой веб-страницы, не для видео/архивов
-const MAX_EXTRACTED_TEXT_LENGTH = 8000; // ограничение на то, сколько текста реально уходит в AI-промпт
+/** Сколько текста страницы реально уходит в AI-промпт по умолчанию.
+ *  Вызывающий может попросить больше (job-search: страницы вакансий
+ *  длиннее — условия часто в самом хвосте). Аудит 2026-09-02: у
+ *  job-search стоял собственный потолок 12 000, который не срабатывал
+ *  НИКОГДА — текст приходил уже обрезанным здесь до 8000, и хвост с
+ *  условиями терялся на треть раньше, чем задумано. */
+const MAX_EXTRACTED_TEXT_LENGTH = 8000;
 
 export class UnsafeUrlError extends Error {
   constructor(url: string) {
@@ -110,7 +116,7 @@ function extractTextFromHtml(html: string): string {
 /** Скачивает URL и возвращает извлечённый текст, обрезанный до
  * разумной длины. Бросает UnsafeUrlError/UrlFetchError — вызывающий
  * код решает, как их превращать в HTTP-ответ. */
-export async function fetchUrlText(rawUrl: string): Promise<string> {
+export async function fetchUrlText(rawUrl: string, maxTextLength = MAX_EXTRACTED_TEXT_LENGTH): Promise<string> {
   if (!isUrlSafeToFetch(rawUrl)) {
     throw new UnsafeUrlError(rawUrl);
   }
@@ -150,5 +156,5 @@ export async function fetchUrlText(rawUrl: string): Promise<string> {
     throw new UrlFetchError(`Не удалось извлечь текст из ${rawUrl} — возможно, страница не текстовая (изображение/видео/защищённый контент)`);
   }
 
-  return text.slice(0, MAX_EXTRACTED_TEXT_LENGTH);
+  return text.slice(0, Math.max(1, maxTextLength));
 }

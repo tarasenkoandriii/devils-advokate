@@ -20,6 +20,18 @@ function createFakePrisma() {
   };
 }
 
+/** Секреты: по умолчанию ключ есть у всех — тесты ниже про маппинг.
+ *  Пункт 2026-09-02: селектор больше не предлагает движки, которыми
+ *  нельзя воспользоваться (нет ключа или другая полоса исполнения). */
+function fakeSecrets(missing: string[] = []) {
+  return {
+    resolve: async (ref: string) => {
+      if (missing.includes(ref)) throw new Error(`Secret not found for credentialRef "${ref}"`);
+      return 'sk-test';
+    },
+  };
+}
+
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
@@ -41,10 +53,10 @@ async function run() {
       modelVersion: {
         id: 'mv-1',
         version: 'gpt-4.1',
-        model: { name: 'gpt-4.1', provider: { name: 'openai' } },
+        model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } },
       },
     });
-    const controller = new AIEnginesController(prisma as any);
+    const controller = new AIEnginesController(prisma as any, fakeSecrets() as any);
 
     const result = await controller.list('argument-generation');
     assertEqual(result.length, 1, 'одна доступная модель найдена');
@@ -61,9 +73,9 @@ async function run() {
       availability: 'active',
       latencyClass: null,
       costClass: null,
-      modelVersion: { id: 'mv-1', version: 'v1', model: { name: 'm', provider: { name: 'p' } } },
+      modelVersion: { id: 'mv-1', version: 'v1', model: { name: 'm', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } },
     });
-    const controller = new AIEnginesController(prisma as any);
+    const controller = new AIEnginesController(prisma as any, fakeSecrets() as any);
 
     // Дефолт объявлен прямо в сигнатуре метода (taskType = 'argument-generation') —
     // проверяем именно это, не полагаясь на то, что NestJS сам подставит его из URL.
@@ -78,12 +90,40 @@ async function run() {
       availability: 'deprecated', // не active — не должна попасть в список
       latencyClass: null,
       costClass: null,
-      modelVersion: { id: 'mv-1', version: 'v1', model: { name: 'm', provider: { name: 'p' } } },
+      modelVersion: { id: 'mv-1', version: 'v1', model: { name: 'm', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } },
     });
-    const controller = new AIEnginesController(prisma as any);
+    const controller = new AIEnginesController(prisma as any, fakeSecrets() as any);
 
     const result = await controller.list('argument-generation');
     assertEqual(result, [], 'неактивная capability не попадает в список доступных движков');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ 2026-09-02: движок без ключа в списке НЕ предлагается', async () => {
+    // Аудит: селектор отдавал все активные модели подряд. Пользователь
+    // выбирал модель, ключа от которой в проекте нет, и получал
+    // «AI-провайдер недоступен» на каждой фиче — при том что рабочие
+    // движки рядом были.
+    const prisma = createFakePrisma();
+    prisma._seedCapability({
+      availability: 'active', latencyClass: null, costClass: null,
+      modelVersion: { id: 'mv-1', version: 'v1', model: { name: 'm', provider: { name: 'anthropic', apiEndpoint: 'https://api.anthropic.com', credentialRef: 'ANTHROPIC_API_KEY' } } },
+    });
+    const controller = new AIEnginesController(prisma as any, fakeSecrets(['ANTHROPIC_API_KEY']) as any);
+
+    assertEqual(await controller.list(), [], 'без ключа движок не предлагается');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ 2026-09-02: Gemini не предлагается для синхронных задач', async () => {
+    // Он обслуживает только фоновую полосу ([router-lanes]): выбрать
+    // его в селекторе значило гарантированный отказ на любой фиче.
+    const prisma = createFakePrisma();
+    prisma._seedCapability({
+      availability: 'active', latencyClass: null, costClass: null,
+      modelVersion: { id: 'mv-g', version: 'gemini-3.7-flash', model: { name: 'gemini-flash', provider: { name: 'google', apiEndpoint: 'https://generativelanguage.googleapis.com', credentialRef: 'GEMINI_API_KEY' } } },
+    });
+    const controller = new AIEnginesController(prisma as any, fakeSecrets() as any);
+
+    assertEqual(await controller.list(), [], 'фоновый клиент не попадает в селектор синхронных фич');
   });
 
   for (const [name, fn] of scenarios) {

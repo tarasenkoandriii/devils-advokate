@@ -1,6 +1,6 @@
 // Пункт [major-purchase] (devils-advocate-major-purchase-tz.md §5.2-5.6).
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
@@ -9,6 +9,7 @@ import { ConsentType, PurchaseCategory } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { searchNearestByDistance, searchByText, getPlaceDetails } from '../venue-recommendation/google-places-client';
 import { ExtractedConfigDraft } from './major-purchase-onboarding.service';
+import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 // Пункт [major-purchase] §2.2 ТЗ — офіційні значення Google Places API,
@@ -297,7 +298,7 @@ export class MajorPurchaseService {
         validateOutput: isValidConclusion,
       });
     } catch (err) {
-      if (err instanceof ForbiddenException) throw err;
+      rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
         throw new BadRequestException('Генерация вывода отклонена проверкой безопасности содержимого.');
       }
