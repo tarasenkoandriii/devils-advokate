@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next';
-import { locales } from '../lib/i18n/config';
+import { locales, defaultLocale } from '../lib/i18n/config';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com';
@@ -12,7 +12,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
       url: `${baseUrl}/${locale}${page}`,
       lastModified: new Date(),
       alternates: {
-        languages: Object.fromEntries(locales.map((l) => [l, `${baseUrl}/${l}${page}`])),
+        languages: {
+          ...Object.fromEntries(locales.map((l) => [l, `${baseUrl}/${l}${page}`])),
+          // Аудит 2026-09-02: x-default — та же копия, что в hreflang страниц.
+          'x-default': `${baseUrl}/${defaultLocale}${page}`,
+        },
       },
     })),
   );

@@ -76,6 +76,22 @@ function makeService(router: any, prisma = createFakePrisma()) {
 }
 
 describe('IntakeService (ТЗ §2)', () => {
+  it('РЕГРЕССИЯ (аудит 2026-09-02, job-landing): источник посадочной становится подсказкой классификатору и хранится в сессии', async () => {
+    const router = fakeRouter([cls('job-search', 0.9)]);
+    const { svc } = makeService(router);
+    await svc.start('u1', 'хочу сменить работу', { source: 'jobs_landing', campaign: 'q3' });
+    const prompt = router.calls[0].userPrompt as string;
+    expect(prompt).toContain('посадочной страницы для соискателей');
+    expect(prompt).toContain('Пользователь: хочу сменить работу');
+    // Неизвестный источник — без подсказки.
+    const router2 = fakeRouter([cls('dtp', 0.9)]);
+    const { svc: svc2 } = makeService(router2);
+    await svc2.start('u1', 'авария', { source: 'share_abc' });
+    expect(router2.calls[0].userPrompt).not.toContain('Контекст:');
+    await svc2.start('u1', 'авария');
+    expect(router2.calls[1].userPrompt).not.toContain('Контекст:');
+  });
+
   it('порог 0.6: 0.59 → UNIVERSAL, ровно 0.60 → домен (граница включительно)', () => {
     expect(decideScenario('dtp', 0.59)).toBe('UNIVERSAL');
     expect(decideScenario('dtp', INTAKE_CONFIDENCE_THRESHOLD)).toBe('dtp');

@@ -8,7 +8,7 @@
 // JobPosting — на странице нет вакансий (граница «не джоб-борд»).
 
 import type { Metadata } from 'next';
-import { locales, type Locale } from '../../../lib/i18n/config';
+import { locales, ogLocales, type Locale } from '../../../lib/i18n/config';
 import { getJobsDictionary } from '../../../lib/i18n/jobs';
 import { StartInTelegram } from '../../../components/jobs/StartInTelegram';
 import { AudienceTabs } from '../../../components/jobs/AudienceTabs';
@@ -19,8 +19,6 @@ export function generateStaticParams() {
   return locales.map((lang) => ({ lang }));
 }
 
-/** og:locale по спецификации — language_TERRITORY, а не код языка. */
-const OG_LOCALES: Record<Locale, string> = { ru: 'ru_RU', uk: 'uk_UA', en: 'en_US' };
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com';
 
@@ -48,7 +46,7 @@ export async function generateMetadata({ params }: { params: { lang: Locale } })
       title: dict.meta.title,
       description: dict.meta.description,
       // og:locale ждёт language_TERRITORY, не голый код языка.
-      locale: OG_LOCALES[params.lang],
+      locale: ogLocales[params.lang],
       url: `/${params.lang}/jobs`,
       type: 'website',
       images: ['/images/og.jpg'],
@@ -134,7 +132,10 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
               сразу под hero (первый экран), развёрнутая секция остаётся
               на своём месте по §2. Один источник текста — расхождения
               между полосой и секцией невозможны. */}
-          <ul className="jobs-hero__boundaries" aria-label={dict.boundaries.title}>
+          {/* role="list" явно: list-style: none в Safari/VoiceOver снимает
+              семантику списка, и «четыре границы» читаются как четыре
+              несвязанные строки (аудит 2026-09-02). */}
+          <ul className="jobs-hero__boundaries" role="list" aria-label={dict.boundaries.title}>
             {dict.boundaries.items.map((item) => (
               <li key={item.title}>{item.title}</li>
             ))}

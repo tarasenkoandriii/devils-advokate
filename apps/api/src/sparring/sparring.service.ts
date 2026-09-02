@@ -510,6 +510,18 @@ export class SparringService {
     });
     if (!job || job.status !== SparringVoiceReplyStatus.PENDING) return;
 
+    // Аудит 2026-09-02 (STT): атомарный забор джобы. Проверка статуса
+    // выше — обычное чтение, и между ней и записью COMPLETED проходит
+    // ответ AI-оппонента (секунды). Провайдер ретраит вебхук на таймаут
+    // нашего ответа, вторая доставка успевала пройти ту же проверку и
+    // создавала вторую пару реплик. UPDATE с условием на статус: кто
+    // перевёл PENDING → PROCESSING, тот и обрабатывает; второму — count 0.
+    const claimed = await this.prisma.sparringVoiceReplyJob.updateMany({
+      where: { id: job.id, status: SparringVoiceReplyStatus.PENDING },
+      data: { status: SparringVoiceReplyStatus.PROCESSING },
+    });
+    if (claimed.count === 0) return;
+
     let parsed: ParsedTranscript | null = null;
     let failure: string | null = null;
     try {

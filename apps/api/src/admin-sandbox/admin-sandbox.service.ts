@@ -923,9 +923,10 @@ export class AdminSandboxService {
   /** Пункт [voice-note-ru] 2026-09-01 — голосовая заметка для языков,
    * которых НЕТ в стриминге AssemblyAI (русский, украинский): браузер
    * записывает клип, сюда приходит base64, дальше продовый async-путь
-   * (universal, ru/uk поддержаны). То же согласие, что у живого
-   * стриминга; аудио НЕ персистуется — буфер уходит в AssemblyAI и
-   * живёт только в этом вызове. Потолок ~4 МБ base64 — лимит тела
+   * (с Пункта [stt-multi] — SttService.transcribeSync: Soniox для
+   * ru/uk, AssemblyAI для en, ElevenLabs как фоллбек). То же согласие,
+   * что у живого стриминга; аудио НЕ персистуется — буфер уходит
+   * провайдеру и живёт только в этом вызове. Потолок ~4 МБ base64 — лимит тела
    * запроса Vercel, хватает на несколько минут opus-записи. */
   async sandboxVoiceNote(operatorUserId: string, base64Content: string, languageCode?: string) {
     await this.assertOperator(operatorUserId);

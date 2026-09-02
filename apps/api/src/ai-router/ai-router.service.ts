@@ -39,6 +39,7 @@ import { isBackgroundCapable, GeminiApiError } from './gemini-client';
 import {
   Prisma,
   AIJobStatus,
+  InputScanStatus,
   SchemaValidationResult,
   ConsentType,
   ScanTargetType,
@@ -85,14 +86,20 @@ export class AIRouterExhaustedError extends Error {
 }
 
 export class AIRouterNoCapableModelError extends Error {
-  constructor(taskType: string) {
+  constructor(taskType: string, detail?: string) {
     // Пункт [router-simplify] 2026-09-01: причин ровно две, и обе — про
-    // конфигурацию, а не про провайдера. Точную (нет строк / нет ключа,
-    // и у кого именно) пишет resolveModelVersion в лог; здесь — общий
-    // текст, который видит вызывающий код.
+    // конфигурацию, а не про провайдера. Аудит 2026-09-02: точная
+    // причина (нет строк / нет ключа — и у кого / устаревший
+    // preferredModelVersionId) раньше уходила ТОЛЬКО в лог, а
+    // вызывающий код и оператор видели общий текст «либо… либо…» и
+    // искали не там. Теперь она в самом сообщении; общий текст остаётся
+    // запасным, когда детали нет. Имена переменных окружения — не
+    // секреты, их значения сюда не попадают.
     super(
-      `Нет модели, которой можно отдать задачу "${taskType}": либо в базе нет активных ` +
-        'AIModelCapability (выполните prisma:seed), либо ни у одной активной модели не задан ключ провайдера',
+      `Нет модели, которой можно отдать задачу "${taskType}": ` +
+        (detail ??
+          'либо в базе нет активных AIModelCapability (выполните prisma:seed), ' +
+            'либо ни у одной активной модели не задан ключ провайдера'),
     );
     this.name = 'AIRouterNoCapableModelError';
   }
@@ -253,6 +260,44 @@ export class AIRouterService {
     return { jobId: prepared.job!.id };
   }
 
+  /** Заблокированная сканом попытка — как FAILED-джоба с
+   * inputScanStatus = BLOCKED, чтобы телеметрия и операторская сводка
+   * видели инъекции по факту, а не по нулю. Модель подбирается тем же
+   * resolveModelVersion — если её нет (ключи не настроены), запись
+   * пропускается: телеметрия не важнее честного ответа клиенту. */
+  private async recordBlockedAttempt(request: AIRouterRequest, lane: AILane, scanResultIds: string[]): Promise<void> {
+    try {
+      const modelVersion = await this.resolveModelVersion(
+        request.taskType,
+        request.preferredModelVersionId,
+        lane,
+        requiresMedia(request.userPrompt),
+      );
+      const job = await this.prisma.aIJob.create({
+        data: {
+          inputHash: this.hashInput(request),
+          modelVersionId: modelVersion.id,
+          promptVersionId: request.promptVersionId,
+          taskType: request.taskType,
+          status: AIJobStatus.FAILED,
+          inputScanStatus: InputScanStatus.BLOCKED,
+          retryPolicy: 'blocked by input scan — no attempts',
+          requestUserId: request.userId,
+          completedAt: new Date(),
+          partialResult: 'запрос отклонён сканом входа (prompt injection) до обращения к провайдеру',
+        },
+      });
+      if (scanResultIds.length > 0) {
+        await this.prisma.contentScanResult.updateMany({
+          where: { id: { in: scanResultIds } },
+          data: { aiJobId: job.id },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Заблокированная сканом попытка не записана в телеметрию: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   /** Общий пролог execute()/enqueue() — ТЗ §4.4 требует именно общий
    * метод, а не копию: копия проверки в каждой точке — способ
    * разъехаться, уже дважды стоивший дыр (см. ConsentService). */
@@ -277,6 +322,15 @@ export class AIRouterService {
 
     const { sanitizedPrompt, scanResultIds, blocked } = await this.scanPrompt(request.userPrompt);
     if (blocked) {
+      // Аудит 2026-09-02 (AI router): раньше блокировка бросала ошибку ДО
+      // создания джобы, и AIJob.inputScanStatus = BLOCKED не появлялся в
+      // базе никогда — телеметрия inputBlockedCount была структурно
+      // нулём, а операторская сводка молча показывала «инъекций нет».
+      // Теперь заблокированная попытка записывается FAILED-джобой со
+      // статусом скана BLOCKED (у пользователя, у фичи, с привязкой
+      // результатов скана). Запись — best-effort: её отказ не должен
+      // превращать честный 4xx «запрос отклонён» в 500.
+      await this.recordBlockedAttempt(request, lane, scanResultIds);
       throw new AIRouterContentBlockedError(
         'prompt injection pattern detected in userPrompt — request rejected before reaching any AI provider',
       );
@@ -319,8 +373,12 @@ export class AIRouterService {
     // Проверка ДО суточного лимита: переиспользование бесплатно и
     // лимит не тратит. Совпадение требует ТОГО ЖЕ пользователя
     // (requestUserId) — кросс-пользовательского переиспользования нет.
+    // Аудит 2026-09-02 (AI router): переиспользование — только при ТОЙ ЖЕ
+    // разрешённой модели. preferredModelVersionId в хэш не входит, и
+    // «сравнить движки» на одном промпте (админский селектор) молча
+    // возвращало ответ предыдущей модели за новую.
     if (allowReuse) {
-      const reused = await this.findReusableResult(sanitizedRequest, inputHash);
+      const reused = await this.findReusableResult(sanitizedRequest, inputHash, modelVersion.id);
       if (reused) {
         return { reused, job: null, modelVersion: null, sanitizedRequest, maxRetries } as const;
       }
@@ -335,6 +393,12 @@ export class AIRouterService {
     // заведомо выше честного дневного использования одного человека,
     // но останавливает скрипт, жгущий бюджет. 0 = выключено.
     await this.assertUnderDailyAiLimit(sanitizedRequest.userId);
+    // Аудит 2026-09-02 (AI router): отдельный, более низкий потолок для
+    // МЕДИА-задач (видео/аудио через Gemini) — один такой вызов стоит на
+    // порядки дороже текстового, и общий лимит в 300 его не сдерживал.
+    if (requiresMedia(sanitizedRequest.userPrompt)) {
+      await this.assertUnderDailyMediaLimit(sanitizedRequest.userId, sanitizedRequest.taskType);
+    }
 
     const job = await this.prisma.aIJob.create({
       data: {
@@ -346,6 +410,10 @@ export class AIRouterService {
         // devils-advocate-telemetry-tz.md §3.
         taskType: sanitizedRequest.taskType,
         status: AIJobStatus.QUEUED,
+        // Скан пройден по построению — заблокированный запрос до этой
+        // строки не доходит (см. recordBlockedAttempt). PENDING по
+        // умолчанию схемы оставлял поле вечно «не проверено».
+        inputScanStatus: InputScanStatus.PASSED,
         retryPolicy: `${maxRetries} attempts, then fallback if configured`,
         // Владелец запроса — для GET /ai-jobs/:id («только свои
         // джобы»). Поле добавлено сверх списка ТЗ §4.3 ровно потому,
@@ -544,10 +612,20 @@ export class AIRouterService {
       // движков не должен уводить запрос в провайдера без клиента.
       const preferred = candidates.find((c) => c.modelVersionId === preferredId);
       if (!preferred) {
-        throw new AIRouterNoCapableModelError(taskType);
+        throw new AIRouterNoCapableModelError(
+          taskType,
+          `выбранная модель (${preferredId}) не входит в активные модели этой задачи на полосе ${lane}` +
+            (needsMedia ? ' с поддержкой медиа' : '') +
+            ' — обновите выбор в селекторе движков или capability в базе',
+        );
       }
-      if (!(await this.hasUsableKey(preferred.modelVersion.model.provider))) {
-        throw new AIRouterNoCapableModelError(taskType);
+      const preferredProvider = preferred.modelVersion.model.provider;
+      if (!(await this.hasUsableKey(preferredProvider))) {
+        throw new AIRouterNoCapableModelError(
+          taskType,
+          `у выбранной модели ${preferred.modelVersion.version} не задан ключ провайдера ${preferredProvider.name} ` +
+            `(${preferredProvider.credentialRef ?? 'credentialRef не задан'})`,
+        );
       }
       return preferred.modelVersion;
     }
@@ -564,13 +642,13 @@ export class AIRouterService {
     // Диагноз в лог — иначе «нет кандидата» неотличимо от «провайдер
     // отказал», а искать будут в ключах провайдера, который и так не
     // выбран. Названы обе причины: моделей нет вовсе или ни у одной нет ключа.
-    this.logger.error(
+    const detail =
       candidates.length === 0
-        ? `Нет активных моделей${needsMedia ? ' с поддержкой медиа' : ''} для задачи ${taskType}: ` +
-            'в базе нет строк AIModelCapability — выполните `npm run prisma:seed`'
-        : `Ни у одной активной модели нет ключа (задача ${taskType}): ${withoutKey.join(', ')}`,
-    );
-    throw new AIRouterNoCapableModelError(taskType);
+        ? `нет активных моделей${needsMedia ? ' с поддержкой медиа' : ''} на полосе ${lane} — ` +
+          'в базе нет строк AIModelCapability для этой задачи (выполните `npm run prisma:seed`)'
+        : `ни у одной активной модели нет ключа провайдера: ${withoutKey.join(', ')}`;
+    this.logger.error(`Задача ${taskType}: ${detail}`);
+    throw new AIRouterNoCapableModelError(taskType, detail);
   }
 
   /** Ключ провайдера реально доступен в окружении. Ровно этот вопрос
@@ -623,10 +701,15 @@ export class AIRouterService {
       }
     }
 
-    // Fallback — если на самой job-записи заранее проставлен
-    // fallbackModelVersionId (вызывающий код может проставить его через
-    // отдельный update перед вызовом execute(), если знает подходящую
-    // альтернативу — например движок, выбранный пользователем как запасной).
+    // Fallback по AIJob.fallbackModelVersionId. Аудит 2026-09-02 (AI
+    // router), честно: эту ветку СЕЙЧАС НИКТО НЕ АКТИВИРУЕТ — джоба
+    // создаётся внутри prepareJob и наружу до завершения execute() не
+    // отдаётся, так что «проставить через отдельный update перед
+    // вызовом» (прежний текст комментария) невозможно; поле не пишет ни
+    // один сервис. Ветка оставлена как работающий механизм под будущий
+    // выбор запасного движка (селектор §3.15), а не удалена: столбец в
+    // схеме есть, тест на ветку есть, и убирать рабочий код ради
+    // строчки — хуже, чем назвать его состояние.
     const job = await this.prisma.aIJob.findUniqueOrThrow({ where: { id: jobId } });
     if (job.fallbackModelVersionId) {
       const fallbackVersion = await this.prisma.aIModelVersion.findUnique({
@@ -728,9 +811,15 @@ export class AIRouterService {
    * одновременных срабатывания cron возьмут одну джобу дважды и
    * выставят два счёта провайдеру (ТЗ §4.5). */
   private async claimQueuedJobs(limit: number): Promise<string[]> {
+    // Аудит 2026-09-02 (AI router): при заборе выставляется КОРОТКИЙ
+    // lease (QUEUED_LEASE_MS), а не двухчасовой потолок ожидания
+    // провайдера. Двухчасовой ставится ниже, в submitQueued, ПОСЛЕ того,
+    // как задача реально ушла провайдеру. Иначе воркер, упавший между
+    // забором и постановкой, оставлял джобу RUNNING без
+    // externalInteractionId на два часа, хотя провайдер о ней и не знал.
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
       UPDATE ai_jobs SET status = 'RUNNING',
-             "leaseExpiresAt" = now() + interval '1 millisecond' * ${EXTERNAL_INTERACTION_MAX_WAIT_MS},
+             "leaseExpiresAt" = now() + interval '1 millisecond' * ${QUEUED_LEASE_MS},
              "updatedAt" = now()
       WHERE id IN (
         SELECT id FROM ai_jobs
@@ -794,7 +883,12 @@ export class AIRouterService {
 
         await this.prisma.aIJob.update({
           where: { id: jobId },
-          data: { externalInteractionId: externalId },
+          data: {
+            externalInteractionId: externalId,
+            // Задача у провайдера — теперь ждём его, и lease равен
+            // потолку ожидания (см. claimQueuedJobs).
+            leaseExpiresAt: new Date(Date.now() + EXTERNAL_INTERACTION_MAX_WAIT_MS),
+          },
         });
         submitted++;
       } catch (err) {
@@ -836,12 +930,26 @@ export class AIRouterService {
   /** RUNNING с externalInteractionId → опрос провайдера → терминальный
    * статус или ждём дальше. Маппинг восьми внешних статусов — ТЗ §4.4. */
   async pollRunning(limit = 10): Promise<{ completed: number; failed: number; waiting: number }> {
+    // Аудит 2026-09-02 (AI router). Раньше здесь стоял SELECT … FOR UPDATE
+    // SKIP LOCKED вне транзакции: блокировка отпускалась сразу по
+    // завершении запроса, и два одновременных срабатывания крона
+    // опрашивали одни и те же джобы (двойной GET к провайдеру — лишний,
+    // но не двойной счёт; двойная запись результата — уже гонка). Второе:
+    // ORDER BY "updatedAt" без её изменения при опросе означало, что при
+    // очереди длиннее limit одни и те же старые джобы опрашивались каждый
+    // раз, а свежие — никогда. UPDATE … RETURNING с подъёмом updatedAt
+    // решает обе задачи одним запросом: кто поднял — тот и опрашивает,
+    // а очередь ходит по кругу.
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM ai_jobs
-      WHERE status = 'RUNNING' AND "externalInteractionId" IS NOT NULL
-      ORDER BY "updatedAt"
-      LIMIT ${limit}
-      FOR UPDATE SKIP LOCKED`;
+      UPDATE ai_jobs SET "updatedAt" = now()
+      WHERE id IN (
+        SELECT id FROM ai_jobs
+        WHERE status = 'RUNNING' AND "externalInteractionId" IS NOT NULL
+        ORDER BY "updatedAt"
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id`;
 
     let completed = 0;
     let failed = 0;
@@ -1134,7 +1242,11 @@ export class AIRouterService {
    * же пользователя с тем же inputHash внутри окна. validateOutput
    * вызвавшего прогоняется и по переиспользуемому тексту — если новый
    * вызов строже прежнего, честно идём за свежим выводом. */
-  private async findReusableResult(request: AIRouterRequest, inputHash: string): Promise<AIRouterResult | null> {
+  private async findReusableResult(
+    request: AIRouterRequest,
+    inputHash: string,
+    modelVersionId: string,
+  ): Promise<AIRouterResult | null> {
     const rawMinutes = Number(process.env.AI_IDEMPOTENCY_WINDOW_MINUTES ?? '10');
     const minutes = Number.isFinite(rawMinutes) && rawMinutes >= 0 ? rawMinutes : 10;
     if (minutes === 0) return null;
@@ -1143,6 +1255,7 @@ export class AIRouterService {
     const done = await this.prisma.aIJob.findFirst({
       where: {
         inputHash,
+        modelVersionId,
         requestUserId: request.userId,
         status: AIJobStatus.COMPLETED,
         createdAt: { gte: since },
@@ -1171,6 +1284,27 @@ export class AIRouterService {
       // повторить завтра; текст без цифр внутренних счётчиков.
       throw new HttpException(
         `Достигнут суточный лимит AI-вызовов (${limit}/сутки). Попробуйте позже.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /** Суточный потолок медиа-задач на пользователя (env
+   * AI_MEDIA_CALLS_PER_USER_PER_DAY, дефолт 20; 0 = выключено). Счёт по
+   * taskType текущего запроса: у медиа-задач свои типы (media-public-
+   * review, paralinguistics…), отдельного столбца «медиа» у AIJob нет, и
+   * заводить его ради счётчика — лишняя миграция. */
+  private async assertUnderDailyMediaLimit(userId: string, taskType: string): Promise<void> {
+    const raw = Number(process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY ?? '20');
+    const limit = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 20;
+    if (limit === 0) return;
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const count = await this.prisma.aIJob.count({
+      where: { requestUserId: userId, taskType, createdAt: { gte: since } },
+    });
+    if (count >= limit) {
+      throw new HttpException(
+        `Достигнут суточный лимит медиа-разборов (${limit}/сутки). Попробуйте позже.`,
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }

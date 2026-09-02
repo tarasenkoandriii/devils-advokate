@@ -9,17 +9,22 @@ import { EntityForm } from './EntityForm';
 import { JsonPanel } from './JsonPanel';
 import { AgendaView, RelevanceSnapshotView, ReportContentView } from './interview-pool/InterviewPoolViews';
 import { haptic } from '../../lib/telegram';
+import { AiErrorNotice } from './AiErrorNotice';
 
 const P = (projectId: string) => `/interview-pool/projects/${projectId}`;
 
 function useJson<T>(route: string | null, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Аудит 2026-09-02 (job-landing): ошибка хранится ОБЪЕКТОМ, а не
+  // строкой — AiErrorNotice различает 403 «нет согласия» (экран согласия
+  // с кнопкой) и остальное (текст). Строка эту разницу стирала, и панели
+  // interview-pool печатали «Consent required: EXTERNAL_AI (userId=…)».
+  const [error, setError] = useState<unknown>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!route) return;
     setError(null);
-    domainApi.getJson(route).then(setData).catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить'));
+    domainApi.getJson(route).then(setData).catch((e: unknown) => setError(e ?? new Error('Не удалось загрузить')));
     // ОСТАВЛЕНО ОСОЗНАННО (аудит 2026-09-01, ревизия всех подавлений):
     // массив зависимостей собирается из spread — статически он для
     // правила неразрешим («React Hook has a spread element in its
@@ -36,25 +41,25 @@ interface QItem { text: string; category: string | null; orderIndex: number; isR
 export function QuestionnairePanel({ projectId, config }: { projectId: string; config: any }) {
   const [items, setItems] = useState<QItem[]>(() => (config.questions ?? []).map((q: any, i: number) => ({ text: q.text, category: q.category ?? null, orderIndex: i, isRequired: Boolean(q.isRequired) })));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
 
   async function draft() {
     setBusy(true); setError(null);
     try { const d = await domainApi.postJson(`${P(projectId)}/questionnaire/generate-draft`, {}); setItems(Array.isArray(d) ? d : []); haptic('success'); }
-    catch (e) { setError(e instanceof Error ? e.message : 'AI не сформировал черновик'); }
+    catch (e) { setError(e ?? new Error('AI не сформировал черновик')); }
     finally { setBusy(false); }
   }
   async function save() {
     setBusy(true); setError(null);
     try { await domainApi.postJson(`${P(projectId)}/questionnaire`, { items: items.map((q, i) => ({ ...q, orderIndex: i })) }); setSaved(true); haptic('success'); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сохранить'); }
+    catch (e) { setError(e ?? new Error('Не удалось сохранить')); }
     finally { setBusy(false); }
   }
   return (
     <div className="domain-panel">
       <p className="card-section__empty">AI предлагает черновик по описанию вакансии — вопросы правятся перед сохранением; сохранённый опросник становится повесткой собеседований.</p>
-      {error && <p className="generation-error">{error}</p>}
+      <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
       <div className="domain-criteria">
         {items.map((q, i) => (
           <div key={i} className="domain-criteria__row">
@@ -109,7 +114,7 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
   const [mode, setMode] = useState<'none' | 'new' | 'existing'>('none');
   const [openId, setOpenId] = useState<string | null>(null);
   const [agenda, setAgenda] = useState<Record<string, any>>({});
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
   const stages: any[] = config.interviewStages ?? [];
 
   async function addExisting(v: Record<string, unknown>) {
@@ -124,7 +129,7 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
 
   async function loadAgenda(candidateProfileId: string) {
     try { setAgenda((a) => ({ ...a, [candidateProfileId]: undefined })); const d = await domainApi.getJson(`${P(projectId)}/candidates/${candidateProfileId}/agenda`); setAgenda((a) => ({ ...a, [candidateProfileId]: d })); }
-    catch (e) { setErr(e instanceof Error ? e.message : 'Повестка недоступна'); }
+    catch (e) { setErr(e ?? new Error('Повестка недоступна')); }
   }
   async function share(candidateProfileId: string) {
     if (!window.confirm('Подтверждаете, что кандидат дал согласие на передачу профиля в команду?')) return;
@@ -137,12 +142,12 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
       setShareLink({ link: String(r.deepLink ?? ''), expiresAt: String(r.expiresAt ?? '') });
       refresh();
     }
-    catch (e) { setErr(e instanceof Error ? e.message : 'Не удалось поделиться'); }
+    catch (e) { setErr(e ?? new Error('Не удалось поделиться')); }
   }
 
   return (
     <div className="domain-panel">
-      {(error || err) && <p className="generation-error">{error ?? err}</p>}
+      <AiErrorNotice error={error ?? err} onConsentGranted={() => setErr(null)} />
       {statuses && statuses.length === 0 && <p className="card-section__empty">Кандидатов пока нет.</p>}
       {shareLink && <ShareLinkView link={shareLink.link} expiresAt={shareLink.expiresAt} onClose={() => setShareLink(null)} />}
       <ul className="domain-entities">
@@ -192,7 +197,7 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
 
 function ExistingCandidatePicker({ onSubmit, onCancel }: { onSubmit: (v: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {
   const { data, error } = useJson<any[]>('/candidate-profiles');
-  if (error) return <p className="generation-error">{error}</p>;
+  if (error) return <AiErrorNotice error={error} />;
   if (!data) return <p className="dtp-muted">Загрузка профилей…</p>;
   if (data.length === 0) return <p className="card-section__empty">Профилей пока нет — создайте нового кандидата или вступите в команду. <button type="button" className="secondary" onClick={onCancel}>Закрыть</button></p>;
   return (
@@ -207,7 +212,7 @@ function ExistingCandidatePicker({ onSubmit, onCancel }: { onSubmit: (v: Record<
 
 function FollowUps({ statusId }: { statusId: string }) {
   const { data, error, refresh } = useJson<any[]>(`/interview-pool/pipeline-statuses/${statusId}/follow-up`);
-  if (error) return <p className="generation-error">{error}</p>;
+  if (error) return <AiErrorNotice error={error} />;
   if (!data || data.length === 0) return null;
   return (
     <div style={{ width: '100%' }}>
@@ -231,13 +236,17 @@ export function RelevancePanel({ projectId, config }: { projectId: string; confi
   const { data: history } = useJson<any[]>(`${P(projectId)}/relevance-snapshot/history`);
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // Аудит 2026-09-02: у «Пересчитать» был try/finally без catch — отказ
+  // AI (403 согласие, 429 лимит, 503 нет модели) уходил в unhandled
+  // rejection, кнопка просто «отпускалась» без объяснения.
+  const [regenError, setRegenError] = useState<unknown>(null);
   return (
     <div className="domain-panel">
       <p className="card-section__empty">Насколько пул кандидатов всё ещё отвечает вакансии — снимок пересчитывается по запросу.</p>
-      {error && <p className="generation-error">{error}</p>}
+      <AiErrorNotice error={error ?? regenError} onConsentGranted={() => setRegenError(null)} />
       <RelevanceSnapshotView snapshot={data} questions={config?.questions ?? []} />
       <div className="entity-form__actions">
-        <button type="button" className="primary" disabled={busy} onClick={async () => { setBusy(true); try { await domainApi.postJson(`${P(projectId)}/relevance-snapshot/regenerate`, {}); refresh(); } finally { setBusy(false); } }}>Пересчитать</button>
+        <button type="button" className="primary" disabled={busy} onClick={async () => { setBusy(true); setRegenError(null); try { await domainApi.postJson(`${P(projectId)}/relevance-snapshot/regenerate`, {}); refresh(); haptic('success'); } catch (e) { haptic('error'); setRegenError(e ?? new Error('Не удалось пересчитать')); } finally { setBusy(false); } }}>Пересчитать</button>
         <button type="button" className="secondary" onClick={() => setShowHistory(!showHistory)}>История</button>
       </div>
       {showHistory && (history ?? []).filter((h) => h.id !== data?.id).map((h) => <RelevanceSnapshotView key={h.id} snapshot={h} questions={config?.questions ?? []} compact />)}
@@ -248,13 +257,13 @@ export function RelevancePanel({ projectId, config }: { projectId: string; confi
 export function TeamPanel({ config }: { config: any }) {
   const [team, setTeam] = useState<any>(null);
   const [invite, setInvite] = useState<{ link: string; expiresAt: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const { data: myTeams, refresh: refreshTeams } = useJson<any[]>('/recruiting-teams');
   const teamId = team?.id ?? config.recruitingTeamId ?? (myTeams && myTeams.length === 1 ? myTeams[0].id : undefined);
   return (
     <div className="domain-panel">
       <p className="card-section__empty">Команда рекрутеров: общий пул кандидатов и переиспользование истории собеседований. Профиль кандидата попадает в команду только после его явного согласия.</p>
-      {error && <p className="generation-error">{error}</p>}
+      <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
       {myTeams && myTeams.length > 0 && (
         <ul className="dtp-access-log">{myTeams.map((t) => <li key={t.id}><strong>{t.name}</strong> · {t._count?.members ?? '?'} чел. · {t.role === 'OWNER' ? 'владелец' : 'участник'}{t.id === teamId && ' · текущая'}{t.id !== teamId && <> <button type="button" className="secondary" onClick={() => setTeam(t)}>выбрать</button></>}</li>)}</ul>
       )}
@@ -262,7 +271,7 @@ export function TeamPanel({ config }: { config: any }) {
         <>
           <p>Команда: <strong>{myTeams?.find((t) => t.id === teamId)?.name ?? team?.name ?? teamId}</strong></p>
           <div className="entity-form__actions">
-            <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/recruiting-teams/${teamId}/invite-link`, {}); setInvite({ link: String(r.deepLink ?? r.token ?? ''), expiresAt: String(r.expiresAt ?? '') }); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); } }}>Ссылка-приглашение</button>
+            <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/recruiting-teams/${teamId}/invite-link`, {}); setInvite({ link: String(r.deepLink ?? r.token ?? ''), expiresAt: String(r.expiresAt ?? '') }); } catch (e) { setError(e ?? new Error('Ошибка')); } }}>Ссылка-приглашение</button>
           </div>
           {/* Ревью 2026-09-02: показывали голый токен в <pre> — тот же
               компонент, что у передачи кандидата: сама ссылка, срок
@@ -280,7 +289,10 @@ export function TeamPanel({ config }: { config: any }) {
             // /recruiting-teams/<memberId>/candidates и получала 404, а
             // имя команды рисовалось сырым id. Берём teamId из членства
             // и перезапрашиваем список команд.
-            const r = await domainApi.postJson(`/recruiting-teams/${t}/join`, { token: t });
+            // Аудит 2026-09-02: токен — только в теле, не в пути (путь
+            // попадает в access-логи платформы; сегмент :id бэкенд не
+            // читает — та же форма, что у InviteBanner).
+            const r = await domainApi.postJson('/recruiting-teams/invite/join', { token: t });
             setTeam({ id: r.teamId ?? r.team?.id ?? r.id, name: r.team?.name });
             refreshTeams();
           }} />
@@ -297,12 +309,12 @@ export function ClientReportsPanel({ projectId, questions }: { projectId: string
   const candidates = candidatesData ?? [];
   const [reports, setReports] = useState<any[]>([]);
   const [editing, setEditing] = useState<Record<string, string>>({});
-  const [error, setError] = useState<string | null>(null);
-  async function run(fn: () => Promise<any>) { try { const r = await fn(); if (r?.id) setReports((prev) => [r, ...prev.filter((x) => x.id !== r.id)]); haptic('success'); } catch (e) { haptic('error'); setError(e instanceof Error ? e.message : 'Ошибка'); } }
+  const [error, setError] = useState<unknown>(null);
+  async function run(fn: () => Promise<any>) { try { const r = await fn(); if (r?.id) setReports((prev) => [r, ...prev.filter((x) => x.id !== r.id)]); haptic('success'); } catch (e) { haptic('error'); setError(e ?? new Error('Ошибка')); } }
   return (
     <div className="domain-panel">
       <p className="card-section__empty">Отчёт заказчику формируется AI по итогам собеседований, проверяется вами и только потом отправляется.</p>
-      {error && <p className="generation-error">{error}</p>}
+      <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
       <div className="entity-form__actions">
         <button type="button" className="primary" onClick={() => run(() => domainApi.postJson(`/client-reports/projects/${projectId}/summary`, {}))}>Сводный отчёт по пулу</button>
         {candidates.map((s: any) => (

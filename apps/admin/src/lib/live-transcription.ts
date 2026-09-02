@@ -321,7 +321,15 @@ function connectSoniox(
   source.connect(processor);
   processor.connect(audioContext.destination);
 
+  // Аудит 2026-09-02 (STT): первым сообщением Soniox ждёт КОНФИГ; байты
+  // до него — ошибка протокола и обрыв. По спецификации WebSocket смена
+  // readyState на OPEN и событие open происходят в одной задаче, так
+  // что проверка readyState в onaudioprocess уже достаточна, — но
+  // явный флаг делает инвариант «сначала конфиг» видимым и не зависящим
+  // от прочтения спецификации.
+  let configured = false;
   ws.onopen = () => {
+    configured = true;
     ws.send(
       JSON.stringify({
         api_key: credentials.token,
@@ -340,7 +348,7 @@ function connectSoniox(
   };
 
   processor.onaudioprocess = (event) => {
-    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!configured || ws.readyState !== WebSocket.OPEN) return;
     const input = event.inputBuffer.getChannelData(0);
     ws.send(resampleTo16kMono(input, audioContext.sampleRate));
   };

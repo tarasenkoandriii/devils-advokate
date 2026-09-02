@@ -1,0 +1,12 @@
+-- Аудит 2026-09-02 (STT): атомарный забор голосовой реплики вебхуком.
+--
+-- Новое значение перечисления SparringVoiceReplyStatus (используется и
+-- SparringVoiceReplyJob, и MaterialChatVoiceReplyJob). Обработчик вебхука
+-- переводит джобу PENDING → PROCESSING одним UPDATE с условием на статус;
+-- вторая доставка того же вебхука видит count = 0 и уходит без действий.
+--
+-- ALTER TYPE ... ADD VALUE нельзя выполнять внутри транзакции вместе с
+-- использованием нового значения (PostgreSQL < 12 запрещает и само
+-- добавление в транзакции). Выполнять отдельным вызовом, БЕЗ BEGIN/COMMIT.
+-- Идемпотентно: IF NOT EXISTS.
+ALTER TYPE "SparringVoiceReplyStatus" ADD VALUE IF NOT EXISTS 'PROCESSING';

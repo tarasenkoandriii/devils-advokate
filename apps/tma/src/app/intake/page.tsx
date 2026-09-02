@@ -47,8 +47,34 @@ function startAttribution(): { source?: string; campaign?: string } | undefined 
   return { source: parsed.source, ...(parsed.campaign ? { campaign: parsed.campaign } : {}) };
 }
 
+/** Аудит 2026-09-02 (job-landing): первый экран знает, откуда пришёл
+ *  человек. С посадочной «Я ищу работу» пример «в меня въехали на
+ *  парковке» выглядел как чужая дверь — ТЗ §3 обещает, что вход с
+ *  лендинга открывает разговор о работе, а не общий квиз. Без
+ *  посадочной — прежний универсальный текст. */
+function firstScreenCopy(): { intro: string; placeholder: string } {
+  const audience = currentStartAttribution()?.audience ?? null;
+  if (audience === 'candidate') {
+    return {
+      intro: 'Расскажите о поиске работы — своими словами, голосом или текстом: какую позицию ищете, что уже есть (резюме, вакансии, приглашения), что смущает. Мы соберём из этого сценарий поиска работы; аудио не сохраняется — только текст.',
+      placeholder: 'Например: ищу позицию продакт-менеджера, есть три вакансии на руках и старое резюме…',
+    };
+  }
+  if (audience === 'agency') {
+    return {
+      intro: 'Расскажите о найме — своими словами, голосом или текстом: какая вакансия, сколько кандидатов, что важно проверить на собеседовании. Мы соберём из этого сценарий подбора; аудио не сохраняется — только текст.',
+      placeholder: 'Например: закрываем вакансию senior backend, восемь кандидатов, нужен единый опросник…',
+    };
+  }
+  return {
+    intro: 'Расскажите, что происходит — своими словами, голосом или текстом. Мы подберём сценарий, а всё сказанное уйдёт в него без повторного ввода. Аудио не сохраняется — только текст.',
+    placeholder: 'Например: вчера в меня въехали на парковке, виновник уехал…',
+  };
+}
+
 export default function IntakePage() {
   const router = useRouter();
+  const copy = firstScreenCopy();
   const [aiConsent, setAiConsent] = useState<'loading' | 'needed' | 'ok'>('loading');
   const [session, setSession] = useState<IntakeSessionView | null>(null);
   const [draft, setDraft] = useState('');
@@ -124,7 +150,7 @@ export default function IntakePage() {
   return (
     <main className="page">
       <h1>🎤 Подбор сценария</h1>
-      {!session && <p className="card-section__empty">Расскажите, что происходит — своими словами, голосом или текстом. Мы подберём сценарий, а всё сказанное уйдёт в него без повторного ввода. Аудио не сохраняется — только текст.</p>}
+      {!session && <p className="card-section__empty">{copy.intro}</p>}
       {error && <p className="generation-error">{error}</p>}
 
       {session && (
@@ -138,7 +164,7 @@ export default function IntakePage() {
       {(!session || session.nextQuestion) && (
         <>
           {session?.nextQuestion && <p><strong>{session.nextQuestion}</strong> <small className="voice-text-input__hint">(уточнений осталось: {session.followUpsLeft})</small></p>}
-          <VoiceTextInput value={draft} onChange={setDraft} disabled={busy} placeholder={session ? 'Ваш ответ…' : 'Например: вчера в меня въехали на парковке, виновник уехал…'} />
+          <VoiceTextInput value={draft} onChange={setDraft} disabled={busy} placeholder={session ? 'Ваш ответ…' : copy.placeholder} />
           <div className="entity-form__actions">
             <button type="button" className="primary" disabled={busy || !draft.trim()} onClick={submit}>{busy ? '…' : session ? 'Ответить' : 'Оценить ситуацию'}</button>
             <button type="button" className="secondary" disabled={busy} onClick={goUniversalNow}>Сразу в универсальный</button>

@@ -15,8 +15,18 @@
 //   GET  /v1/transcriptions/{id}         — статус
 //   GET  /v1/transcriptions/{id}/transcript — текст и токены
 //   POST /v1/auth/temporary-api-key      — короткоживущий ключ для браузера
+//   DELETE /v1/transcriptions/{id}, DELETE /v1/files/{id} — уборка
 // Вебхук несёт только { id, status } — текст добирается отдельно, ровно
 // как у AssemblyAI.
+//
+// УБОРКА (аудит 2026-09-02, STT). Soniox хранит и файл, и транскрипт до
+// 30 дней (retention по умолчанию), и удаление транскрипта НЕ удаляет
+// файл. Для продукта, чьё согласие пользователя обещает «транзит, а не
+// хранение», это означало бы, что запись лежит у субподрядчика месяц
+// после того, как у нас она уже удалена. Поэтому после чтения результата
+// (и после ошибки — тоже) провайдеру отправляются оба DELETE. Уборка
+// best-effort: её отказ логируется, но результат пользователя не
+// теряется — потерять можно уборку, но не расшифровку.
 import { Injectable, Logger } from '@nestjs/common';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
 import { STT_WEBHOOK_HEADER } from '../common/webhook/stt-webhook.guard';
@@ -60,6 +70,8 @@ interface SonioxTranscription {
   id: string;
   status: 'queued' | 'processing' | 'completed' | 'error';
   error_message?: string;
+  /** Есть, когда задача поставлена по file_id (наш путь коротких записей). */
+  file_id?: string | null;
 }
 
 /**
@@ -174,6 +186,27 @@ export class SonioxSttProvider implements SttProvider {
     return (await response.json()) as T;
   }
 
+  /** Уборка у провайдера (см. шапку файла): транскрипт и, если задача
+   *  шла по загруженному файлу, сам файл. Ошибки не пробрасываются. */
+  async cleanup(apiKey: string, transcriptionId: string, fileId?: string | null): Promise<void> {
+    const targets = [`/transcriptions/${transcriptionId}`, ...(fileId ? [`/files/${fileId}`] : [])];
+    for (const path of targets) {
+      try {
+        const response = await fetchWithTimeout(
+          `${BASE_URL}${path}`,
+          { method: 'DELETE', headers: { Authorization: `Bearer ${apiKey}` } },
+          10_000,
+        );
+        // 404 — уже удалено (повторная доставка вебхука); это не отказ.
+        if (!response.ok && response.status !== 404) {
+          this.logger.warn(`Soniox: не удалось удалить ${path} → ${response.status}`);
+        }
+      } catch (err) {
+        this.logger.warn(`Soniox: не удалось удалить ${path}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
   /** Загрузка байтов в Soniox: multipart, отдаёт file_id. Ссылку на
    *  файл наружу мы не выдаём — возвращаем внутренний маркер
    *  `soniox-file:<id>`, который submitWebhookJob разбирает обратно.
@@ -226,19 +259,25 @@ export class SonioxSttProvider implements SttProvider {
   async fetchResult(apiKey: string, externalJobId: string): Promise<ParsedTranscript> {
     const status = await this.request<SonioxTranscription>(apiKey, `/transcriptions/${externalJobId}`);
     if (status.status === 'error') {
+      // Задача провалена — держать у провайдера нечего.
+      await this.cleanup(apiKey, externalJobId, status.file_id);
       throw new SttProviderError('soniox', `задача ${externalJobId} завершилась ошибкой: ${status.error_message ?? 'без описания'}`);
     }
     if (status.status !== 'completed') {
+      // Не готова — НЕ убираем: вебхук придёт ещё раз.
       throw new SttProviderError('soniox', `задача ${externalJobId} ещё не готова (${status.status})`);
     }
 
     const transcript = await this.request<SonioxTranscript>(apiKey, `/transcriptions/${externalJobId}/transcript`);
     const tokens = transcript.tokens ?? [];
-
-    return {
+    const parsed: ParsedTranscript = {
       language: dominantSonioxLanguage(tokens),
       segments: sonioxTokensToSegments(tokens),
     };
+
+    // Результат уже у нас в руках — только теперь убираем у провайдера.
+    await this.cleanup(apiKey, externalJobId, status.file_id);
+    return parsed;
   }
 
   async transcribeSync(
@@ -270,20 +309,28 @@ export class SonioxSttProvider implements SttProvider {
     // вызывающий идёт в ElevenLabs, которому нужно ещё до 45 с. 18 × 1200
     // мс ≈ 22 с оставляют место обеим попыткам вместо платформенного 504.
     const pollDelayMs = process.env.NODE_ENV === 'test' ? 0 : 1200;
-    for (let attempt = 0; attempt < 18; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
-      const status = await this.request<SonioxTranscription>(apiKey, `/transcriptions/${created.id}`);
-      if (status.status === 'completed') {
-        const transcript = await this.request<SonioxTranscript>(apiKey, `/transcriptions/${created.id}/transcript`);
-        const tokens = transcript.tokens ?? [];
-        const text = transcript.text ?? tokens.map((t) => t.text ?? '').join('');
-        return { text: text.trim(), language: dominantSonioxLanguage(tokens) };
+    try {
+      for (let attempt = 0; attempt < 18; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+        const status = await this.request<SonioxTranscription>(apiKey, `/transcriptions/${created.id}`);
+        if (status.status === 'completed') {
+          const transcript = await this.request<SonioxTranscript>(apiKey, `/transcriptions/${created.id}/transcript`);
+          const tokens = transcript.tokens ?? [];
+          const text = transcript.text ?? tokens.map((t) => t.text ?? '').join('');
+          return { text: text.trim(), language: dominantSonioxLanguage(tokens) };
+        }
+        if (status.status === 'error') {
+          throw new SttProviderError('soniox', `распознавание заметки не удалось: ${status.error_message ?? 'без описания'}`);
+        }
       }
-      if (status.status === 'error') {
-        throw new SttProviderError('soniox', `распознавание заметки не удалось: ${status.error_message ?? 'без описания'}`);
-      }
+      throw new SttProviderError('soniox', 'распознавание заметки не уложилось в отведённое время — попробуйте короче');
+    } finally {
+      // Синхронный путь: результат либо возвращён, либо потерян — в
+      // обоих случаях файл и задача у провайдера больше не нужны.
+      // (Незавершённую задачу Soniox удалить не даст — тогда сработает
+      // его собственный retention; это названо в docs/…stt-provider.)
+      await this.cleanup(apiKey, created.id, fileId);
     }
-    throw new SttProviderError('soniox', 'распознавание заметки не уложилось в отведённое время — попробуйте короче');
   }
 
   /**

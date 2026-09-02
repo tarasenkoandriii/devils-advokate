@@ -251,11 +251,16 @@ export class TranscriptionService {
     }
     const { id } = (await response.json()) as { id: string };
 
-    // Опрос: короткая заметка обычно готова за 2-8 с; потолок ~40 с —
-    // заведомо меньше maxDuration 60, чтобы успеть отдать честную
-    // ошибку. Интервал нулевой в тестах (jest выставляет NODE_ENV).
-    const pollDelayMs = process.env.NODE_ENV === 'test' ? 0 : 1500;
-    for (let attempt = 0; attempt < 27; attempt++) {
+    // Опрос: короткая заметка обычно готова за 2-8 с. Аудит 2026-09-02
+    // (STT): потолок опущен с ~40 с (27 × 1500) до ~22 с (18 × 1200) —
+    // тот же, что у Soniox, и по той же причине: с Пункта [stt-multi]
+    // этот вызов стоит В ЦЕПОЧКЕ (после него SttService идёт в
+    // ElevenLabs, до 45 с), а maxDuration функции — 60 с. Прежний
+    // потолок оставлял фоллбеку меньше 20 с, и «фоллбек для всех»
+    // на английском был бы платформенным 504. Интервал нулевой в
+    // тестах (jest выставляет NODE_ENV).
+    const pollDelayMs = process.env.NODE_ENV === 'test' ? 0 : 1200;
+    for (let attempt = 0; attempt < 18; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
       const result = await this.getTranscriptResult(apiKey, id);
       if (result.status === 'completed') {

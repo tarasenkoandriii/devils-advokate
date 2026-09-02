@@ -24,6 +24,14 @@ import { currentStartAttribution, startParamRoute } from '../lib/start-param';
 
 type GateState = 'loading' | 'blocked' | 'open' | 'error';
 
+/** Некриптографический отпечаток (djb2) — только чтобы различать
+ *  параметры запуска в пределах одного сеанса, не для защиты. */
+function fingerprint(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0;
+  return (hash >>> 0).toString(36);
+}
+
 export function AppGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +68,11 @@ export function AppGate({ children }: { children: ReactNode }) {
     const attribution = currentStartAttribution();
     const target = startParamRoute(attribution);
     if (!target || !attribution) return;
-    const key = `start-param-handled:${attribution.raw}`;
+    // Аудит 2026-09-02: в ключе — не сам параметр (для приглашений это
+    // действующий токен), а его короткий отпечаток. sessionStorage
+    // ограничен вкладкой и origin, но секрет в имени ключа читается любым
+    // расширением с доступом к странице — незачем.
+    const key = `start-param-handled:${fingerprint(attribution.raw)}`;
     try {
       if (sessionStorage.getItem(key)) return;
       sessionStorage.setItem(key, '1');

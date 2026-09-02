@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ReactNode } from 'react';
 import { Unbounded, Inter } from 'next/font/google';
-import { locales, type Locale } from '../../lib/i18n/config';
+import { locales, ogLocales, defaultLocale, type Locale } from '../../lib/i18n/config';
 import { getDictionary } from '../../lib/i18n/get-dictionary';
 import '../globals.css';
 
@@ -45,12 +45,20 @@ export async function generateMetadata({
     title: dict.meta.title,
     description: dict.meta.description,
     alternates: {
-      languages: Object.fromEntries(locales.map((l) => [l, `/${l}`])),
+      // Аудит 2026-09-02 (job-landing): self-canonical и x-default — как у
+      // /jobs, иначе три языковые копии главной конкурировали в индексе.
+      canonical: `/${params.lang}`,
+      languages: {
+        ...Object.fromEntries(locales.map((l) => [l, `/${l}`])),
+        'x-default': `/${defaultLocale}`,
+      },
     },
     openGraph: {
       title: dict.meta.title,
       description: dict.meta.description,
-      locale: params.lang,
+      // og:locale ждёт language_TERRITORY (ru_RU), не голый код языка —
+      // на /jobs это было исправлено 2026-09-02, здесь оставалось.
+      locale: ogLocales[params.lang],
       type: 'website',
       // ПОВТОРНЫЙ АУДИТ 2026-08-30: здесь стоял /images/hero.png —
       // файла с таким именем в public/images нет (есть hero-courtroom,

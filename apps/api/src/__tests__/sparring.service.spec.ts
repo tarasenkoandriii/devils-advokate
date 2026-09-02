@@ -137,6 +137,14 @@ function createFakePrisma() {
         voiceReplyJobs[idx] = { ...voiceReplyJobs[idx], ...data };
         return voiceReplyJobs[idx];
       },
+      // Аудит 2026-09-02 (STT): атомарный забор PENDING → PROCESSING.
+      updateMany: async ({ where, data }: any) => {
+        const matching = voiceReplyJobs.filter(
+          (j) => j.id === where.id && (where.status === undefined || j.status === where.status),
+        );
+        for (const j of matching) Object.assign(j, data);
+        return { count: matching.length };
+      },
     },
     // Пункт 90 (§3.26 ТЗ) — предзаготовка открывающей реплики.
     scheduledConversation: {
@@ -437,6 +445,31 @@ async function run() {
     const messages = prisma._getMessages();
     const userMsg = messages.find((m: any) => m.id === updatedJob.userMessageId);
     assertEqual(userMsg.text, 'Мой голосовой ответ', 'транскрибированный текст стал текстом реплики пользователя');
+  });
+
+  test('РЕГРЕССИЯ (аудит 2026-09-02, STT): две ОДНОВРЕМЕННЫЕ доставки вебхука создают ОДНУ пару реплик — джобу забирает атомарный claim', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    const fakeTranscription = new FakeTranscriptionService();
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
+
+    const session = await svc.startSession(USER_ID, PROJECT_ID);
+    const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
+    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = {
+      status: 'completed',
+      id: fakeTranscription.externalJobId,
+      utterances: [{ speaker: 'A', text: 'Повторно доставленная реплика', start: 0, end: 1000 }],
+    };
+    const messagesBefore = prisma._getMessages().length;
+
+    // Обе доставки стартуют до того, как первая дошла до записи статуса
+    // — ровно ситуация «провайдер ретраит на таймаут нашего ответа».
+    const payload = { transcript_id: fakeTranscription.externalJobId, status: 'completed' } as any;
+    await Promise.all([svc.handleVoiceReplyWebhook(payload), svc.handleVoiceReplyWebhook(payload)]);
+
+    const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === job.id);
+    assertEqual(updatedJob.status, 'COMPLETED', 'джоба завершена один раз');
+    assertEqual(prisma._getMessages().length - messagesBefore, 2, 'ровно одна пара реплик (пользователь + оппонент), а не две');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: handleVoiceReplyWebhook() при ошибке AssemblyAI переводит job в FAILED, не создаёт сообщений', async () => {

@@ -15,7 +15,7 @@ import {
 } from '../stt/stt-language';
 import { formatSttJobId, parseSttJobId, sttJobIdVariants, SttService } from '../stt/stt.service';
 import { parseSttWebhookPayload } from '../stt/stt-webhook-payload';
-import { sonioxTokensToSegments, dominantSonioxLanguage } from '../stt/soniox-stt.provider';
+import { sonioxTokensToSegments, dominantSonioxLanguage, SonioxSttProvider } from '../stt/soniox-stt.provider';
 import { AssemblyAiSttProvider } from '../stt/assemblyai-stt.provider';
 
 describe('sttProviderForLanguage', () => {
@@ -192,6 +192,65 @@ describe('разбор ответа Soniox', () => {
       ]),
     ).toBe('ru');
     expect(dominantSonioxLanguage([{ text: 'без языка' }])).toBeNull();
+  });
+});
+
+describe('SonioxSttProvider: уборка у провайдера (аудит 2026-09-02)', () => {
+  // Soniox хранит файл и транскрипт до 30 дней, и удаление транскрипта
+  // не удаляет файл. Согласие пользователя обещает транзит, не хранение
+  // у субподрядчика — поэтому после чтения результата уходят оба DELETE.
+  const originalFetch = (global as never as { fetch: unknown }).fetch;
+  afterEach(() => {
+    (global as never as { fetch: unknown }).fetch = originalFetch;
+  });
+
+  function installFetch(status: 'completed' | 'processing' | 'error', log: string[]) {
+    (global as never as { fetch: unknown }).fetch = async (url: string, init?: { method?: string }) => {
+      const method = init?.method ?? 'GET';
+      log.push(`${method} ${url.replace('https://api.soniox.com/v1', '')}`);
+      if (method === 'DELETE') return { ok: true, status: 204, statusText: 'No Content', json: async () => ({}), text: async () => '' };
+      if (url.endsWith('/transcript')) {
+        return { ok: true, status: 200, statusText: 'OK', json: async () => ({ id: 'tr-1', tokens: [{ text: 'привет', language: 'ru', start_ms: 0, end_ms: 400, speaker: 1 }] }) };
+      }
+      return { ok: true, status: 200, statusText: 'OK', json: async () => ({ id: 'tr-1', status, file_id: 'file-9', error_message: status === 'error' ? 'bad audio' : undefined }) };
+    };
+  }
+
+  it('КЛЮЧЕВОЙ ТЕСТ: после успешного чтения результата удаляются транскрипт И файл — и только ПОСЛЕ чтения', async () => {
+    const log: string[] = [];
+    installFetch('completed', log);
+    const parsed = await new SonioxSttProvider().fetchResult('key', 'tr-1');
+    expect(parsed.segments.map((s) => s.text)).toEqual(['привет']);
+    expect(log).toEqual([
+      'GET /transcriptions/tr-1',
+      'GET /transcriptions/tr-1/transcript',
+      'DELETE /transcriptions/tr-1',
+      'DELETE /files/file-9',
+    ]);
+  });
+
+  it('задача ещё не готова — НИЧЕГО не удаляется: вебхук придёт снова', async () => {
+    const log: string[] = [];
+    installFetch('processing', log);
+    await expect(new SonioxSttProvider().fetchResult('key', 'tr-1')).rejects.toThrow(/ещё не готова/);
+    expect(log.filter((l) => l.startsWith('DELETE'))).toEqual([]);
+  });
+
+  it('задача провалена — убираем и файл, и задачу, ошибка всё равно пробрасывается', async () => {
+    const log: string[] = [];
+    installFetch('error', log);
+    await expect(new SonioxSttProvider().fetchResult('key', 'tr-1')).rejects.toThrow(/bad audio/);
+    expect(log.filter((l) => l.startsWith('DELETE'))).toEqual(['DELETE /transcriptions/tr-1', 'DELETE /files/file-9']);
+  });
+
+  it('отказ уборки не теряет результат пользователя', async () => {
+    (global as never as { fetch: unknown }).fetch = async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'DELETE') throw new Error('network down');
+      if (url.endsWith('/transcript')) return { ok: true, json: async () => ({ id: 'tr-1', tokens: [{ text: 'ок', language: 'ru' }] }) };
+      return { ok: true, json: async () => ({ id: 'tr-1', status: 'completed', file_id: 'file-9' }) };
+    };
+    const parsed = await new SonioxSttProvider().fetchResult('key', 'tr-1');
+    expect(parsed.segments[0].text).toBe('ок');
   });
 });
 

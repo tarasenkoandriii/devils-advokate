@@ -140,9 +140,9 @@ const ru: JobsDictionary = {
   privacy: {
     title: 'Приватность',
     items: [
-      'Ваши данные живут в вашем проекте и не публикуются. Мы не откликаемся на вакансии за вас.',
+      'Ваши данные живут в вашем проекте и не публикуются без вашего явного действия — любая публичная ссылка создаётся вами и отзывается вами. Мы не откликаемся на вакансии за вас.',
       'Каждое использование AI и записи закрыто явным согласием — его можно отозвать.',
-      'Голосовой ввод идёт из браузера напрямую в сервис распознавания по короткоживущему токену — аудио через наш сервер не проходит и нигде не хранится.',
+      'Голосовой ввод идёт из браузера напрямую в сервис распознавания речи по короткоживущему токену — через наш сервер аудио не проходит, и мы его не храним. Распознаёт внешний провайдер (Soniox для русского и украинского, AssemblyAI для английского) — кому именно уходит звук, названо в тексте согласия.',
     ],
   },
   faq: {
@@ -258,9 +258,9 @@ const uk: JobsDictionary = {
   privacy: {
     title: 'Приватність',
     items: [
-      'Ваші дані живуть у вашому проєкті й не публікуються. Ми не відгукуємось на вакансії за вас.',
+      'Ваші дані живуть у вашому проєкті й не публікуються без вашої явної дії — будь-яке публічне посилання створюєте й відкликаєте ви. Ми не відгукуємось на вакансії за вас.',
       'Кожне використання AI і записів закрите явною згодою — її можна відкликати.',
-      'Голосовий ввід іде з браузера напряму в сервіс розпізнавання за короткоживучим токеном — аудіо через наш сервер не проходить і ніде не зберігається.',
+      'Голосовий ввід іде з браузера напряму в сервіс розпізнавання мовлення за короткоживучим токеном — через наш сервер аудіо не проходить, і ми його не зберігаємо. Розпізнає зовнішній провайдер (Soniox для української та російської, AssemblyAI для англійської) — кому саме йде звук, названо в тексті згоди.',
     ],
   },
   faq: {
@@ -338,9 +338,9 @@ const en: JobsDictionary = {
   privacy: {
     title: 'Privacy',
     items: [
-      'Your data lives in your own project and is never published. We do not apply to vacancies on your behalf.',
+      'Your data lives in your own project and is not published unless you explicitly choose to — any public link is created and revoked by you. We do not apply to vacancies on your behalf.',
       'Every use of AI and recording is gated by explicit consent — which you can withdraw.',
-      'Voice input streams from your browser directly to the speech service via a short-lived token — audio never passes through our server and is never stored.',
+      'Voice input streams from your browser directly to the speech-recognition service via a short-lived token — it does not pass through our server and we do not store it. Recognition is done by an external provider (Soniox for Ukrainian and Russian, AssemblyAI for English) — the consent text names who receives the audio.',
     ],
   },
   faq: {

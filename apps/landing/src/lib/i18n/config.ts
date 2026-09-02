@@ -9,6 +9,11 @@ export type Locale = (typeof locales)[number];
 
 export const defaultLocale: Locale = 'en';
 
+/** og:locale по спецификации Open Graph — language_TERRITORY, а не код
+ *  языка. Аудит 2026-09-02 (job-landing): вынесено сюда из jobs/page.tsx,
+ *  чтобы главный layout использовал ту же таблицу, а не голый код. */
+export const ogLocales: Record<Locale, string> = { ru: 'ru_RU', uk: 'uk_UA', en: 'en_US' };
+
 export const localeNames: Record<Locale, string> = {
   en: 'English',
   uk: 'Українська',

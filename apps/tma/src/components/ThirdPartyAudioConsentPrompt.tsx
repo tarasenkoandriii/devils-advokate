@@ -1,7 +1,8 @@
 'use client';
 
 // Аудит моделей БД 2026-08-30, §2.3 — mintTranscriptionToken() открывает
-// прямой канал browser→AssemblyAI: живой звук разговора (включая голос
+// прямой канал browser→провайдер распознавания (Soniox для ru/uk,
+// AssemblyAI для en — Пункт [stt-multi]): живой звук разговора (включая голос
 // собеседника, не только пользователя) стримится внешнему провайдеру в
 // реальном времени. ConsentType.THIRD_PARTY_AUDIO_RECORDING — тот же
 // принцип, что уже применён в DtpEvidence (запись чужого голоса без его
@@ -11,7 +12,13 @@ import { useState } from 'react';
 import { grantConsent, hasConsent, listConsents } from '../lib/features';
 import { haptic } from '../lib/telegram';
 
-const CONSENT_VERSION = 'v1';
+// Аудит 2026-09-02 (STT): текст обновлён — провайдеров стало два, и
+// согласие, называющее только AssemblyAI, при ru/uk-сессии описывало не
+// того получателя звука. v2 — метка версии ТЕКСТА; бэкенд проверяет
+// тип согласия, не версию, повторного запроса у уже согласившихся нет
+// (осознанно: получатель сменился на равного по договору
+// субподрядчика, а не расширился круг данных).
+const CONSENT_VERSION = 'v2';
 
 interface ThirdPartyAudioConsentPromptProps {
   source: string;
@@ -39,8 +46,9 @@ export function ThirdPartyAudioConsentPrompt({ source, onGranted, onCancel }: Th
     <div className="location-consent-prompt">
       <p className="steelman-case__label">Запись живого звука разговора</p>
       <p className="conversations-section__hint">
-        Эта функция передаёт звук разговора внешнему провайдеру распознавания речи (AssemblyAI) в реальном времени —
-        включая голос собеседника, который может не знать об этом. Убедитесь, что запись разговора законна в вашей
+        Эта функция передаёт звук разговора внешнему провайдеру распознавания речи в реальном времени —
+        Soniox для русского и украинского, AssemblyAI для английского — включая голос собеседника, который может
+        не знать об этом. Убедитесь, что запись разговора законна в вашей
         ситуации, и по возможности предупредите собеседника. Согласие даётся один раз, отозвать можно в настройках.
       </p>
       <div className="conversations-section__add-actions">

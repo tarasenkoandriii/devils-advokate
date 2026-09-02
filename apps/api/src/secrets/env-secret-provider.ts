@@ -19,7 +19,14 @@ export class EnvSecretProvider implements SecretProvider {
   async resolve(credentialRef: string): Promise<string> {
     const value = process.env[credentialRef];
     if (!value) {
-      this.logger.error(`Secret not found for credentialRef="${credentialRef}"`);
+      // Аудит 2026-09-02 (AI router): уровень понижен с error до debug.
+      // Отсутствие ключа — штатный ответ на вопрос «есть ли у провайдера
+      // ключ?», который роутер задаёт при КАЖДОМ подборе модели
+      // (providerHasUsableKey) и STT при каждом фоллбеке; строка ERROR
+      // на каждый вызов забивала журнал и маскировала настоящие ошибки.
+      // Кто именно остался без ключа, роутер называет сам — в тексте
+      // AIRouterNoCapableModelError и в своём логе.
+      this.logger.debug(`Secret not found for credentialRef="${credentialRef}"`);
       throw new Error(`Secret not found for credentialRef="${credentialRef}"`);
     }
     return value;

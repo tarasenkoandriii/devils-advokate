@@ -727,6 +727,44 @@ async function run() {
     assertEqual(paralinguistics.enqueueCalls, [conv.id], 'паралингвистический проход поставлен ПОСЛЕ записи транскрипта');
   });
 
+  test('РЕГРЕССИЯ (аудит 2026-09-02, STT): ПОВТОРНАЯ доставка вебхука не ставит вторую паралингвистику и не удаляет файл раньше срока', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    const conv = await prisma.conversation.create({
+      data: {
+        projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBING',
+        occurredAt: new Date(), externalTranscriptionJobId: 'job-para-dup',
+        audioBlobPathname: 'conversation-audio/c9/dup.m4a',
+        paralinguisticsEnabled: true,
+        pendingMediaConsumers: 2,
+      },
+    });
+    const transcription = new FakeTranscriptionService();
+    transcription.transcriptResultByJobId['job-para-dup'] = {
+      status: 'completed', id: 'job-para-dup', language_code: 'ru',
+      utterances: [{ speaker: 'A', text: 'реплика', start: 0, end: 1000, confidence: 0.9 }],
+    };
+    const audioBlob = makeFakeAudioBlob();
+    const paralinguistics = makeFakeParalinguistics();
+    const svc = new ConversationsService(
+      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, transcription as any, makeFakeStt(transcription) as any, audioBlob as any, paralinguistics as any,
+    );
+
+    const payload = { transcript_id: 'job-para-dup', status: 'completed' } as any;
+    await svc.handleTranscriptionWebhook(payload);
+    const second = await svc.handleTranscriptionWebhook(payload);
+
+    // До правки второй вызов проходил обработчик целиком: ещё один
+    // enqueueForConversation и ещё один декремент 2→1→0 — файл удалялся,
+    // пока первая паралингвистическая джоба его ещё читала.
+    assertEqual(second, { acknowledged: true, matched: true, duplicate: true }, 'повтор распознан как дубликат');
+    assertEqual(paralinguistics.enqueueCalls, [conv.id], 'паралингвистика поставлена ОДИН раз');
+    assertEqual(audioBlob.deleteCalls.length, 0, 'файл жив — его по-прежнему ждёт паралингвистика');
+    assertEqual(prisma._getConversation(conv.id).pendingMediaConsumers, 1, 'счётчик не декрементирован повторно');
+    assertEqual(prisma._getSegments().length, 1, 'транскрипт не удвоен');
+  });
+
   test('[blob] КЛЮЧЕВОЙ ТЕСТ: файл удаляется и при ОШИБКЕ расшифровки — на этой ветке файлы копятся дольше всего', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });

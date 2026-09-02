@@ -66,6 +66,24 @@ function isValidClassification(text: string): boolean {
   }
 }
 
+/** Аудит 2026-09-02 (job-landing): что посадочная уже сказала о
+ *  пользователе. Соответствие источник → аудитория то же, что в TMA
+ *  (lib/start-param.ts AUDIENCE_BY_SOURCE); дублируется, а не
+ *  импортируется, потому что пакеты не делят код. Неизвестный источник
+ *  (или его отсутствие) — без подсказки: гадать хуже, чем не знать. */
+export function landingContextHint(source: string | null | undefined): string | null {
+  if (source === 'jobs_landing') {
+    return 'Контекст: пользователь пришёл с посадочной страницы для соискателей — он ищет работу ' +
+      '(резюме, оценка вакансий, подготовка к собеседованию). Если описание не противоречит этому явно, ' +
+      'это сценарий "job-search".';
+  }
+  if (source === 'recruiting_landing') {
+    return 'Контекст: пользователь пришёл с посадочной страницы для рекрутеров и агентств — он нанимает ' +
+      '(вакансия, кандидаты, собеседования). Если описание не противоречит этому явно, это сценарий "interview-pool".';
+  }
+  return null;
+}
+
 export function decideScenario(suggested: IntakeScenario, confidence: number): IntakeScenario {
   return confidence >= INTAKE_CONFIDENCE_THRESHOLD ? suggested : 'UNIVERSAL';
 }
@@ -91,10 +109,12 @@ export class IntakeService {
     return session;
   }
 
-  private async classify(userId: string, answers: IntakeAnswer[]): Promise<IntakeClassification> {
-    const userPrompt = answers
-      .map((a, i) => (a.question ? `Вопрос ${i + 1}: ${a.question}\nОтвет: ${a.text}` : `Пользователь: ${a.text}`))
-      .join('\n\n');
+  private async classify(userId: string, answers: IntakeAnswer[], source?: string | null): Promise<IntakeClassification> {
+    const context = landingContextHint(source);
+    const userPrompt = [
+      ...(context ? [context] : []),
+      ...answers.map((a, i) => (a.question ? `Вопрос ${i + 1}: ${a.question}\nОтвет: ${a.text}` : `Пользователь: ${a.text}`)),
+    ].join('\n\n');
     // Тот же паттерн, что у argument-generation: ACTIVE-версия в PromptRegistry
     // (promptId = taskType) переопределяет константу; promptVersionId уходит в
     // телеметрию, чтобы матрица «предложил × выбрал» в /admin/intake была
@@ -164,14 +184,17 @@ export class IntakeService {
     userId: string,
     text: string,
     // Пункт [job-landing-attribution] 2026-09-02: метка источника с
-    // лендинга (§4 ТЗ job-landing). Ни на что в логике квиза не влияет
-    // — это ответ на вопрос «какая посадочная привела человека»,
-    // которого до этого не было где хранить.
+    // лендинга (§4 ТЗ job-landing) — ответ на вопрос «какая посадочная
+    // привела человека». Аудит 2026-09-02: источник теперь ещё и
+    // подсказка классификатору (landingContextHint) — человек, нажавший
+    // «Я ищу работу» на посадочной, уже назвал свой сценарий, и квиз не
+    // должен переспрашивать с нуля. Решение остаётся за моделью и за
+    // пользователем (dispatch — только по подтверждённому сценарию).
     attribution: { source?: string; campaign?: string } = {},
   ) {
     if (!text.trim()) throw new BadRequestException('text не может быть пустым');
     const answers: IntakeAnswer[] = [{ question: null, text: text.trim(), at: new Date().toISOString() }];
-    const cls = await this.classify(userId, answers);
+    const cls = await this.classify(userId, answers, attribution.source);
     const session = await this.prisma.intakeSession.create({
       data: { userId, answers: answers as any, suggestedScenario: cls.scenario, confidence: cls.confidence, followUpQuestion: cls.followUpQuestion, extracted: cls.extracted as any, source: attribution.source ?? null, campaign: attribution.campaign ?? null },
     });
@@ -185,7 +208,7 @@ export class IntakeService {
     const answers = [...((session.answers as unknown as IntakeAnswer[]) ?? [])];
     const pending = this.present(session).nextQuestion;
     answers.push({ question: pending, text: text.trim(), at: new Date().toISOString() });
-    const cls = await this.classify(userId, answers);
+    const cls = await this.classify(userId, answers, session.source);
     const updated = await this.prisma.intakeSession.update({
       where: { id: session.id },
       data: { answers: answers as any, suggestedScenario: cls.scenario, confidence: cls.confidence, followUpQuestion: cls.followUpQuestion, extracted: cls.extracted as any },

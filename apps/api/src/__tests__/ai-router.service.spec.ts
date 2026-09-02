@@ -27,6 +27,7 @@ function createFakePrisma() {
     _seedCapability(cap: any) { aiModelCapabilities.push(cap); },
     _seedConsent(c: any) { consentRecords.push(c); },
     _getJob(id: string) { return aiJobs.get(id); },
+    _getAllJobs() { return [...aiJobs.values()]; },
     _getDetections() { return contentScanDetections; },
     // Пункт [ai-locale] 2026-09-02: роутер спрашивает язык ответа
     // (User.languageCode) и добавляет требование в системный промпт.
@@ -35,7 +36,13 @@ function createFakePrisma() {
     },
     aIJob: {
       count: async () => fakeAiJobCount, // [rate-limits]: настраивается тестом лимита
-      findFirst: async () => fakeReusableJob, // [idempotency]
+      // [idempotency]: фейк проверяет фильтр по модели (аудит 2026-09-02
+      // — переиспользование только при той же разрешённой модели).
+      findFirst: async ({ where }: any = {}) => {
+        if (!fakeReusableJob) return null;
+        if (where?.modelVersionId && fakeReusableJob.modelVersionId && where.modelVersionId !== fakeReusableJob.modelVersionId) return null;
+        return fakeReusableJob;
+      },
       create: async ({ data }: any) => { const job = { id: nextId(), retryCount: 0, ...data }; aiJobs.set(job.id, job); return job; },
       update: async ({ where, data }: any) => {
         const job = aiJobs.get(where.id);
@@ -167,6 +174,23 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
       }),
     ).rejects.toThrow(AIRouterContentBlockedError);
     expect(getCallCount()).toBe(0);
+    // Аудит 2026-09-02 (AI router): заблокированная попытка ВИДНА в
+    // телеметрии — FAILED-джоба с inputScanStatus BLOCKED, а не пустота.
+    const blockedJobs = prisma._getAllJobs().filter((j: any) => j.inputScanStatus === 'BLOCKED');
+    expect(blockedJobs).toHaveLength(1);
+    expect(blockedJobs[0].status).toBe('FAILED');
+    expect(blockedJobs[0].requestUserId).toBe(USER_ID);
+  });
+
+  it('РЕГРЕССИЯ (аудит 2026-09-02, AI router): пропущенная сканом джоба создаётся с inputScanStatus PASSED, не вечным PENDING', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+    const router = buildRouter(prisma);
+    const result = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'обычный вопрос' });
+    expect(prisma._getJob(result.jobId).inputScanStatus).toBe('PASSED');
   });
 
   it('телефон/email в тексте маскируются в sanitizedText, но вызов проходит', async () => {
@@ -428,6 +452,30 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     expect(prisma._getJob(jobId).modelVersionId).toBe('mv-gemini');
   });
 
+  it('РЕГРЕССИЯ (аудит 2026-09-02, AI router): enqueue() без GEMINI_API_KEY — точная причина в ошибке, не общий текст', async () => {
+    // Пробел в покрытии, названный аудитом: фоновая полоса без ключа
+    // единственного фонового провайдера. Ошибка обязана назвать провайдера
+    // и переменную — иначе искать будут в ключах OpenAI, который для этой
+    // полосы и не рассматривался.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({
+      id: 'mv-gemini',
+      version: 'gemini-3.7-flash',
+      model: { name: 'gemini-flash', provider: { name: 'google', apiEndpoint: 'https://generativelanguage.googleapis.com', credentialRef: 'GEMINI_API_KEY' } },
+    });
+    prisma._seedCapability({ modelVersionId: 'mv-gemini', availability: 'active', vision: true, audio: true });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    const router = buildRouterWithMissingKeys(prisma, ['GEMINI_API_KEY']);
+    await expect(
+      router.enqueue({
+        userId: USER_ID,
+        taskType: 'media-review',
+        userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'abc' } } as any],
+      }),
+    ).rejects.toThrow(/ни у одной активной модели нет ключа провайдера: google \(GEMINI_API_KEY\)/);
+  });
+
   it('КЛЮЧЕВОЙ ТЕСТ [ai-locale]: база без колонки languageCode не убивает AI-вызов', async () => {
     // РЕГРЕССИЯ 2026-09-02, найдена владельцем в проде: код с колонкой
     // выкатился раньше, чем к базе применили ai_locale_2026_09_02.sql.
@@ -614,6 +662,10 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
         preferredModelVersionId: 'mv-does-not-exist',
       }),
     ).rejects.toThrow(AIRouterNoCapableModelError);
+    // Аудит 2026-09-02: причина названа в самом сообщении, не только в логе.
+    await expect(
+      router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'test', preferredModelVersionId: 'mv-does-not-exist' }),
+    ).rejects.toThrow(/выбранная модель \(mv-does-not-exist\) не входит/);
   });
 
   it('бросает AIRouterNoCapableModelError, если для taskType нет ни одной активной capability', async () => {
@@ -668,6 +720,25 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
       fakeAiJobCount = 0;
       delete process.env.AI_CALLS_PER_USER_PER_DAY;
       delete process.env.AI_IDEMPOTENCY_WINDOW_MINUTES;
+    }
+  });
+
+  it('РЕГРЕССИЯ (аудит 2026-09-02, AI router): готовый ответ ДРУГОЙ модели не переиспользуется — «сравнить движки» получает свежий вызов', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const getCallCount = mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+    const router = buildRouter(prisma);
+
+    try {
+      // Тот же inputHash, но COMPLETED-джоба сделана ДРУГОЙ моделью.
+      fakeReusableJob = { id: 'job-other-model', modelVersionId: 'mv-anthropic', inferences: [{ id: 'inf-other', output: '[{"text":"старый","stance":"pro","weight":0.5}]', createdAt: new Date() }] };
+      const result = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'обычный вопрос про зарплату', preferredModelVersionId: 'mv-openai' });
+      expect(result.jobId).not.toBe('job-other-model');
+      expect(getCallCount()).toBe(1); // провайдер вызван — ответ чужой модели не подменил новый
+    } finally {
+      fakeReusableJob = null;
     }
   });
 

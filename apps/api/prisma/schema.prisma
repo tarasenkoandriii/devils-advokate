@@ -3890,6 +3890,14 @@ model VenueBookingConfirmation {
 
 enum SparringVoiceReplyStatus {
   PENDING
+  // Аудит 2026-09-02 (STT): вебхук ЗАБИРАЕТ джобу атомарно
+  // (updateMany PENDING→PROCESSING) до вызова AI-оппонента. Раньше
+  // проверка status===PENDING шла обычным чтением, и две доставки одного
+  // вебхука (провайдер ретраит на таймаут нашего ответа, а ответ
+  // оппонента занимает секунды) создавали ДВЕ пары реплик. Для клиента
+  // PROCESSING = «ещё ждём», ровно как PENDING. Миграция:
+  // manual-migrations/voice_reply_processing_2026_09_02.sql.
+  PROCESSING
   COMPLETED
   FAILED
 }

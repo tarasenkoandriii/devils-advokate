@@ -262,7 +262,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
         haptic('error');
         return;
       }
-      if (job.status === 'PENDING') {
+      if (job.status === 'PENDING' || job.status === 'PROCESSING') {
         pollTimeoutRef.current = setTimeout(check, 2000);
         return;
       }

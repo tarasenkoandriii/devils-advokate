@@ -191,12 +191,14 @@ export class ConversationsService implements OnModuleInit {
     });
   }
 
-  /** Обработчик входящего webhook от AssemblyAI — не защищён
-   * TelegramAuthGuard (AssemblyAI не может пройти Telegram-авторизацию),
-   * поэтому сопоставление идёт по externalTranscriptionJobId, не по
-   * userId. Проверка подлинности запроса (webhook signing secret) —
-   * честно не реализована на этом проходе, см. README "Пункт 13",
-   * известное упрощение. */
+  /** Обработчик входящего webhook от STT-провайдера (AssemblyAI или
+   * Soniox — см. Пункт [stt-multi]) — не защищён TelegramAuthGuard
+   * (провайдер не может пройти Telegram-авторизацию), поэтому
+   * сопоставление идёт по externalTranscriptionJobId, не по userId.
+   * Подлинность запроса проверяет SttWebhookGuard на контроллере
+   * (общий секрет в заголовке, fail closed без секрета) — комментарий
+   * «проверка честно не реализована» устарел ещё в 2026-08 и снят
+   * аудитом 2026-09-02. */
   async handleTranscriptionWebhook(rawPayload: unknown) {
     // Пункт [stt-multi] 2026-09-02: тело вебхука разное у провайдеров
     // (transcript_id против id), разбор — один на всех.
@@ -225,6 +227,23 @@ export class ConversationsService implements OnModuleInit {
       // задачу, которая у нас уже не существует (например Conversation
       // удалена пользователем через Privacy Center до завершения job).
       return { acknowledged: true, matched: false };
+    }
+
+    // Аудит 2026-09-02 (STT), БЛОКЕР: повторная доставка вебхука (штатный
+    // ретрай провайдера — на таймаут нашего ответа, на не-2xx) доходила
+    // до конца обработчика и делала ДВА лишних действия: ещё раз ставила
+    // паралингвистическую джобу и ещё раз декрементировала счётчик
+    // потребителей файла — то есть удаляла аудио, пока первая джоба ещё
+    // его читала. Транскрипт при этом перезаписывался идемпотентно (upsert
+    // ниже), но побочные эффекты идемпотентными не были. Разговор, уже
+    // ушедший дальше TRANSCRIBING, повтор не трогает; FAILED
+    // переобрабатывается намеренно — прошлая попытка могла упасть на
+    // временной ошибке GET к провайдеру, а результат у него готов.
+    if (
+      conversation.status !== ConversationProcessingStatus.TRANSCRIBING &&
+      conversation.status !== ConversationProcessingStatus.FAILED
+    ) {
+      return { acknowledged: true, matched: true, duplicate: true };
     }
 
     // Провайдера определяет ПРЕФИКС сохранённого идентификатора, а не

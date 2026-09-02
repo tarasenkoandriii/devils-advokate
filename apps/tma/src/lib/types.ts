@@ -848,7 +848,9 @@ export interface SparringSession {
   voiceId: string | null;
 }
 
-export type SparringVoiceReplyStatus = 'PENDING' | 'COMPLETED' | 'FAILED';
+// Аудит 2026-09-02 (STT): PROCESSING — вебхук забрал джобу и ждёт ответ
+// оппонента; для клиента это то же «ещё ждём», что и PENDING.
+export type SparringVoiceReplyStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
 export interface SparringVoiceReplyJob {
   id: string;
@@ -1044,7 +1046,7 @@ export interface MaterialChatSession {
 export interface MaterialChatVoiceReplyJob {
   id: string;
   materialChatSessionId: string;
-  status: 'PENDING' | 'COMPLETED' | 'FAILED';
+  status: SparringVoiceReplyStatus;
   userMessageId: string | null;
   assistantMessageId: string | null;
   errorMessage: string | null;

@@ -414,7 +414,7 @@ export async function uploadConversationAudio(
   // fetch(), но РАЗБОР ответа — та же самая логика, что у всех
   // остальных функций, поэтому переиспользует handle() из api.ts, не
   // дублирует её отдельной копией.
-  return handle<{ audioUrl: string }>(response);
+  return handle<VoiceUploadResult>(response);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -961,7 +961,7 @@ export async function uploadSparringVoiceReply(sessionId: string, file: File): P
     },
     body: file,
   });
-  return handle<{ audioUrl: string }>(response);
+  return handle<VoiceUploadResult>(response);
 }
 
 export function submitSparringVoiceReply(
@@ -1435,7 +1435,7 @@ export async function uploadMaterialChatVoiceReply(sessionId: string, file: File
     },
     body: file,
   });
-  return handle<{ audioUrl: string }>(response);
+  return handle<VoiceUploadResult>(response);
 }
 
 export function submitMaterialChatVoiceReply(

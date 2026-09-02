@@ -31,7 +31,7 @@ function makeDeps() {
     },
     aIJob: {
       findFirst: async () => null, // [idempotency]: переиспользование в этих тестах не предмет проверки
-      count: async () => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
+      count: async (_args?: any) => 0, // [rate-limits]: суточный потолок — в этих тестах не предмет проверки
       create: jest.fn(async ({ data }: any) => {
         const job = { id: `job-${++idCounter}`, retryCount: 0, ...data };
         jobs.set(job.id, job);
@@ -127,6 +127,29 @@ describe('AIRouterService.execute — граница синхронного пу
 });
 
 describe('AIRouterService.enqueue', () => {
+  it('РЕГРЕССИЯ (аудит 2026-09-02, AI router): у медиа-задач свой суточный потолок — 429 до создания джобы; 0 в env отключает', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const req = {
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'abc' } }] as any,
+    };
+    try {
+      process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY = '3';
+      // Общий лимит (300) не выбран — count считает медиа-задачи по taskType.
+      deps.prisma.aIJob.count = async (args?: any) => (args?.where?.taskType === 'media-public-review' ? 3 : 0);
+      await expect(router.enqueue(req)).rejects.toThrow(/лимит медиа-разборов/);
+      expect(deps.prisma.aIJob.create).not.toHaveBeenCalled();
+
+      process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY = '0';
+      const { jobId } = await router.enqueue(req);
+      expect(jobId).toBeTruthy();
+    } finally {
+      delete process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY;
+    }
+  });
+
   it('сохраняет pendingRequest с MediaRef (не URL), lease и владельца', async () => {
     const deps = makeDeps();
     const router = makeRouter(deps);
@@ -204,6 +227,24 @@ describe('AIRouterService — воркер', () => {
     await router.pollRunning(10);
     expect(deps.prisma._rawQueries.some((q) => q.includes('FOR UPDATE SKIP LOCKED') && q.includes("status = 'QUEUED'"))).toBe(true);
     expect(deps.prisma._rawQueries.some((q) => q.includes('FOR UPDATE SKIP LOCKED') && q.includes("status = 'RUNNING'"))).toBe(true);
+  });
+
+  it('РЕГРЕССИЯ (аудит 2026-09-02, AI router): claim QUEUED ставит короткий lease, а опрос RUNNING — это UPDATE с подъёмом updatedAt, не голый SELECT', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    await router.submitQueued(3);
+    await router.pollRunning(10);
+    const claim = deps.prisma._rawQueries.find((q) => q.includes("status = 'QUEUED'"))!;
+    const poll = deps.prisma._rawQueries.find((q) => q.includes("WHERE status = 'RUNNING'"))!;
+    // Короткий lease при заборе: двухчасовой потолок ставится только
+    // после реальной постановки задачи провайдеру.
+    expect(claim).toContain("SET status = 'RUNNING'");
+    expect(claim).toContain('interval \'1 millisecond\' * ?');
+    // Опрос забирает джобы UPDATE … RETURNING: блокировка вне транзакции
+    // ничего не давала, а без подъёма updatedAt очередь длиннее limit
+    // никогда не доходила до свежих джоб.
+    expect(poll.trim().startsWith('UPDATE ai_jobs SET "updatedAt" = now()')).toBe(true);
+    expect(poll).toContain('RETURNING id');
   });
 
   it('pollRunning: completed → AIInference + COMPLETED + очистка pendingRequest; уведомляется обработчик', async () => {

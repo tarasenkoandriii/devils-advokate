@@ -3,7 +3,8 @@
 // ПОВТОРНЫЙ АУДИТ 2026-08-30 — закрывает пробел, который аудит нашёл с
 // двух сторон одновременно.
 //
-// Бэкенд требует ДВА согласия, прежде чем аудио уйдёт AssemblyAI:
+// Бэкенд требует ДВА согласия, прежде чем аудио уйдёт провайдеру
+// распознавания (Soniox / AssemblyAI / ElevenLabs — Пункт [stt-multi]):
 // ConsentType.RECORDING (сам факт записи разговора) и
 // ConsentType.EPHEMERAL_SERVER (одноразовая передача внешнему
 // провайдеру). Проверка была в ConversationsService.requestTranscription()
@@ -26,7 +27,10 @@ import { useState } from 'react';
 import { grantConsent, hasConsent, listConsents } from '../lib/features';
 import { haptic } from '../lib/telegram';
 
-const CONSENT_VERSION = 'v1';
+// Аудит 2026-09-02 (STT): v2 — текст называет всех трёх провайдеров, а не
+// только AssemblyAI; бэкенд проверяет тип согласия, не версию (см.
+// ThirdPartyAudioConsentPrompt о том, почему повторного запроса нет).
+const CONSENT_VERSION = 'v2';
 
 interface AudioProcessingConsentPromptProps {
   source: string;
@@ -64,8 +68,9 @@ export function AudioProcessingConsentPrompt({ source, onGranted, onCancel }: Au
       <p className="steelman-case__label">Обработка записи разговора</p>
       <p className="conversations-section__hint">
         Чтобы расшифровать разговор и разделить реплики по говорящим, файл передаётся внешнему сервису
-        распознавания речи (AssemblyAI). Он обрабатывает запись и возвращает текст; на нашей стороне
-        сохраняется расшифровка, а не сам файл. Запись может содержать голос собеседника — убедитесь, что
+        распознавания речи (Soniox для русского и украинского, AssemblyAI для английского; при сбое —
+        ElevenLabs). Он обрабатывает запись и возвращает текст; на нашей стороне сохраняется расшифровка,
+        а не сам файл, и у провайдера копия удаляется сразу после получения результата. Запись может содержать голос собеседника — убедитесь, что
         она получена законно.
       </p>
       <p className="conversations-section__hint">

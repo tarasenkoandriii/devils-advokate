@@ -43,7 +43,7 @@ export function InvestmentGroupPanel({ projectId, config }: { projectId: string;
         <>
           <EntityForm fields={[{ name: 'name', label: 'Название группы', type: 'text', required: true }]} submitLabel="Создать группу" onSubmit={async (v) => { setGroup(await domainApi.postJson('/investment-groups', v)); setTick((t) => t + 1); }} />
           <EntityForm fields={[{ name: 'token', label: 'Токен приглашения', type: 'text', required: true }]} submitLabel="Вступить по токену"
-            onSubmit={async (v) => { const t = String(v.token); const r = await domainApi.postJson(`/investment-groups/${t}/join`, { token: t }); setGroup(r.group ?? r); setTick((x) => x + 1); }} />
+            onSubmit={async (v) => { const t = String(v.token); const r = await domainApi.postJson('/investment-groups/invite/join', { token: t }); setGroup(r.group ?? r); setTick((x) => x + 1); }} />
           <p className="card-section__empty">Проект привязывается к группе при создании (поле investmentGroupId) — для существующего проекта создайте новый, указав группу.</p>
         </>
       )}

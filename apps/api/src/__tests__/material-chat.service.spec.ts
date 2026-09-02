@@ -112,6 +112,14 @@ function createFakePrisma() {
         voiceReplyJobs[idx] = { ...voiceReplyJobs[idx], ...data };
         return voiceReplyJobs[idx];
       },
+      // Аудит 2026-09-02 (STT): атомарный забор PENDING → PROCESSING.
+      updateMany: async ({ where, data }: any) => {
+        const matching = voiceReplyJobs.filter(
+          (j) => j.id === where.id && (where.status === undefined || j.status === where.status),
+        );
+        for (const j of matching) Object.assign(j, data);
+        return { count: matching.length };
+      },
     },
   };
 }
@@ -420,6 +428,27 @@ async function run() {
     assertEqual(updatedJob.status, 'COMPLETED', 'job переведён в COMPLETED');
     const userMsg = prisma._getMessages().find((m: any) => m.id === updatedJob.userMessageId);
     assertEqual(userMsg.text, 'Голосовой вопрос по материалу', 'транскрибированный текст стал текстом сообщения пользователя');
+  });
+
+  test('РЕГРЕССИЯ (аудит 2026-09-02, STT): две одновременные доставки вебхука — одна пара сообщений, второй обработчик уходит по count=0', async () => {
+    const prisma = createFakePrisma();
+    seedBase(prisma);
+    prisma._seedSession({ id: 'sess-1', workingMaterialId: MATERIAL_ID });
+    prisma._seedVoiceReplyJob({ id: 'job-1', materialChatSessionId: 'sess-1', externalTranscriptionJobId: 'ext-1' });
+    const fakeTranscription = new FakeTranscriptionForWebhook();
+    fakeTranscription.transcriptResultByJobId['ext-1'] = {
+      status: 'completed', id: 'ext-1',
+      utterances: [{ speaker: 'A', text: 'Голосовой вопрос по материалу', start: 0, end: 1000 }],
+    };
+    const svc = new MaterialChatService(prisma as any, new FakeAIRouterService() as any, fakeTranscription as any, fakeSecrets as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
+    const messagesBefore = prisma._getMessages().length;
+
+    const payload = { transcript_id: 'ext-1', status: 'completed' } as any;
+    await Promise.all([svc.handleVoiceReplyWebhook(payload), svc.handleVoiceReplyWebhook(payload)]);
+
+    const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === 'job-1');
+    assertEqual(updatedJob.status, 'COMPLETED', 'джоба завершена один раз');
+    assertEqual(prisma._getMessages().length - messagesBefore, 2, 'ровно USER+ASSISTANT, не четыре сообщения');
   });
 
   test('handleVoiceReplyWebhook() при ошибке AssemblyAI переводит job в FAILED, текст ошибки сохранён', async () => {
