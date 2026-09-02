@@ -287,10 +287,11 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
     }, SAMPLE_INTERVAL_MS);
 
     // (2) Live-детектор уловок — требует транскрипции, тот же токен-механизм, что Live Hints.
-    let token: string;
+    // Пункт [stt-multi] 2026-09-02: реквизиты целиком — провайдер
+    // выбран сервером по языку пользователя.
+    let credentials: Awaited<ReturnType<typeof mintTranscriptionToken>>;
     try {
-      const result = await mintTranscriptionToken();
-      token = result.token;
+      credentials = await mintTranscriptionToken();
     } catch {
       // Индикатор накала продолжает работать даже без транскрипции —
       // детектор уловок и трекинг аргументов просто не запускаются, не ломают всю сессию.
@@ -302,7 +303,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
     if (!audioContextForStream || !transcriptionStream) return;
 
     transcriptionHandleRef.current = connectLiveTranscription(
-      token,
+      credentials,
       audioContextForStream,
       transcriptionStream,
       handleTranscript,

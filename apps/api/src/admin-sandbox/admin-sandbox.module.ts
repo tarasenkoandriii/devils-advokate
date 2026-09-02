@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SttModule } from '../stt/stt.module';
 import { AdminSandboxController } from './admin-sandbox.controller';
 import { AdminSandboxService } from './admin-sandbox.service';
 import { AdminAuthModule } from '../admin-auth/admin-auth.module';
@@ -27,6 +28,7 @@ import { JobSearchModule } from '../job-search/job-search.module';
 // продовый путь.
 @Module({
   imports: [
+    SttModule,
     AdminAuthModule,
     ConsentModule,
     SecretsModule,
@@ -39,7 +41,7 @@ import { JobSearchModule } from '../job-search/job-search.module';
     IntakeModule,
     HealthModule,
     LiveSessionModule,
-    MajorPurchaseModule, // Пункт [sandbox-major-purchase] 2026-09-01 — этап 1 доменного покрытия
+    MajorPurchaseModule, // Пункт [sandbox-major-purchase, SttModule] 2026-09-01 — этап 1 доменного покрытия
     InvestmentModule, // Пункт [sandbox-investment] 2026-09-01 — этап 2 доменного покрытия
     InterviewPoolModule, // Пункт [sandbox-interview-pool] 2026-09-01 — этап 3 доменного покрытия
     FamilyLawModule, // Пункт [sandbox-family-law] 2026-09-01 — этап 4 доменного покрытия

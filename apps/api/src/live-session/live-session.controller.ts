@@ -18,8 +18,12 @@ export class LiveSessionController {
   // Уровень пользователя, не проекта — токен не привязан к конкретному
   // проекту, клиент решает, для какого разговора его использовать.
   @Post('live-session/transcription-token')
-  async mintToken(@CurrentUser() userId: string) {
-    return this.liveSession.mintTranscriptionToken(userId);
+  async mintToken(@CurrentUser() userId: string, @Body() dto?: { language?: string }) {
+    // Пункт [stt-multi] 2026-09-02: язык можно задать явно (экран, где
+    // пользователь сам выбирает язык записи); без него берётся язык
+    // профиля. От языка зависит ПРОВАЙДЕР: ru/uk → Soniox, en →
+    // AssemblyAI.
+    return this.liveSession.mintTranscriptionToken(userId, 300, dto?.language ?? null);
   }
 
   @Post('projects/:projectId/cooldown-nudge-events')

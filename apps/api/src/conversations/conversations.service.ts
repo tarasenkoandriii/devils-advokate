@@ -23,7 +23,9 @@ import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
-import { TranscriptionService, AssemblyAiWebhookPayload } from './transcription.service';
+import { TranscriptionService, type ParsedTranscript } from './transcription.service';
+import { SttService, sttJobIdVariants } from '../stt/stt.service';
+import { parseSttWebhookPayload } from '../stt/stt-webhook-payload';
 import { AudioBlobService } from './audio-blob.service';
 import { ParalinguisticsService } from './paralinguistics.service';
 import { MEDIA_LEASE_MAX_AGE_MS } from '../ai-router/ai-provider-client';
@@ -41,6 +43,7 @@ export class ConversationsService implements OnModuleInit {
     private readonly secrets: SecretsService,
     private readonly consent: ConsentService,
     private readonly transcription: TranscriptionService,
+    private readonly stt: SttService,
     private readonly audioBlob: AudioBlobService,
     private readonly paralinguistics: ParalinguisticsService,
   ) {}
@@ -118,8 +121,12 @@ export class ConversationsService implements OnModuleInit {
     // resolveAudioUrl() ниже.
     const audioUrl = await this.resolveAudioUrl(conversation, dto);
 
+    // Пункт [stt-multi] 2026-09-02: провайдера выбирает ЯЗЫК записи
+    // (ru/uk → Soniox, en → AssemblyAI), а строка AIProvider нужна ради
+    // версии модели в телеметрии. Провайдер, который реально возьмёт
+    // задачу, известен только после submitWebhookJob — фоллбек мог
+    // увести её к запасному, и это записано в самом идентификаторе.
     const provider = await requireAIProvider(this.prisma, 'assemblyai');
-    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
 
     // Повторный аудит 2026-09-01: версия модели резолвится ДО платного
     // submitJob. Раньше порядок был обратный — при отсутствии строки
@@ -139,11 +146,25 @@ export class ConversationsService implements OnModuleInit {
     }
 
     const webhookUrl = this.buildWebhookUrl(conversationId);
-    const { externalJobId } = await this.transcription.submitJob(apiKey, {
+    const { storedId, provider: usedProvider } = await this.stt.submitWebhookJob({
       audioUrl,
       webhookUrl,
       languageCode: dto.languageCode,
+      diarize: true,
+      uploadedTo: dto.sttProvider,
     });
+
+    // Телеметрия должна называть ТОГО, кто реально распознавал: задачу
+    // мог взять другой провайдер (по языку или как запасной). Если его
+    // строки в базе нет — оставляем версию, найденную выше, а не роняем
+    // уже поставленную (и оплаченную) задачу.
+    const usedModelVersion =
+      usedProvider === provider.name
+        ? modelVersion
+        : (await this.prisma.aIModelVersion.findFirst({
+            where: { model: { provider: { name: usedProvider } } },
+            orderBy: { createdAt: 'asc' },
+          })) ?? modelVersion;
 
     // Пункт [multimodal] §7.2 — счётчик потребителей файла. AssemblyAI
     // — всегда потребитель №1 (для blob-пути); паралингвистика — №2,
@@ -161,8 +182,8 @@ export class ConversationsService implements OnModuleInit {
       where: { id: conversationId },
       data: {
         status: ConversationProcessingStatus.TRANSCRIBING,
-        externalTranscriptionJobId: externalJobId,
-        transcriptionProviderVersionId: modelVersion.id,
+        externalTranscriptionJobId: storedId,
+        transcriptionProviderVersionId: usedModelVersion.id,
         paralinguisticsEnabled: wantsParalinguistics,
         pendingMediaConsumers: hasBlob ? (wantsParalinguistics ? 2 : 1) : 0,
         mediaLeaseExpiresAt: hasBlob ? new Date(Date.now() + MEDIA_LEASE_MAX_AGE_MS) : null,
@@ -176,7 +197,10 @@ export class ConversationsService implements OnModuleInit {
    * userId. Проверка подлинности запроса (webhook signing secret) —
    * честно не реализована на этом проходе, см. README "Пункт 13",
    * известное упрощение. */
-  async handleTranscriptionWebhook(payload: AssemblyAiWebhookPayload) {
+  async handleTranscriptionWebhook(rawPayload: unknown) {
+    // Пункт [stt-multi] 2026-09-02: тело вебхука разное у провайдеров
+    // (transcript_id против id), разбор — один на всех.
+    const payload = parseSttWebhookPayload(rawPayload);
     // Финальный аудит 2026-08-30 — реальный вебхук AssemblyAI несёт только
     // transcript_id/status, без данных; полный результат — отдельным GET.
     // Явная проверка вместо доверия типу интерфейса: если поле пустое
@@ -184,12 +208,15 @@ export class ConversationsService implements OnModuleInit {
     // Prisma findFirst() трактовать undefined как «фильтра нет» и
     // возвращать первую попавшуюся запись — см. комментарий в
     // transcription.service.ts у AssemblyAiWebhookPayload.
-    if (!payload.transcript_id) {
+    if (!payload.externalJobId) {
       return { acknowledged: true, matched: false };
     }
 
+    // Ищем по обоим написаниям: задачи до Пункта [stt-multi] лежат без
+    // префикса провайдера, новые — с ним. Иначе результат уже
+    // оплаченной задачи, поставленной до выката, потерялся бы.
     const conversation = await this.prisma.conversation.findFirst({
-      where: { externalTranscriptionJobId: payload.transcript_id },
+      where: { externalTranscriptionJobId: { in: sttJobIdVariants(payload.externalJobId) } },
     });
     if (!conversation) {
       // Не бросаем 404 наружу как есть — AssemblyAI не обязан знать
@@ -200,11 +227,17 @@ export class ConversationsService implements OnModuleInit {
       return { acknowledged: true, matched: false };
     }
 
-    const provider = await requireAIProvider(this.prisma, 'assemblyai');
-    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
-    const result = await this.transcription.getTranscriptResult(apiKey, payload.transcript_id);
+    // Провайдера определяет ПРЕФИКС сохранённого идентификатора, а не
+    // язык: задачу мог взять запасной провайдер.
+    let parsed: ParsedTranscript | null = null;
+    let failureReason: string | null = null;
+    try {
+      parsed = await this.stt.fetchResult(conversation.externalTranscriptionJobId ?? payload.externalJobId);
+    } catch (err) {
+      failureReason = err instanceof Error ? err.message : String(err);
+    }
 
-    if (result.status === 'error') {
+    if (failureReason !== null || parsed === null) {
       await this.prisma.conversation.update({
         where: { id: conversation.id },
         data: { status: ConversationProcessingStatus.FAILED },
@@ -222,7 +255,6 @@ export class ConversationsService implements OnModuleInit {
       return { acknowledged: true, matched: true };
     }
 
-    const parsed = this.transcription.parseTranscriptResult(result);
 
     // Уникальные диаризационные лейблы → ConversationParticipant.
     // Первый встреченный спикер помечается isSelf=true эвристически
@@ -385,7 +417,12 @@ export class ConversationsService implements OnModuleInit {
    * платный внешний job) — клиент может захотеть посмотреть на
    * загруженный файл/подтвердить перед стартом обработки, не всегда
    * запускать её автоматически сразу по факту загрузки. */
-  async streamUploadAudio(userId: string, conversationId: string, fileStream: ReadableStream<Uint8Array>) {
+  async streamUploadAudio(
+    userId: string,
+    conversationId: string,
+    fileStream: ReadableStream<Uint8Array>,
+    languageCode?: string | null,
+  ) {
     const conversation = await this.findOwnedConversation(userId, conversationId);
 
     // ПОВТОРНЫЙ АУДИТ 2026-08-30: здесь НЕ было ни одной приватность-
@@ -396,11 +433,15 @@ export class ConversationsService implements OnModuleInit {
     // вызовов: upload без transcribe.
     await this.consent.assertAudioMayLeaveDevice(userId, conversation.projectId);
 
-    const provider = await requireAIProvider(this.prisma, 'assemblyai');
-    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
-
-    const uploadUrl = await this.transcription.streamUpload(apiKey, fileStream);
-    return { audioUrl: uploadUrl };
+    // РЕВЬЮ 2026-09-02: байты уходили ЖЁСТКО в AssemblyAI, а задача
+    // дальше маршрутизировалась по языку — для ru/uk она уезжала в
+    // Soniox со ссылкой вида cdn.assemblyai.com/upload/…, доступной
+    // «только серверам AssemblyAI». Теперь загрузка идёт тому же
+    // провайдеру, который возьмёт задачу, и его имя возвращается
+    // клиенту: requestTranscription получит его как sttProvider и не
+    // будет пытаться отдать чужую ссылку соседу.
+    const { audioUrl, provider: sttProvider } = await this.stt.uploadAudio(fileStream, languageCode ?? null);
+    return { audioUrl, sttProvider };
   }
 
   /** Пункт [blob-upload] 2026-08-31 — подтверждение прямой загрузки в

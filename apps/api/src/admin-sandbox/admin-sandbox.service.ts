@@ -34,14 +34,12 @@
 //    реальном деплое.
 
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import { requireAIProvider } from '../common/require-provider';
 import type { HandleUploadBody } from '@vercel/blob/client';
 import { ConsentType, ConversationSourceType, PurchaseCategory } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConversationsService } from '../conversations/conversations.service';
-import { TranscriptionService } from '../conversations/transcription.service';
 import { AudioBlobService } from '../conversations/audio-blob.service';
 import { YouTubeSearchService } from '../media-review/youtube-search.service';
 import { MediaReviewService } from '../media-review/media-review.service';
@@ -70,6 +68,7 @@ import { InterviewPoolRelevanceService } from '../interview-pool/interview-pool-
 import { InterviewPoolReportService } from '../interview-pool/interview-pool-report.service';
 import { InterviewPoolTeamService } from '../interview-pool/interview-pool-team.service';
 import { LiveSessionService } from '../live-session/live-session.service';
+import { SttService } from '../stt/stt.service';
 import { ManipulationDetectorService } from '../manipulation-detector/manipulation-detector.service';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 import { TurningPointsService } from '../turning-points/turning-points.service';
@@ -164,6 +163,7 @@ export class AdminSandboxService {
     private readonly healthOnboarding: HealthOnboardingService,
     private readonly health: HealthService,
     private readonly liveSession: LiveSessionService,
+    private readonly stt: SttService,
     private readonly manipulation: ManipulationDetectorService,
     private readonly discrepancy: DiscrepancyAnalysisService,
     private readonly turningPoints: TurningPointsService,
@@ -186,7 +186,6 @@ export class AdminSandboxService {
     private readonly dtpV2: DtpV2Service,
     private readonly jobSearchOnboarding: JobSearchOnboardingService,
     private readonly jobSearch: JobSearchService,
-    private readonly transcription: TranscriptionService,
   ) {}
 
   /** Песочница — операторский инструмент: она расходует реальные
@@ -533,9 +532,19 @@ export class AdminSandboxService {
     const wav = makeSandboxWav();
     const { Readable } = await import('node:stream');
     const stream = Readable.toWeb(Readable.from(wav)) as unknown as ReadableStream<Uint8Array>;
-    const { audioUrl } = await this.conversations.streamUploadAudio(operatorUserId, conversation.id, stream);
+    // Пункт [stt-multi] 2026-09-02: провайдер, принявший байты,
+    // передаётся дальше — иначе задача могла бы уйти другому, а ссылка
+    // загрузки чужому провайдеру бесполезна.
+    const { audioUrl, sttProvider } = await this.conversations.streamUploadAudio(
+      operatorUserId,
+      conversation.id,
+      stream,
+    );
 
-    const updated = await this.conversations.requestTranscription(operatorUserId, conversation.id, { audioUrl });
+    const updated = await this.conversations.requestTranscription(operatorUserId, conversation.id, {
+      audioUrl,
+      sttProvider,
+    });
 
     return {
       projectId: project.id,
@@ -925,10 +934,12 @@ export class AdminSandboxService {
       throw new BadRequestException('Запись слишком длинная (лимит ~3 МБ) — говорите короче или частями');
     }
     await this.consent.requireConsent(operatorUserId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
-    const provider = await requireAIProvider(this.prisma, 'assemblyai');
-    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
     const audio = Buffer.from(base64Content, 'base64');
-    return this.transcription.transcribeShortNoteSync(apiKey, audio, languageCode);
+    // Пункт [stt-multi] 2026-09-02: провайдера выбирает язык записи
+    // (ru/uk → Soniox, en → AssemblyAI), а при отказе основного
+    // подхватывает ElevenLabs — на этой полосе фоллбек работает в
+    // полную силу, байты уже у нас в руках.
+    return this.stt.transcribeSync(audio, languageCode);
   }
 
   /** Пункт [sandbox-voice] — токен живой транскрипции для голосового
@@ -937,9 +948,11 @@ export class AdminSandboxService {
    * наш backend не проходит), с тем же требованием согласия
    * THIRD_PARTY_AUDIO_RECORDING — отказ без согласия является
    * результатом прогона, песочница его не обходит. */
-  async mintTranscriptionToken(operatorUserId: string) {
+  async mintTranscriptionToken(operatorUserId: string, language: string | null = null) {
     await this.assertOperator(operatorUserId);
-    return this.liveSession.mintTranscriptionToken(operatorUserId);
+    // Пункт [stt-multi] 2026-09-02: оператор выбирает язык записи прямо
+    // в песочнице — он и определяет провайдера (ru/uk → Soniox).
+    return this.liveSession.mintTranscriptionToken(operatorUserId, 300, language);
   }
 
   /** OCR лабдокумента — продовый uploadLabDocument: реальный вызов

@@ -333,8 +333,10 @@ export function sandboxHealthExtract(conversationId: string) {
 export function sandboxHealthConfig(projectId: string, draft: SandboxHealthDraft) {
   return apiPost<{ id: string }>('/admin/sandbox/health/config', { projectId, ...draft });
 }
-export function sandboxTranscriptionToken() {
-  return apiPost<{ token: string; expiresInSeconds: number }>('/admin/sandbox/transcription-token', {});
+export function sandboxTranscriptionToken(language?: string): Promise<LiveTranscriptionCredentials> {
+  // Пункт [stt-multi] 2026-09-02: сервер отдаёт провайдера, адрес и
+  // модель — их выбирает язык записи (ru/uk → Soniox, en → AssemblyAI).
+  return apiPost<LiveTranscriptionCredentials>('/admin/sandbox/transcription-token', { language });
 }
 export function sandboxHealthLabDocument(configId: string, base64Content: string) {
   return apiPost<{ id: string; ocrText: string; verified: boolean }>('/admin/sandbox/health/lab-document', { configId, base64Content });
@@ -523,6 +525,7 @@ export function sandboxDtpConsultationBreakdown(configId: string, conversationId
 // джоб-сайтов (без кроулинга — ссылки приносит человек) → AI-сверка с
 // CV → детерминированная статистика.
 import type { SandboxJsCv, SandboxJsDraft, SandboxJsStatistics, SandboxJsVacancyMatch } from './types';
+import type { LiveTranscriptionCredentials } from './live-transcription';
 
 export function sandboxJsAnswer(conversationId: string, text: string) {
   return apiPost<{ ok: true }>('/admin/sandbox/job-search/answer', { conversationId, text });

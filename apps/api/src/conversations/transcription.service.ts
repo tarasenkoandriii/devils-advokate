@@ -1,13 +1,17 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { SecretsService } from '../secrets/secrets.service';
-import { ASSEMBLYAI_WEBHOOK_HEADER, ASSEMBLYAI_WEBHOOK_SECRET_REF } from '../common/webhook/assemblyai-webhook.guard';
+import { STT_WEBHOOK_HEADER, STT_WEBHOOK_SECRET_REF, resolveSttWebhookSecret } from '../common/webhook/stt-webhook.guard';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 export interface AssemblyAiSubmitParams {
   audioUrl: string;
   webhookUrl: string;
   languageCode?: string;
+  /** Пункт [stt-multi] 2026-09-02: разговор — да, короткая реплика —
+   *  нет. Раньше диаризация была включена всегда, и голосовая реплика
+   *  одного говорящего оплачивалась как разговор. */
+  diarize?: boolean;
 }
 
 export interface AssemblyAiSubmitResult {
@@ -78,9 +82,12 @@ export class TranscriptionService {
   /** Fail closed: без секрета задачу не отправляем — иначе вебхук с
    * результатом никогда не пройдёт guard и разговор зависнет в TRANSCRIBING. */
   private async webhookSecret(): Promise<string> {
-    const secret = await this.secrets.resolve(ASSEMBLYAI_WEBHOOK_SECRET_REF).catch(() => null);
+    // Пункт [stt-multi] 2026-09-02: секрет один на всех STT-провайдеров
+    // (новое имя STT_WEBHOOK_SECRET, историческое ASSEMBLYAI_WEBHOOK_SECRET
+    // работает как раньше — переименовывать переменную в деплое не нужно).
+    const secret = await resolveSttWebhookSecret(this.secrets);
     if (!secret) {
-      throw new TranscriptionProviderError(`${ASSEMBLYAI_WEBHOOK_SECRET_REF} не настроен — транскрипция через вебхук невозможна`);
+      throw new TranscriptionProviderError(`${STT_WEBHOOK_SECRET_REF} не настроен — транскрипция через вебхук невозможна`);
     }
     return secret;
   }
@@ -107,9 +114,9 @@ export class TranscriptionService {
         // Упорядоченный список фолбэков по доступности модели (не языка —
         // за это отвечает сама universal-3-5-pro, см. language_code ниже).
         speech_models: ['universal-3-5-pro', 'universal-2'],
-        speaker_labels: true,
+        speaker_labels: params.diarize ?? true,
         webhook_url: params.webhookUrl,
-        webhook_auth_header_name: ASSEMBLYAI_WEBHOOK_HEADER,
+        webhook_auth_header_name: STT_WEBHOOK_HEADER,
         webhook_auth_header_value: await this.webhookSecret(),
         language_code: params.languageCode,
         redact_pii: false, // не включено по умолчанию — решение о PII-редактировании транскрипта: отдельная фича, не должна тихо резать текст без явного выбора пользователя

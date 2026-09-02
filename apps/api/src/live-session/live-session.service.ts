@@ -18,22 +18,20 @@
 // "первоисточник не покидает устройство", что и везде в проекте.
 
 import { Injectable, NotFoundException, BadGatewayException } from '@nestjs/common';
-import { requireAIProvider } from '../common/require-provider';
+import { SttService } from '../stt/stt.service';
+import type { SttRealtimeCredentials } from '../stt/stt-provider.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
-import { SecretsService } from '../secrets/secrets.service';
 import { assertProjectOwnership } from '../common/project-ownership';
-import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
-const ASSEMBLYAI_TEMP_TOKEN_URL = 'https://streaming.assemblyai.com/v3/token';
 
 @Injectable()
 export class LiveSessionService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly secrets: SecretsService,
     private readonly consent: ConsentService,
+    private readonly stt: SttService,
   ) {}
 
   /** Задел под §3.4/§3.33 — минтит короткоживущий токен для прямого
@@ -52,25 +50,43 @@ export class LiveSessionService {
    * VoiceTextInput в intake-квизе) не требовал согласия — токен
    * выдавался безусловно. Уровень пользователя, не проекта — токен не
    * привязан к конкретному проекту (тот же довод, что ниже про клиента). */
-  async mintTranscriptionToken(userId: string, expiresInSeconds = 300): Promise<{ token: string; expiresInSeconds: number }> {
+  async mintTranscriptionToken(
+    userId: string,
+    expiresInSeconds = 300,
+    languageOverride?: string | null,
+  ): Promise<SttRealtimeCredentials> {
     await this.consent.requireConsent(userId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
-    const provider = await requireAIProvider(this.prisma, 'assemblyai');
-    const apiKey = await this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
 
-    let response: Response;
+    // Пункт [stt-multi] 2026-09-02: провайдера выбирает ЯЗЫК, а не
+    // константа. Русский и украинский идут в Soniox (у AssemblyAI их
+    // нет в потоковом режиме ВООБЩЕ — живой прогон на русском вернул
+    // галлюцинацию на английском и иврите), английский остаётся на
+    // AssemblyAI. Язык берём из профиля (Telegram присылает его с
+    // каждым запросом), клиент может передать явный.
+    const language = languageOverride ?? (await this.userLanguage(userId));
+
     try {
-      response = await fetchWithTimeout(`${ASSEMBLYAI_TEMP_TOKEN_URL}?expires_in_seconds=${expiresInSeconds}`, {
-        method: 'GET',
-        headers: { Authorization: apiKey },
-      });
+      return await this.stt.mintRealtimeToken(language, expiresInSeconds);
+    } catch (err) {
+      // Ошибка провайдера наружу — как недоступность внешнего сервиса,
+      // с названием провайдера в тексте: конфигурационный пробел
+      // (нет ключа) отличим от сбоя.
+      throw new BadGatewayException(
+        `Живая расшифровка недоступна: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Язык пользователя из профиля. Отсутствие колонки/строки не должно
+   *  ронять выдачу токена — тот же приём, что в resolveResponseLanguage
+   *  ([ai-locale]): не знаем язык — отдаём мультиязычного провайдера. */
+  private async userLanguage(userId: string): Promise<string | null> {
+    try {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { languageCode: true } });
+      return user?.languageCode ?? null;
     } catch {
-      throw new BadGatewayException('AssemblyAI (временный токен) недоступен — сетевая ошибка');
+      return null;
     }
-    if (!response.ok) {
-      throw new BadGatewayException(`AssemblyAI (временный токен) вернул ошибку: ${response.status}`);
-    }
-    const data: any = await response.json(); // runtime-shape проверяется ниже; @types/node >=20.19 типизирует json() как unknown
-    return { token: data.token, expiresInSeconds };
   }
 
   /** "Легко проигнорировать" (buкально ТЗ) — dismissed честно

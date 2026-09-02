@@ -33,8 +33,14 @@ type VoiceLang = 'ru' | 'uk' | 'en' | 'auto';
 
 const LANG_LABELS: Record<VoiceLang, string> = { ru: 'Русский', uk: 'Українська', en: 'English', auto: 'Автоопределение' };
 
-// Живой стриминг доступен только языкам из его списка поддержки.
-const STREAMING_LANGS = new Set<VoiceLang>(['en']);
+// Пункт [stt-multi] 2026-09-02: живой стриминг доступен всем трём
+// языкам. Раньше здесь стоял только 'en' — потому что у AssemblyAI нет
+// ни русского, ни украинского ни в одной потоковой модели, и для них
+// оставался лишь путь короткой заметки. Теперь ru/uk ведёт Soniox
+// (переключение языка внутри фразы он тоже умеет), en — прежний
+// провайдер. 'auto' остаётся на заметке: без выбранного языка честнее
+// дать модели весь файл целиком, чем угадывать провайдера на лету.
+const STREAMING_LANGS = new Set<VoiceLang>(['ru', 'uk', 'en']);
 
 export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 3 }: Props) {
   const [lang, setLang] = useState<VoiceLang>('ru');
@@ -89,13 +95,13 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
       if (!stream) throw new Error('Аудиопоток недоступен');
 
       if (STREAMING_LANGS.has(lang)) {
-        // ── Живой стриминг (en): текст появляется по мере речи. ──
-        const { token } = await sandboxTranscriptionToken();
+        // ── Живой стриминг (ru/uk/en): текст появляется по мере речи. ──
+        const credentials = await sandboxTranscriptionToken(lang);
         const ctx = capture.getAudioContext();
         if (!ctx) throw new Error('Аудиоконтекст недоступен');
         let partial = '';
         wsRef.current = connectLiveTranscription(
-          token,
+          credentials,
           ctx,
           stream,
           (update) => {
@@ -112,6 +118,9 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled, rows = 
             setVoiceError(message);
             stopCaptureOnly();
           },
+          // Пункт [stt-multi] 2026-09-02: язык уже задан при выдаче
+          // реквизитов (он же выбрал провайдера). Параметр URL остаётся
+          // только для ветки AssemblyAI и игнорируется у Soniox.
           { languageCodes: [lang] },
         );
       } else {

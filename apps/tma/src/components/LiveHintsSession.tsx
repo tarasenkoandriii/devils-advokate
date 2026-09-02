@@ -71,10 +71,12 @@ export function LiveHintsSession({ projectId, mode = 'conversation' }: LiveHints
     captureHandleRef.current = captureHandle;
     segmentsRef.current = [];
 
-    let token: string;
+    let credentials: Awaited<ReturnType<typeof mintTranscriptionToken>>;
     try {
-      const result = await mintTranscriptionToken();
-      token = result.token;
+      // Пункт [stt-multi] 2026-09-02: вместе с токеном приходит
+      // провайдер — для русского и украинского это Soniox, для
+      // английского прежний AssemblyAI.
+      credentials = await mintTranscriptionToken();
     } catch {
       setCaptureState('error');
       setCaptureError('Не удалось получить доступ к транскрипции');
@@ -95,7 +97,7 @@ export function LiveHintsSession({ projectId, mode = 'conversation' }: LiveHints
     }
 
     transcriptionHandleRef.current = connectLiveTranscription(
-      token,
+      credentials,
       audioContextForStream,
       transcriptionStream,
       handleTranscript,

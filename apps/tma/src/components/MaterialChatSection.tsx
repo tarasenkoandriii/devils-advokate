@@ -182,8 +182,10 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
     setVoiceStatus('uploading');
     setError(null);
     try {
-      const { audioUrl } = await uploadMaterialChatVoiceReply(activeSession.id, file);
-      const job = await submitMaterialChatVoiceReply(activeSession.id, audioUrl);
+      // Пункт [stt-multi] 2026-09-02: провайдер, принявший байты,
+      // передаётся дальше вместе с задачей.
+      const { audioUrl, sttProvider } = await uploadMaterialChatVoiceReply(activeSession.id, file);
+      const job = await submitMaterialChatVoiceReply(activeSession.id, audioUrl, sttProvider);
       setVoiceStatus('transcribing');
       pollVoiceReplyStatus(activeSession.id, job.id);
     } catch (err) {

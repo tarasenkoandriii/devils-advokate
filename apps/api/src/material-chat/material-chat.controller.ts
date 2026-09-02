@@ -8,9 +8,8 @@ import type { Request } from 'express';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
-import { AssemblyAiWebhookGuard } from '../common/webhook/assemblyai-webhook.guard';
+import { SttWebhookGuard } from '../common/webhook/stt-webhook.guard';
 import { MaterialChatService } from './material-chat.service';
-import type { AssemblyAiWebhookPayload } from '../conversations/transcription.service';
 
 class StartSessionDto {
   engineId?: string;
@@ -23,6 +22,8 @@ class ReplyDto {
 
 class SubmitVoiceReplyDto {
   audioUrl!: string;
+  /** Пункт [stt-multi] 2026-09-02 — см. sparring.controller.ts. */
+  sttProvider?: 'soniox' | 'assemblyai' | 'elevenlabs';
 }
 
 @Controller()
@@ -92,7 +93,7 @@ export class MaterialChatController {
     @Param('sessionId') sessionId: string,
     @Body() dto: SubmitVoiceReplyDto,
   ) {
-    return this.materialChat.submitVoiceReply(userId, sessionId, dto.audioUrl);
+    return this.materialChat.submitVoiceReply(userId, sessionId, dto.audioUrl, dto.sttProvider);
   }
 
   @Get('material-chat-sessions/:sessionId/voice-reply/:jobId')
@@ -106,8 +107,8 @@ export class MaterialChatController {
   }
 
   @Post('material-chat-sessions/webhook/voice-reply')
-  @UseGuards(AssemblyAiWebhookGuard)
-  async voiceReplyWebhook(@Body() payload: AssemblyAiWebhookPayload) {
+  @UseGuards(SttWebhookGuard)
+  async voiceReplyWebhook(@Body() payload: unknown) {
     return this.materialChat.handleVoiceReplyWebhook(payload);
   }
 }

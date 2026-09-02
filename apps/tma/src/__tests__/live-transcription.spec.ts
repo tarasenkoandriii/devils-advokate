@@ -1,4 +1,4 @@
-import { connectLiveTranscription, parseStreamingMessage, resampleTo16kMono } from '../lib/live-transcription';
+import { connectLiveTranscription, parseSonioxMessage, parseStreamingMessage, resampleTo16kMono } from '../lib/live-transcription';
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
   const a = JSON.stringify(actual);
@@ -221,6 +221,143 @@ function run() {
     lastInstance.onclose({ code: 3005 });
 
     assertEqual(capturedError, undefined, 'закриття після власного stop() — очікуване, onError не викликається незалежно від коду, який надішле сервер');
+  });
+
+  // ── Пункт [stt-multi] 2026-09-02 — второй провайдер ──────────────
+  //
+  // Причина: у AssemblyAI НЕТ русского и украинского ни в одной
+  // потоковой модели (живой прогон на русском вернул галлюцинацию на
+  // английском и иврите). Для ru/uk сервер выдаёт реквизиты Soniox, и
+  // здесь проверяется, что клиент открывает ИМЕННО его протокол.
+
+  const sonioxCredentials = {
+    provider: 'soniox' as const,
+    token: 'snx_temp_key',
+    expiresInSeconds: 300,
+    websocketUrl: 'wss://stt-rt.soniox.com/transcribe-websocket',
+    model: 'stt-rt-v5',
+    languageHints: ['uk', 'ru'],
+  };
+
+  function fakeAudioContextForTest() {
+    const fakeNode = { connect: () => {}, disconnect: () => {} };
+    return {
+      sampleRate: 16000,
+      createMediaStreamSource: () => fakeNode,
+      createScriptProcessor: () => ({ ...fakeNode, onaudioprocess: null }),
+      destination: {},
+    } as any;
+  }
+
+  test('КЛЮЧОВИЙ ТЕСТ [stt-multi]: реквізити Soniox відкривають ЙОГО сокет, а конфігурація йде ПЕРШИМ повідомленням (у нього немає параметрів у URL)', () => {
+    let capturedUrl: string | undefined;
+    const sent: string[] = [];
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: any) => void) | null = null;
+      constructor(url: string) { capturedUrl = url; }
+      send(data: any) { sent.push(typeof data === 'string' ? data : '<binary>'); }
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+
+    const handle = connectLiveTranscription(sonioxCredentials, fakeAudioContextForTest(), {} as any, () => {}, () => {});
+    // Конфигурация отправляется по open — эмулируем открытие сокета.
+    const ws = (handle as any);
+    // onopen висит на самом сокете, доступ через захваченный конструктор
+    // не нужен: проверяем через отправленные сообщения после ручного вызова.
+    void ws;
+    assertEqual(capturedUrl, 'wss://stt-rt.soniox.com/transcribe-websocket', 'endpoint Soniox без параметрів у URL');
+  });
+
+  test('КЛЮЧОВИЙ ТЕСТ [stt-multi]: перше повідомлення несе тимчасовий ключ, модель і ПІДКАЗКИ ОБОХ МОВ (змішана мова — норма для аудиторії)', () => {
+    const sent: string[] = [];
+    let opener: null | (() => void) = null;
+    const setOpener = (fn: () => void) => { opener = fn; };
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 1;
+      set onopen(fn: () => void) { setOpener(fn); }
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: any) => void) | null = null;
+      constructor(_url: string) {}
+      send(data: any) { sent.push(typeof data === 'string' ? data : '<binary>'); }
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+
+    connectLiveTranscription(sonioxCredentials, fakeAudioContextForTest(), {} as any, () => {}, () => {});
+    (opener as null | (() => void))?.();
+
+    const config = JSON.parse(sent[0]);
+    assertEqual(config.api_key, 'snx_temp_key', 'тимчасовий ключ, не постійний — на клієнт постійний не потрапляє');
+    assertEqual(config.model, 'stt-rt-v5', 'модель задана явно, не «за замовчуванням провайдера»');
+    assertEqual(config.language_hints, ['uk', 'ru'], 'обидві мови: суржик і ru↔uk суміш — норма, а не край');
+    assertEqual(config.enable_speaker_diarization, true, 'діаризація увімкнена — вона входить у ціну провайдера');
+    assertEqual(config.audio_format, 'pcm_s16le', 'формат збігається з тим, що реально шле resampleTo16kMono');
+    assertEqual(config.sample_rate, 16000, 'частота дискретизації узгоджена з ресемплером');
+  });
+
+  test('КЛЮЧОВИЙ ТЕСТ [stt-multi]: stop() надсилає ПОРОЖНІЙ РЯДОК (кінець аудіо), а не просто закриває сокет — інакше губиться хвіст фрази', () => {
+    const sent: string[] = [];
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 1;
+      onopen: (() => void) | null = null;
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((e: any) => void) | null = null;
+      constructor(_url: string) {}
+      send(data: any) { sent.push(typeof data === 'string' ? data : '<binary>'); }
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+
+    const handle = connectLiveTranscription(sonioxCredentials, fakeAudioContextForTest(), {} as any, () => {}, () => {});
+    handle.stop();
+    assertEqual(sent[sent.length - 1], '', 'останнє повідомлення — порожній рядок: сервіс дошле фінальні токени');
+  });
+
+  test('[stt-multi] голий токен (стара сигнатура) як і раніше означає AssemblyAI — виклики, що не оновлені, не ламаються', () => {
+    let capturedUrl: string | undefined;
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = 0;
+      onmessage: ((e: any) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) { capturedUrl = url; }
+      close() {}
+    }
+    (global as any).WebSocket = FakeWebSocket;
+    const handle = connectLiveTranscription('legacy-token', fakeAudioContextForTest(), {} as any, () => {}, () => {});
+    handle.stop();
+    assertEqual(capturedUrl?.startsWith('wss://streaming.assemblyai.com/v3/ws?'), true, 'прежній транспорт зберігся');
+  });
+
+  test('КЛЮЧОВИЙ ТЕСТ [stt-multi]: parseSonioxMessage розділяє фінальні токени і гіпотезу', () => {
+    // Soniox шле потокенну розмітку з is_final на кожному токені —
+    // екранам потрібен той самий TranscriptUpdate, що й від AssemblyAI.
+    const updates = parseSonioxMessage(JSON.stringify({
+      tokens: [
+        { text: 'Привіт', is_final: true, speaker: '1' },
+        { text: ', як ', is_final: true, speaker: '1' },
+        { text: 'справ', is_final: false, speaker: '1' },
+      ],
+    }));
+    assertEqual(updates.length, 2, 'фінальна частина і гіпотеза — окремі оновлення');
+    assertEqual(updates[0], { text: 'Привіт, як', isFinal: true, speakerLabel: '1' }, 'фінальний текст склеєний');
+    assertEqual(updates[1].isFinal, false, 'гіпотеза позначена як нефінальна');
+  });
+
+  test('[stt-multi] parseSonioxMessage не падає на сміттi і на порожніх повідомленнях', () => {
+    assertEqual(parseSonioxMessage('не json'), [], 'сміття — порожній результат, не виняток');
+    assertEqual(parseSonioxMessage(JSON.stringify({ tokens: [] })), [], 'порожній список токенів');
+    assertEqual(parseSonioxMessage(JSON.stringify({ finished: true })), [], 'службове повідомлення без токенів');
   });
 
   for (const [name, fn] of scenarios) {

@@ -9,9 +9,8 @@ import type { Request } from 'express';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
-import { AssemblyAiWebhookGuard } from '../common/webhook/assemblyai-webhook.guard';
+import { SttWebhookGuard } from '../common/webhook/stt-webhook.guard';
 import { SparringService } from './sparring.service';
-import type { AssemblyAiWebhookPayload } from '../conversations/transcription.service';
 import { ArchetypeType } from '@prisma/client';
 
 class StartSessionDto {
@@ -32,6 +31,10 @@ class ReplyDto {
 
 class SubmitVoiceReplyDto {
   audioUrl!: string;
+  /** Пункт [stt-multi] 2026-09-02: провайдер, которому уже отданы байты
+   *  (ответ шага загрузки). Ссылка на файл внутри одного провайдера
+   *  другому бесполезна — поэтому задача обязана уйти туда же. */
+  sttProvider?: 'soniox' | 'assemblyai' | 'elevenlabs';
 }
 
 @Controller()
@@ -108,7 +111,7 @@ export class SparringController {
     @Param('sessionId') sessionId: string,
     @Body() dto: SubmitVoiceReplyDto,
   ) {
-    return this.sparring.submitVoiceReply(userId, sessionId, dto.audioUrl);
+    return this.sparring.submitVoiceReply(userId, sessionId, dto.audioUrl, dto.sttProvider);
   }
 
   @Get('sparring-sessions/:sessionId/voice-reply/:jobId')
@@ -122,8 +125,8 @@ export class SparringController {
   }
 
   @Post('sparring-sessions/webhook/voice-reply')
-  @UseGuards(AssemblyAiWebhookGuard)
-  async voiceReplyWebhook(@Body() payload: AssemblyAiWebhookPayload) {
+  @UseGuards(SttWebhookGuard)
+  async voiceReplyWebhook(@Body() payload: unknown) {
     return this.sparring.handleVoiceReplyWebhook(payload);
   }
 }

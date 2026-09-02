@@ -101,6 +101,12 @@ function createFakePrisma() {
         return j;
       },
       findUnique: async ({ where }: any) => voiceReplyJobs.find((j) => (where.id ? j.id === where.id : j.externalTranscriptionJobId === where.externalTranscriptionJobId)) ?? null,
+      // Пункт [stt-multi] 2026-09-02 — поиск по обоим написаниям id.
+      findFirst: async ({ where }: any) => {
+        const filter = where.externalTranscriptionJobId;
+        const ids: string[] = filter && typeof filter === 'object' && Array.isArray(filter.in) ? filter.in : [filter];
+        return voiceReplyJobs.find((j) => ids.includes(j.externalTranscriptionJobId)) ?? null;
+      },
       update: async ({ where, data }: any) => {
         const idx = voiceReplyJobs.findIndex((j) => j.id === where.id);
         voiceReplyJobs[idx] = { ...voiceReplyJobs[idx], ...data };
@@ -369,12 +375,28 @@ async function run() {
   // ── payload.utterances, что в sparring/conversations (реальный вебхук
   // ── AssemblyAI несёт только transcript_id/status, не полный результат).
 
+  // Пункт [stt-multi] 2026-09-02: сервис ходит в маршрутизатор STT, а
+  // не в AssemblyAI напрямую. Фейк отдаёт уже разобранный транскрипт
+  // (сегменты), как настоящий SttService.fetchResult.
   class FakeTranscriptionForWebhook {
     getResultCalls: string[] = [];
     transcriptResultByJobId: Record<string, any> = {};
-    async getTranscriptResult(_apiKey: string, transcriptId: string) {
-      this.getResultCalls.push(transcriptId);
-      return this.transcriptResultByJobId[transcriptId] ?? { status: 'completed', id: transcriptId };
+    async fetchResult(storedId: string) {
+      const bare = storedId.includes(':') ? storedId.slice(storedId.indexOf(':') + 1) : storedId;
+      this.getResultCalls.push(bare);
+      const canned = this.transcriptResultByJobId[bare];
+      if (canned?.error) throw new Error(canned.error);
+      const utterances: Array<{ speaker?: string; text: string; start?: number; end?: number }> = canned?.utterances ?? [];
+      return {
+        language: canned?.language_code ?? null,
+        segments: utterances.map((u) => ({
+          diarizationLabel: u.speaker ?? 'A',
+          text: u.text,
+          startMs: u.start ?? 0,
+          endMs: u.end ?? 0,
+          confidence: null,
+        })),
+      };
     }
   }
   const fakeSecrets = { resolve: async () => 'fake-assemblyai-key' };

@@ -124,6 +124,14 @@ function createFakePrisma() {
         return j;
       },
       findUnique: async ({ where }: any) => voiceReplyJobs.find((j) => (where.id ? j.id === where.id : j.externalTranscriptionJobId === where.externalTranscriptionJobId)) ?? null,
+      // Пункт [stt-multi] 2026-09-02: сервис ищет по ОБОИМ написаниям
+      // идентификатора (с префиксом провайдера и без) — задачи,
+      // поставленные до выката, обязаны дочитаться.
+      findFirst: async ({ where }: any) => {
+        const filter = where.externalTranscriptionJobId;
+        const ids: string[] = filter && typeof filter === 'object' && Array.isArray(filter.in) ? filter.in : [filter];
+        return voiceReplyJobs.find((j) => ids.includes(j.externalTranscriptionJobId)) ?? null;
+      },
       update: async ({ where, data }: any) => {
         const idx = voiceReplyJobs.findIndex((j) => j.id === where.id);
         voiceReplyJobs[idx] = { ...voiceReplyJobs[idx], ...data };
@@ -184,28 +192,50 @@ class FakeTextToSpeechService {
 }
 
 // Пункт 69 (§3.26 ТЗ) — фейки для голосового ввода.
+// Пункт [stt-multi] 2026-09-02: сервис ходит не в AssemblyAI напрямую,
+// а в маршрутизатор STT (язык выбирает провайдера, при отказе —
+// ElevenLabs). Фейк повторяет его контракт: загрузка возвращает
+// провайдера вместе со ссылкой, идентификатор задачи хранится С
+// ПРЕФИКСОМ, результат отдаётся уже разобранным в сегменты.
 class FakeTranscriptionService {
   externalJobId = 'assemblyai-job-1';
   streamUploadCalled = false;
   submitJobCalled = false;
-  // Финальный аудит 2026-08-30 — реальный вебхук несёт только
-  // transcript_id/status; getTranscriptResult() имитирует отдельный GET.
   getResultCalls: string[] = [];
+  /** Ключ — «голый» id задачи; значение либо разобранный транскрипт,
+   *  либо { error } для ветки отказа провайдера. */
   transcriptResultByJobId: Record<string, any> = {};
 
-  async streamUpload() {
+  get storedJobId() {
+    return `assemblyai:${this.externalJobId}`;
+  }
+
+  async uploadAudio() {
     this.streamUploadCalled = true;
-    return 'https://fake-upload-url/audio.mp3';
+    return { audioUrl: 'https://fake-upload-url/audio.mp3', provider: 'assemblyai' as const };
   }
 
-  async submitJob() {
+  async submitWebhookJob() {
     this.submitJobCalled = true;
-    return { externalJobId: this.externalJobId };
+    return { provider: 'assemblyai' as const, externalJobId: this.externalJobId, storedId: this.storedJobId };
   }
 
-  async getTranscriptResult(_apiKey: string, transcriptId: string) {
-    this.getResultCalls.push(transcriptId);
-    return this.transcriptResultByJobId[transcriptId] ?? { status: 'completed', id: transcriptId };
+  async fetchResult(storedId: string) {
+    const bare = storedId.includes(':') ? storedId.slice(storedId.indexOf(':') + 1) : storedId;
+    this.getResultCalls.push(bare);
+    const canned = this.transcriptResultByJobId[bare];
+    if (canned?.error) throw new Error(canned.error);
+    const utterances: Array<{ speaker?: string; text: string; start?: number; end?: number }> = canned?.utterances ?? [];
+    return {
+      language: canned?.language_code ?? null,
+      segments: utterances.map((u) => ({
+        diarizationLabel: u.speaker ?? 'A',
+        text: u.text,
+        startMs: u.start ?? 0,
+        endMs: u.end ?? 0,
+        confidence: null,
+      })),
+    };
   }
 }
 
@@ -419,7 +449,7 @@ async function run() {
     const job = await svc.submitVoiceReply(USER_ID, session.id, 'https://fake/audio.mp3');
     const messagesBefore = prisma._getMessages().length;
 
-    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = { status: 'error', id: fakeTranscription.externalJobId, error: 'audio too short' };
+    fakeTranscription.transcriptResultByJobId[fakeTranscription.externalJobId] = { error: 'audio too short' };
     await svc.handleVoiceReplyWebhook({ transcript_id: fakeTranscription.externalJobId, status: 'error' } as any);
 
     const updatedJob = prisma._getVoiceReplyJobs().find((j: any) => j.id === job.id);

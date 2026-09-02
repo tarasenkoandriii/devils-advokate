@@ -224,8 +224,8 @@ export class AdminSandboxController {
   }
 
   @Post('transcription-token')
-  async transcriptionToken(@CurrentUser() userId: string) {
-    return this.sandbox.mintTranscriptionToken(userId);
+  async transcriptionToken(@CurrentUser() userId: string, @Body() dto?: { language?: string }) {
+    return this.sandbox.mintTranscriptionToken(userId, dto?.language ?? null);
   }
 
   // Пункт [voice-note-ru] 2026-09-01 — голосовая заметка для ru/uk

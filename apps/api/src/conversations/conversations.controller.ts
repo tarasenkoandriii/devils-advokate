@@ -13,6 +13,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
   UseInterceptors,
@@ -21,11 +22,10 @@ import type { Request } from 'express';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
-import { AssemblyAiWebhookGuard } from '../common/webhook/assemblyai-webhook.guard';
+import { SttWebhookGuard } from '../common/webhook/stt-webhook.guard';
 import { ConversationsService } from './conversations.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
-import type { AssemblyAiWebhookPayload } from './transcription.service';
 
 class AssignParticipantDto {
   personId?: string;
@@ -101,7 +101,12 @@ export class ConversationsController {
   // произвольного бинарного файла ровно то, чего нужно избежать.
   @Post('conversations/:id/upload')
   @UseGuards(TelegramAuthGuard)
-  async upload(@CurrentUser() userId: string, @Param('id') id: string, @Req() req: Request) {
+  async upload(
+    @CurrentUser() userId: string,
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Query('language') language?: string,
+  ) {
     // req как Node.js IncomingMessage — это уже ReadableStream в
     // Node.js-смысле, но TranscriptionService.streamUpload() ожидает
     // Web-standard ReadableStream<Uint8Array> (fetch API), не Node
@@ -109,7 +114,10 @@ export class ConversationsController {
     // рантайм, на который уже рассчитан весь остальной проект).
     const { Readable } = await import('node:stream');
     const webStream = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
-    return this.conversations.streamUploadAudio(userId, id, webStream);
+    // Пункт [stt-multi] 2026-09-02: язык записи (если клиент его знает)
+    // определяет, КОМУ уходят байты — тому же провайдеру, что возьмёт
+    // задачу. Без него берётся мультиязычный провайдер по умолчанию.
+    return this.conversations.streamUploadAudio(userId, id, webStream, language ?? null);
   }
 
   // Пункт [multimodal] §7.3 — сигналы подачи (паралингвистика).
@@ -130,8 +138,8 @@ export class ConversationsController {
   }
 
   @Post('conversations/webhook/transcription')
-  @UseGuards(AssemblyAiWebhookGuard)
-  async transcriptionWebhook(@Body() payload: AssemblyAiWebhookPayload) {
+  @UseGuards(SttWebhookGuard)
+  async transcriptionWebhook(@Body() payload: unknown) {
     return this.conversations.handleTranscriptionWebhook(payload);
   }
 

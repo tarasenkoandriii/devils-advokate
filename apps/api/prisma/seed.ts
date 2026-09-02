@@ -213,6 +213,28 @@ async function main() {
     update: {},
     create: { modelId: assemblyaiModel.id, version: 'best' },
   });
+  // Пункт [stt-multi] 2026-09-02 — Soniox: русский, украинский и их
+  // смесь. Заведён здесь по той же причине, что AssemblyAI: на версию
+  // модели ссылается AIJob расшифровок, и телеметрия должна честно
+  // говорить, КТО распознавал. Capability не заводится — распознавание
+  // идёт мимо AIRouter (см. ниже), а в подборе LLM эта строка была бы
+  // вредна.
+  const soniox = await upsertProvider({
+    name: 'soniox',
+    apiEndpoint: 'https://api.soniox.com/v1',
+    credentialRef: 'SONIOX_API_KEY',
+  });
+  const sonioxModel = await prisma.aIModel.upsert({
+    where: { providerId_name: { providerId: soniox.id, name: 'stt' } },
+    update: {},
+    create: { providerId: soniox.id, name: 'stt' },
+  });
+  await prisma.aIModelVersion.upsert({
+    where: { modelId_version: { modelId: sonioxModel.id, version: 'stt-async-v5' } },
+    update: {},
+    create: { modelId: sonioxModel.id, version: 'stt-async-v5' },
+  });
+
   // Пункт [router-simplify] 2026-09-01: capability для AssemblyAI
   // больше не заводится. Транскрибация идёт в провайдера НАПРЯМУЮ
   // (TranscriptionService), мимо AIRouter, и эта строка не читалась
@@ -320,7 +342,7 @@ async function main() {
   // capability, которые этот прогон реально создал или обновил.
   // Строки не удаляются (история AIJob на них ссылается) и не трогаются
   // провайдеры, которых сид не ведёт.
-  const seededProviderIds = [openai.id, anthropic.id, xai.id, google.id, assemblyai.id];
+  const seededProviderIds = [openai.id, anthropic.id, xai.id, google.id, assemblyai.id, soniox.id];
   const staleCapabilities = await prisma.aIModelCapability.findMany({
     where: {
       availability: 'active',

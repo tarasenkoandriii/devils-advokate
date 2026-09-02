@@ -92,8 +92,78 @@ export interface LiveTranscriptionHandle {
  * для доступа к сырым сэмплам синхронно — AudioWorkletNode современнее,
  * но требует отдельный модульный файл, что усложняет сборку в этой
  * среде без проверки на реальной сборке). */
+/** Что выдал бэкенд: кем распознавать, чем и куда подключаться. */
+export interface LiveTranscriptionCredentials {
+  provider: 'soniox' | 'assemblyai' | 'elevenlabs';
+  token: string;
+  expiresInSeconds: number;
+  websocketUrl: string;
+  model: string;
+  languageHints: string[];
+}
+
+/**
+ * Разбор сообщения Soniox. Сервис шлёт ПОТОКЕННУЮ разметку с флагом
+ * is_final на каждом токене: финальные больше не изменятся, остальные —
+ * текущая гипотеза. Экранам нужен тот же TranscriptUpdate, что и от
+ * AssemblyAI, поэтому финальные токены отдаются одним обновлением, а
+ * гипотеза — отдельным.
+ */
+export function parseSonioxMessage(raw: string): TranscriptUpdate[] {
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  // РЕВЬЮ 2026-09-02: у Soniox с включённым enable_endpoint_detection
+  // приходит СЛУЖЕБНЫЙ токен `<end>` (документация: «Is always final»),
+  // а также токены звуковых событий. Без фильтра «<end>» дописывался бы
+  // прямо в текст пользователя и уезжал в LLM.
+  const tokens: any[] = (Array.isArray(data?.tokens) ? data.tokens : []).filter(
+    (token: any) => token?.text !== '<end>' && token?.is_audio_event !== true,
+  );
+  if (tokens.length === 0) return [];
+
+  const updates: TranscriptUpdate[] = [];
+  const join = (list: any[]) => list.map((token) => String(token.text ?? '')).join('').trim();
+  const speakerOf = (list: any[]) => {
+    const withSpeaker = list.find((token) => token.speaker != null);
+    return withSpeaker ? String(withSpeaker.speaker) : undefined;
+  };
+
+  const finals = tokens.filter((token) => token.is_final);
+  const interim = tokens.filter((token) => !token.is_final);
+
+  const finalText = join(finals);
+  if (finalText) updates.push({ text: finalText, isFinal: true, speakerLabel: speakerOf(finals) });
+  const interimText = join(interim);
+  if (interimText) updates.push({ text: interimText, isFinal: false, speakerLabel: speakerOf(interim) });
+
+  return updates;
+}
+
+/** Текст ошибки из сообщения Soniox, если оно её несёт.
+ *
+ * РЕВЬЮ 2026-09-02: сервис сообщает о протухшем временном ключе и
+ * собственных сбоях полем error_message в обычном сообщении. Без этого
+ * разбора пользователь узнавал бы об отказе только по голому числовому
+ * коду закрытия сокета — у ветки AssemblyAI для этого есть таблица
+ * кодов, у Soniox её нет. */
+export function parseSonioxError(raw: string): string | null {
+  try {
+    const data = JSON.parse(raw);
+    const message = data?.error_message;
+    return typeof message === 'string' && message.trim() ? message : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Пункт [stt-multi] 2026-09-02 — та же двухпровайдерная схема, что в
+ *  TMA: реквизиты приходят с сервера, голый токен означает AssemblyAI. */
 export function connectLiveTranscription(
-  token: string,
+  credentials: LiveTranscriptionCredentials | string,
   audioContext: AudioContext,
   mediaStream: MediaStream,
   onTranscript: (update: TranscriptUpdate) => void,
@@ -122,8 +192,25 @@ export function connectLiveTranscription(
   const languageParam = options?.languageCodes?.length
     ? `&language_codes=${encodeURIComponent(JSON.stringify(options.languageCodes))}`
     : '';
+  const creds: LiveTranscriptionCredentials =
+    typeof credentials === 'string'
+      ? {
+          provider: 'assemblyai',
+          token: credentials,
+          expiresInSeconds: 300,
+          websocketUrl: 'wss://streaming.assemblyai.com/v3/ws',
+          model: 'universal-3-5-pro',
+          languageHints: [],
+        }
+      : credentials;
+
+  if (creds.provider === 'soniox') {
+    return connectSoniox(creds, audioContext, mediaStream, onTranscript, onError);
+  }
+
+  const token = creds.token;
   const ws = new WebSocket(
-    `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro&mode=balanced&speaker_labels=true${languageParam}&token=${encodeURIComponent(token)}`,
+    `${creds.websocketUrl}?sample_rate=16000&speech_model=${encodeURIComponent(creds.model)}&mode=balanced&speaker_labels=true${languageParam}&token=${encodeURIComponent(token)}`,
   );
 
   const source = audioContext.createMediaStreamSource(mediaStream);
@@ -199,6 +286,97 @@ export function connectLiveTranscription(
         // Terminate/SpeakerRevision (~400 мс), но если вкладка сворачивается
         // или сеть моргает, форсируем закрытие, чтобы не держать ресурс
         // браузера открытым бесконечно.
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.close();
+        }, 2000);
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    },
+  };
+}
+
+/**
+ * Транспорт Soniox. Отличия от AssemblyAI, ради которых он написан
+ * отдельно, а не «параметром»:
+ *
+ *  • конфигурация уходит ПЕРВЫМ СООБЩЕНИЕМ (JSON), а не в URL — там же
+ *    временный ключ, модель, подсказки языков и диаризация;
+ *  • ответы потокенные (parseSonioxMessage выше), а не «ход разговора»;
+ *  • завершение — пустая строка: она говорит сервису «аудио кончилось,
+ *    доотдай финальные токены», после чего он закрывает сокет сам.
+ *    Просто закрыть сокет значило бы потерять хвост фразы.
+ */
+function connectSoniox(
+  credentials: LiveTranscriptionCredentials,
+  audioContext: AudioContext,
+  mediaStream: MediaStream,
+  onTranscript: (update: TranscriptUpdate) => void,
+  onError: (message: string) => void,
+): LiveTranscriptionHandle {
+  const ws = new WebSocket(credentials.websocketUrl);
+
+  const source = audioContext.createMediaStreamSource(mediaStream);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+
+  ws.onopen = () => {
+    ws.send(
+      JSON.stringify({
+        api_key: credentials.token,
+        model: credentials.model,
+        audio_format: 'pcm_s16le',
+        sample_rate: 16000,
+        num_channels: 1,
+        // Обе подсказки для русско-украинской аудитории: смешанная речь
+        // — норма, и жёсткий выбор одного языка ухудшил бы разбор.
+        language_hints: credentials.languageHints,
+        enable_speaker_diarization: true,
+        enable_language_identification: true,
+        enable_endpoint_detection: true,
+      }),
+    );
+  };
+
+  processor.onaudioprocess = (event) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const input = event.inputBuffer.getChannelData(0);
+    ws.send(resampleTo16kMono(input, audioContext.sampleRate));
+  };
+
+  ws.onmessage = (event) => {
+    if (typeof event.data !== 'string') return;
+    const error = parseSonioxError(event.data);
+    if (error) {
+      onError(`Сервис транскрипции сообщил об ошибке: ${error}`);
+      return;
+    }
+    for (const update of parseSonioxMessage(event.data)) onTranscript(update);
+  };
+
+  ws.onerror = () => {
+    onError('Подключение к транскрипции прервалось');
+  };
+
+  let closingIntentionally = false;
+  ws.onclose = (event) => {
+    if (closingIntentionally || event.code === 1000) return;
+    // Коды у провайдеров разные, и выдумывать расшифровку чужих кодов
+    // хуже, чем честно показать номер: пользователь всё равно несёт его
+    // в поддержку, а мы не притворяемся, что знаем причину.
+    onError(`Соединение с сервисом транскрипции закрыто (код ${event.code})`);
+  };
+
+  return {
+    stop: () => {
+      processor.disconnect();
+      source.disconnect();
+      closingIntentionally = true;
+      if (ws.readyState === WebSocket.OPEN) {
+        // Пустая строка = конец аудио. Сервис доотдаёт финальные токены
+        // и закрывает соединение сам.
+        ws.send('');
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) ws.close();
         }, 2000);

@@ -32,10 +32,12 @@
 // (Пункт 52) — явно задокументированное число, не скрытая магия.
 
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { TranscriptionService, AssemblyAiWebhookPayload } from '../conversations/transcription.service';
+import type { ParsedTranscript } from '../conversations/transcription.service';
+import { SttService, sttJobIdVariants } from '../stt/stt.service';
+import { parseSttWebhookPayload } from '../stt/stt-webhook-payload';
+import type { SttProviderName } from '../stt/stt-language';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
@@ -92,7 +94,7 @@ export class SparringService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
-    private readonly transcription: TranscriptionService,
+    private readonly stt: SttService,
     private readonly secrets: SecretsService,
     private readonly textToSpeech: TextToSpeechService,
     private readonly consent: ConsentService,
@@ -437,14 +439,18 @@ export class SparringService {
     // передачу запрещает в принципе. Та же проверка, что у загрузки
     // разговора: разницы в природе данных нет, микрофон один и тот же.
     await this.consent.assertAudioMayLeaveDevice(userId, session.projectId);
-    const apiKey = await this.resolveAssemblyAiKey();
-    const audioUrl = await this.transcription.streamUpload(apiKey, fileStream);
-    return { audioUrl };
+    // Пункт [stt-multi] 2026-09-02: байты уходят ТОМУ провайдеру,
+    // который потом возьмёт задачу (ru/uk → Soniox, en → AssemblyAI).
+    // Ссылка на файл внутри одного провайдера другому бесполезна,
+    // поэтому его имя возвращается вместе с ссылкой и передаётся в
+    // submitVoiceReply.
+    const { audioUrl, provider } = await this.stt.uploadAudio(fileStream, await this.userLanguage(userId));
+    return { audioUrl, sttProvider: provider };
   }
 
   /** Шаг 2 — запустить транскрибацию (асинхронно, с webhook). Клиент
    * получает jobId и поллит getVoiceReplyStatus(), пока не COMPLETED. */
-  async submitVoiceReply(userId: string, sessionId: string, audioUrl: string) {
+  async submitVoiceReply(userId: string, sessionId: string, audioUrl: string, sttProvider?: SttProviderName) {
     const session = await this.findOwnedSession(userId, sessionId);
     // Проверяется и здесь, и в streamUploadVoiceReply(): шаги независимы
     // (клиент вправе вызвать submit с audioUrl, полученным раньше), а
@@ -460,12 +466,17 @@ export class SparringService {
       );
     }
 
-    const apiKey = await this.resolveAssemblyAiKey();
     const webhookUrl = this.buildVoiceWebhookUrl();
-    const { externalJobId } = await this.transcription.submitJob(apiKey, { audioUrl, webhookUrl });
+    const { storedId } = await this.stt.submitWebhookJob({
+      audioUrl,
+      webhookUrl,
+      languageCode: await this.userLanguage(userId),
+      diarize: false, // реплика одного говорящего — диаризация только замедлит
+      uploadedTo: sttProvider,
+    });
 
     return this.prisma.sparringVoiceReplyJob.create({
-      data: { sparringSessionId: sessionId, externalTranscriptionJobId: externalJobId },
+      data: { sparringSessionId: sessionId, externalTranscriptionJobId: storedId },
     });
   }
 
@@ -486,26 +497,36 @@ export class SparringService {
    * по externalTranscriptionJobId, не по userId. Неизвестный job
    * молча игнорируется, не бросает ошибку наружу (AssemblyAI будет
    * ретраить webhook, если получит не-200). */
-  async handleVoiceReplyWebhook(payload: AssemblyAiWebhookPayload) {
+  async handleVoiceReplyWebhook(rawPayload: unknown) {
+    const payload = parseSttWebhookPayload(rawPayload);
     // Финальный аудит 2026-08-30 — тот же фикс, что в
     // ConversationsService.handleTranscriptionWebhook(): реальный вебхук
     // несёт только transcript_id/status, полный результат — отдельным GET.
-    if (!payload.transcript_id) return;
-    const job = await this.prisma.sparringVoiceReplyJob.findUnique({ where: { externalTranscriptionJobId: payload.transcript_id } });
+    if (!payload.externalJobId) return;
+    // Оба написания идентификатора: задачи до Пункта [stt-multi] лежат
+    // без префикса провайдера.
+    const job = await this.prisma.sparringVoiceReplyJob.findFirst({
+      where: { externalTranscriptionJobId: { in: sttJobIdVariants(payload.externalJobId) } },
+    });
     if (!job || job.status !== SparringVoiceReplyStatus.PENDING) return;
 
-    const apiKey = await this.resolveAssemblyAiKey();
-    const result = await this.transcription.getTranscriptResult(apiKey, payload.transcript_id);
+    let parsed: ParsedTranscript | null = null;
+    let failure: string | null = null;
+    try {
+      parsed = await this.stt.fetchResult(job.externalTranscriptionJobId ?? payload.externalJobId);
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+    }
 
-    if (result.status === 'error') {
+    if (failure !== null || parsed === null) {
       await this.prisma.sparringVoiceReplyJob.update({
         where: { id: job.id },
-        data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: result.error ?? 'unknown error' },
+        data: { status: SparringVoiceReplyStatus.FAILED, errorMessage: failure ?? 'unknown error' },
       });
       return;
     }
 
-    const transcribedText = (result.utterances ?? []).map((u: { text: string }) => u.text).join(' ').trim();
+    const transcribedText = parsed.segments.map((s) => s.text).join(' ').trim();
     if (!transcribedText) {
       await this.prisma.sparringVoiceReplyJob.update({
         where: { id: job.id },
@@ -533,10 +554,18 @@ export class SparringService {
     }
   }
 
-  private async resolveAssemblyAiKey(): Promise<string> {
-    const provider = await requireAIProvider(this.prisma, 'assemblyai');
-    return this.secrets.resolve(provider.credentialRef ?? 'ASSEMBLYAI_API_KEY');
+  /** Язык пользователя из профиля — по нему выбирается провайдер
+   *  распознавания. Отсутствие значения не ошибка: мультиязычный
+   *  провайдер определит язык сам. */
+  private async userLanguage(userId: string): Promise<string | null> {
+    try {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { languageCode: true } });
+      return user?.languageCode ?? null;
+    } catch {
+      return null;
+    }
   }
+
 
   private buildVoiceWebhookUrl(): string {
     // 2026-08-31: см. common/public-base-url.ts — одна проверка вместо

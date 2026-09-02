@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SttModule } from '../stt/stt.module';
 import { ConversationsController } from './conversations.controller';
 import { ConversationsService } from './conversations.service';
 import { TranscriptionService } from './transcription.service';
@@ -10,7 +11,7 @@ import { ConsentModule } from '../consent/consent.module';
 import { SecretsModule } from '../secrets/secrets.module';
 
 @Module({
-  imports: [TelegramAuthModule, ConsentModule, SecretsModule],
+  imports: [TelegramAuthModule, ConsentModule, SecretsModule, SttModule],
   // Пункт [blob-upload] 2026-08-31: AudioUploadController — второй
   // контроллер модуля, а не метод в первом, потому что у эндпоинта
   // выдачи blob-токена чужой формат ответа (его разбирает клиентский

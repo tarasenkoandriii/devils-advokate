@@ -283,10 +283,20 @@ function makeDeps(
     getStatistics: jest.fn(async () => ({ total: 1, matched: 1, bySite: { 'jobs.example.ua': 1 }, byLocationMatch: { MATCHES: 1, DIFFERENT: 0, UNKNOWN: 0, NOT_MATCHED_YET: 0 }, withSalaryMentioned: 1, requiredCriteriaCount: 1, fullRequiredCoverage: 1, city: 'Київ', region: null })),
   };
   // Пункт [voice-note-ru] 2026-09-01 — синхронная транскрипция голосовой заметки.
+  // Пункт [stt-multi] 2026-09-02: голосовая заметка песочницы идёт
+  // через маршрутизатор STT (язык выбирает провайдера, при отказе —
+  // ElevenLabs), а не напрямую в AssemblyAI.
+  const stt = {
+    calls: [] as Array<{ language?: string | null }>,
+    async transcribeSync(_audio: Buffer, language?: string | null) {
+      this.calls.push({ language });
+      return { text: 'расшифровка заметки', language: language ?? 'ru', provider: language === 'en' ? 'assemblyai' : 'soniox' };
+    },
+  };
   const transcription = {
     transcribeShortNoteSync: jest.fn(async () => ({ text: 'распознанный текст', language: 'ru' })),
   };
-  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints, majorPurchaseOnboarding, majorPurchase, investmentOnboarding, investment, investmentGroups, poolOnboarding, pool, poolCandidates, poolRelevance, poolReports, poolTeams, familyLawOnboarding, familyLaw, familyLawV2, dtpOnboarding, dtp, dtpV2, jobSearchOnboarding, jobSearch, transcription };
+  return { prisma, secrets, consent, conversations, audioBlob, youtube, mediaReview, mediaReviewAuto, aiRouter, intake, healthOnboarding, health, liveSession, manipulation, discrepancy, turningPoints, majorPurchaseOnboarding, majorPurchase, investmentOnboarding, investment, investmentGroups, poolOnboarding, pool, poolCandidates, poolRelevance, poolReports, poolTeams, familyLawOnboarding, familyLaw, familyLawV2, dtpOnboarding, dtp, dtpV2, jobSearchOnboarding, jobSearch, transcription, stt };
 }
 
 function makeService(deps: ReturnType<typeof makeDeps>) {
@@ -304,6 +314,7 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.healthOnboarding as any,
     deps.health as any,
     deps.liveSession as any,
+    deps.stt as any,
     deps.manipulation as any,
     deps.discrepancy as any,
     deps.turningPoints as any,
@@ -326,7 +337,6 @@ function makeService(deps: ReturnType<typeof makeDeps>) {
     deps.dtpV2 as any,
     deps.jobSearchOnboarding as any,
     deps.jobSearch as any,
-    deps.transcription as any,
   );
 }
 
@@ -1039,34 +1049,35 @@ describe('AdminSandboxService — песочная очередь медиа-р�
   it('голосовой токен — тот же продовый mintTranscriptionToken, что у TMA; не-оператору — отказ', async () => {
     const deps = makeDeps();
     const svc = makeService(deps);
-    const res = await svc.mintTranscriptionToken(OPERATOR);
-    expect(deps.liveSession.mintTranscriptionToken).toHaveBeenCalledWith(OPERATOR);
+    const res = await svc.mintTranscriptionToken(OPERATOR, 'uk');
+    // Пункт [stt-multi] 2026-09-02: язык доезжает до продового метода —
+    // от него зависит провайдер (uk → Soniox, en → AssemblyAI).
+    expect(deps.liveSession.mintTranscriptionToken).toHaveBeenCalledWith(OPERATOR, 300, 'uk');
     expect(res.token).toBe('rt-token');
     await expect(svc.mintTranscriptionToken(REGULAR)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   // Пункт [voice-note-ru] 2026-09-01 — синхронная транскрипция голосовой
   // заметки (ru/uk, которых нет в стриминге AssemblyAI): согласие
-  // обязательно, ключ берётся по credentialRef провайдера, base64
-  // декодируется в буфер, язык пробрасывается как есть.
-  it('голосовая заметка: consent → ключ провайдера → transcribeShortNoteSync; лимит размера; не-оператору — отказ', async () => {
+  // обязательно, base64 декодируется в буфер, язык пробрасывается как
+  // есть. Пункт [stt-multi] 2026-09-02 — теперь через маршрутизатор
+  // STT: ключ и провайдера выбирает он (ru/uk → Soniox, en →
+  // AssemblyAI, отказ основного → ElevenLabs), песочница не знает про
+  // конкретного вендора.
+  it('голосовая заметка: consent → маршрутизатор STT по языку; лимит размера; не-оператору — отказ', async () => {
     const deps = makeDeps();
     const svc = makeService(deps);
     const base64 = Buffer.from('fake-webm-audio').toString('base64');
     const res = await svc.sandboxVoiceNote(OPERATOR, base64, 'ru');
     expect(deps.consent.requireConsent).toHaveBeenCalledWith(OPERATOR, 'THIRD_PARTY_AUDIO_RECORDING');
-    expect(deps.secrets.resolve).toHaveBeenCalledWith('ASSEMBLYAI_API_KEY');
-    const [keyArg, audioArg, langArg] = deps.transcription.transcribeShortNoteSync.mock.calls[0] as unknown as [string, Buffer, string?];
-    expect(keyArg).toBe('SUPERSECRET-VALUE-42');
-    expect(Buffer.isBuffer(audioArg)).toBe(true);
-    expect(audioArg.toString()).toBe('fake-webm-audio');
-    expect(langArg).toBe('ru');
-    expect(res).toEqual({ text: 'распознанный текст', language: 'ru' });
+    expect(deps.stt.calls[0].language).toBe('ru');
+    expect(res.text).toBe('расшифровка заметки');
+    expect(res.provider).toBe('soniox');
 
     // Пустая и сверхдлинная запись отсекаются ДО согласия/провайдера.
     await expect(svc.sandboxVoiceNote(OPERATOR, '  ')).rejects.toBeInstanceOf(BadRequestException);
     await expect(svc.sandboxVoiceNote(OPERATOR, 'a'.repeat(4_000_001))).rejects.toBeInstanceOf(BadRequestException);
-    expect(deps.transcription.transcribeShortNoteSync).toHaveBeenCalledTimes(1);
+    expect(deps.stt.calls).toHaveLength(1);
 
     await expect(svc.sandboxVoiceNote(REGULAR, base64)).rejects.toBeInstanceOf(ForbiddenException);
   });

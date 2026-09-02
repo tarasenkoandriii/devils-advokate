@@ -1,4 +1,13 @@
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, handle } from './api';
+import type { LiveTranscriptionCredentials } from './live-transcription';
+
+/** Пункт [stt-multi] 2026-09-02: шаг загрузки говорит, КОМУ ушли байты
+ *  — это же значение возвращается серверу вместе с задачей. */
+export type SttProviderName = 'soniox' | 'assemblyai' | 'elevenlabs';
+export interface VoiceUploadResult {
+  audioUrl: string;
+  sttProvider?: SttProviderName;
+}
 import {
   Argument,
   AvailableEngine,
@@ -940,7 +949,7 @@ export function endSparringSession(sessionId: string): Promise<SparringSession> 
 // Пункт 69 (backend) — голосовой ввод реплики (§3.26 ТЗ). Тот же
 // паттерн потоковой загрузки, что uploadConversationAudio() — File
 // как body у fetch() передаётся потоково нативно, не через apiPost.
-export async function uploadSparringVoiceReply(sessionId: string, file: File): Promise<{ audioUrl: string }> {
+export async function uploadSparringVoiceReply(sessionId: string, file: File): Promise<VoiceUploadResult> {
   const { getAuthHeaders } = await import('./telegram');
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
@@ -955,8 +964,16 @@ export async function uploadSparringVoiceReply(sessionId: string, file: File): P
   return handle<{ audioUrl: string }>(response);
 }
 
-export function submitSparringVoiceReply(sessionId: string, audioUrl: string): Promise<SparringVoiceReplyJob> {
-  return apiPost<SparringVoiceReplyJob>(`/sparring-sessions/${sessionId}/voice-reply`, { audioUrl });
+export function submitSparringVoiceReply(
+  sessionId: string,
+  audioUrl: string,
+  sttProvider?: SttProviderName,
+): Promise<SparringVoiceReplyJob> {
+  // Пункт [stt-multi] 2026-09-02: провайдер, принявший байты, идёт с
+  // задачей. Без него сервер счёл бы ссылку публичной и при отказе
+  // основного провайдера отдал бы её запасному — а ссылка загрузки
+  // одного провайдера другому бесполезна.
+  return apiPost<SparringVoiceReplyJob>(`/sparring-sessions/${sessionId}/voice-reply`, { audioUrl, sttProvider });
 }
 
 export function getSparringVoiceReplyStatus(sessionId: string, jobId: string): Promise<SparringVoiceReplyJob> {
@@ -1284,8 +1301,12 @@ export function listSchedulerAdvice(projectId: string): Promise<SchedulerAdvice[
 
 // Пункт 81 (backend) — Live Session / Cooldown-нудж (§3.31 ТЗ).
 
-export function mintTranscriptionToken(): Promise<{ token: string; expiresInSeconds: number }> {
-  return apiPost<{ token: string; expiresInSeconds: number }>('/live-session/transcription-token', {});
+/** Пункт [stt-multi] 2026-09-02: сервер отдаёт не только токен, но и
+ *  ПРОВАЙДЕРА (его выбирает язык пользователя), адрес подключения,
+ *  модель и подсказки языков — протоколы у провайдеров разные, и знать
+ *  об этом должен один слой (lib/live-transcription.ts), а не экраны. */
+export function mintTranscriptionToken(): Promise<LiveTranscriptionCredentials> {
+  return apiPost<LiveTranscriptionCredentials>('/live-session/transcription-token', {});
 }
 
 export function logCooldownNudgeEvent(
@@ -1402,7 +1423,7 @@ export function endMaterialChatSession(sessionId: string): Promise<MaterialChatS
 
 // Тот же паттерн потоковой загрузки, что uploadSparringVoiceReply()
 // (Пункт 69) — File как body у fetch() передаётся потоково нативно.
-export async function uploadMaterialChatVoiceReply(sessionId: string, file: File): Promise<{ audioUrl: string }> {
+export async function uploadMaterialChatVoiceReply(sessionId: string, file: File): Promise<VoiceUploadResult> {
   const { getAuthHeaders } = await import('./telegram');
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
@@ -1417,8 +1438,12 @@ export async function uploadMaterialChatVoiceReply(sessionId: string, file: File
   return handle<{ audioUrl: string }>(response);
 }
 
-export function submitMaterialChatVoiceReply(sessionId: string, audioUrl: string): Promise<MaterialChatVoiceReplyJob> {
-  return apiPost<MaterialChatVoiceReplyJob>(`/material-chat-sessions/${sessionId}/voice-reply`, { audioUrl });
+export function submitMaterialChatVoiceReply(
+  sessionId: string,
+  audioUrl: string,
+  sttProvider?: SttProviderName,
+): Promise<MaterialChatVoiceReplyJob> {
+  return apiPost<MaterialChatVoiceReplyJob>(`/material-chat-sessions/${sessionId}/voice-reply`, { audioUrl, sttProvider });
 }
 
 export function getMaterialChatVoiceReplyStatus(sessionId: string, jobId: string): Promise<MaterialChatVoiceReplyJob> {

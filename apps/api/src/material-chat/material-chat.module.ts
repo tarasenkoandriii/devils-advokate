@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SttModule } from '../stt/stt.module';
 import { MaterialChatController } from './material-chat.controller';
 import { MaterialChatService } from './material-chat.service';
 import { TelegramAuthModule } from '../telegram-auth/telegram-auth.module';
@@ -13,7 +14,7 @@ import { TextToSpeechModule } from '../text-to-speech/text-to-speech.module';
 // существующего ElevenLabs-синтеза — все три уже проверены в бою
 // на спарринге, здесь просто ещё один потребитель.
 @Module({
-  imports: [TelegramAuthModule, AIRouterModule, ConversationsModule, SecretsModule, TextToSpeechModule],
+  imports: [TelegramAuthModule, AIRouterModule, ConversationsModule, SecretsModule, TextToSpeechModule, SttModule],
   controllers: [MaterialChatController],
   providers: [MaterialChatService],
   exports: [MaterialChatService],

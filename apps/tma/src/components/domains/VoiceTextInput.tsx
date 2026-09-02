@@ -2,7 +2,7 @@
 
 // ТЗ §2.2 / §0 — голосовой ввод ответа как равноправный канал рядом с
 // текстом. Переиспользует уже существующую live-транскрипцию (Пункты
-// 81–82): токен с backend, браузер → AssemblyAI напрямую, аудио никуда
+// 81–82): токен с backend, браузер → сервис распознавания напрямую (провайдера выбирает язык: ru/uk — Soniox, en — AssemblyAI), аудио никуда
 // не сохраняется. Без микрофона — честный текстовый fallback, не ошибка.
 import { useEffect, useRef, useState } from 'react';
 import { mintTranscriptionToken } from '../../lib/features';
@@ -44,13 +44,14 @@ export function VoiceTextInput({ value, onChange, placeholder, disabled }: Props
     if (!capture) return;
     captureRef.current = capture;
     try {
-      const { token } = await mintTranscriptionToken();
+      // Пункт [stt-multi] 2026-09-02: провайдера выбирает язык пользователя.
+      const credentials = await mintTranscriptionToken();
       const ctx = capture.getAudioContext();
       const stream = capture.getStream();
       if (!ctx || !stream) throw new Error('Аудиопоток недоступен');
       let partial = '';
       wsRef.current = connectLiveTranscription(
-        token, ctx, stream,
+        credentials, ctx, stream,
         (update) => {
           if (update.isFinal) {
             baseRef.current = `${baseRef.current} ${update.text}`.trim();

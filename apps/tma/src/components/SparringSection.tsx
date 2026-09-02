@@ -239,8 +239,10 @@ export function SparringSection({ projectId }: SparringSectionProps) {
     setVoiceStatus('uploading');
     setError(null);
     try {
-      const { audioUrl } = await uploadSparringVoiceReply(activeSession.id, file);
-      const job = await submitSparringVoiceReply(activeSession.id, audioUrl);
+      // Пункт [stt-multi] 2026-09-02: провайдер, принявший байты,
+      // передаётся дальше вместе с задачей.
+      const { audioUrl, sttProvider } = await uploadSparringVoiceReply(activeSession.id, file);
+      const job = await submitSparringVoiceReply(activeSession.id, audioUrl, sttProvider);
       setVoiceStatus('transcribing');
       pollVoiceReplyStatus(activeSession.id, job.id);
     } catch (err) {

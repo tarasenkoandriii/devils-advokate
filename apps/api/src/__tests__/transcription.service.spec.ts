@@ -140,7 +140,7 @@ async function run() {
     assertEqual(capturedBody.speaker_labels, true, 'диаризация запрошена явно (ради неё и выбран AssemblyAI)');
     assertEqual(capturedBody.redact_pii, false, 'redact_pii=false по умолчанию — не решаем за пользователя молча');
     assertEqual(capturedHeaders.Authorization, 'test-api-key', 'API-ключ передан в заголовке');
-    assertEqual(capturedBody.webhook_auth_header_name, 'x-assemblyai-webhook-secret', 'аудит 2026-08-30: имя заголовка секрета вебхука передано провайдеру');
+    assertEqual(capturedBody.webhook_auth_header_name, 'x-stt-webhook-secret', 'аудит 2026-08-30 + [stt-multi] 2026-09-02: заголовок секрета общий на двух провайдеров');
     assertEqual(capturedBody.webhook_auth_header_value, 'whsec-test', 'аудит 2026-08-30: секрет вебхука передан провайдеру');
   });
 

@@ -15,6 +15,13 @@ function createFakePrisma() {
   return {
     _seedProject(p: any) { projects.set(p.id, p); },
     _getEvents() { return events; },
+    _languageCode: null as string | null,
+
+    // Пункт [stt-multi] 2026-09-02: провайдера живой расшифровки
+    // выбирает язык пользователя из профиля.
+    user: {
+      findUnique: async function (this: any) { return { languageCode: fakePrismaLanguage.value }; },
+    },
 
     project: {
       findFirst: async ({ where }: any) => {
@@ -46,8 +53,29 @@ function createFakePrisma() {
   };
 }
 
-function createFakeSecrets(apiKey = 'fake-assemblyai-key') {
-  return { resolve: async () => apiKey };
+/** Язык пользователя для фейка prisma — вынесен наружу, чтобы тест мог
+ *  переключать его между сценариями. */
+const fakePrismaLanguage = { value: null as string | null };
+
+/** Фейк SttService: интересует только КОГО он выбрал по языку и что
+ *  согласие проверено ДО обращения к провайдеру. */
+function createFakeStt(overrides: { fail?: boolean } = {}) {
+  return {
+    calls: [] as Array<{ language: string | null | undefined; expiresInSeconds: number }>,
+    async mintRealtimeToken(language: string | null | undefined, expiresInSeconds: number) {
+      this.calls.push({ language, expiresInSeconds });
+      if (overrides.fail) throw new Error('провайдер недоступен');
+      const provider = language === 'en' ? 'assemblyai' : 'soniox';
+      return {
+        provider,
+        token: `temp-token-${provider}`,
+        expiresInSeconds,
+        websocketUrl: provider === 'soniox' ? 'wss://stt-rt.soniox.com/transcribe-websocket' : 'wss://streaming.assemblyai.com/v3/ws',
+        model: provider === 'soniox' ? 'stt-rt-v5' : 'universal-3-5-pro',
+        languageHints: language === 'en' ? ['en'] : ['uk', 'ru'],
+      };
+    },
+  };
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -80,42 +108,57 @@ async function run() {
   const test = (name: string, fn: () => Promise<void>) => scenarios.push([name, fn]);
   const originalFetch = (global as any).fetch;
 
-  test('КЛЮЧЕВОЙ ТЕСТ: mintTranscriptionToken() возвращает токен от AssemblyAI, не завязан на конкретный проект', async () => {
-    (global as any).fetch = async (url: string) => {
-      assertEqual(url.includes('expires_in_seconds=300'), true, 'дефолтный TTL передан корректно');
-      return { ok: true, json: async () => ({ token: 'temp-token-abc' }) };
-    };
-    const svc = new LiveSessionService(createFakePrisma() as any, createFakeSecrets() as any, fakeConsent());
+  test('КЛЮЧЕВОЙ ТЕСТ [stt-multi]: русскому пользователю живая расшифровка идёт в Soniox, а не в AssemblyAI', async () => {
+    // Причина существования всей правки: у AssemblyAI русского и
+    // украинского нет НИ В ОДНОЙ потоковой модели — живой прогон на
+    // русском возвращал галлюцинацию на английском и иврите.
+    fakePrismaLanguage.value = 'ru';
+    const stt = createFakeStt();
+    const svc = new LiveSessionService(createFakePrisma() as any, fakeConsent(), stt as any);
 
     const result = await svc.mintTranscriptionToken('u1');
-    assertEqual(result.token, 'temp-token-abc', 'токен реально дошёл до вызывающего кода');
-    assertEqual(result.expiresInSeconds, 300, 'TTL возвращён вместе с токеном');
+    assertEqual(result.provider, 'soniox', 'провайдер выбран по языку пользователя');
+    assertEqual(result.websocketUrl.includes('soniox'), true, 'клиент получает адрес того же провайдера');
+    assertEqual(result.languageHints, ['uk', 'ru'], 'подсказки языков — обе, разговор бывает смешанным');
+    assertEqual(stt.calls[0].expiresInSeconds, 300, 'дефолтный TTL передан как был');
   });
 
-  test('РЕГРЕСІЯ (аудит БД 2026-08-30): без згоди THIRD_PARTY_AUDIO_RECORDING — ForbiddenException, до AssemblyAI навіть не звертається', async () => {
-    let fetchCalled = false;
-    (global as any).fetch = async () => { fetchCalled = true; return { ok: true, json: async () => ({ token: 'x' }) }; };
-    const svc = new LiveSessionService(createFakePrisma() as any, createFakeSecrets() as any, fakeConsent(false));
+  test('КЛЮЧЕВОЙ ТЕСТ [stt-multi]: английскому пользователю остаётся прежний провайдер', async () => {
+    fakePrismaLanguage.value = 'en';
+    const stt = createFakeStt();
+    const svc = new LiveSessionService(createFakePrisma() as any, fakeConsent(), stt as any);
+
+    const result = await svc.mintTranscriptionToken('u1');
+    assertEqual(result.provider, 'assemblyai', 'английский не переезжает — решение владельца');
+  });
+
+  test('[stt-multi] явный язык из клиента важнее профиля', async () => {
+    fakePrismaLanguage.value = 'ru';
+    const stt = createFakeStt();
+    const svc = new LiveSessionService(createFakePrisma() as any, fakeConsent(), stt as any);
+
+    await svc.mintTranscriptionToken('u1', 300, 'en');
+    assertEqual(stt.calls[0].language, 'en', 'переданный язык побеждает профиль');
+  });
+
+  test('РЕГРЕСІЯ (аудит БД 2026-08-30): без згоди THIRD_PARTY_AUDIO_RECORDING — ForbiddenException, до провайдера навіть не звертається', async () => {
+    fakePrismaLanguage.value = 'ru';
+    const stt = createFakeStt();
+    const svc = new LiveSessionService(createFakePrisma() as any, fakeConsent(false), stt as any);
     await assertThrowsAsync(() => svc.mintTranscriptionToken('u1'), ForbiddenException, 'без згоди на запис третьої сторони токен видаватися не повинен');
-    assertEqual(fetchCalled, false, 'запит до AssemblyAI не має відбутися, якщо згода перевірена першою');
+    assertEqual(stt.calls.length, 0, 'запит до провайдера не має відбутися, якщо згода перевірена першою');
   });
 
-  test('mintTranscriptionToken() бросает BadGatewayException при недоступности AssemblyAI', async () => {
-    (global as any).fetch = async () => { throw new Error('network down'); };
-    const svc = new LiveSessionService(createFakePrisma() as any, createFakeSecrets() as any, fakeConsent());
-    await assertThrowsAsync(() => svc.mintTranscriptionToken('u1'), BadGatewayException, 'mintTranscriptionToken() при сетевой ошибке');
-  });
-
-  test('mintTranscriptionToken() бросает BadGatewayException при ошибке ответа AssemblyAI', async () => {
-    (global as any).fetch = async () => ({ ok: false, status: 401 });
-    const svc = new LiveSessionService(createFakePrisma() as any, createFakeSecrets() as any, fakeConsent());
-    await assertThrowsAsync(() => svc.mintTranscriptionToken('u1'), BadGatewayException, 'mintTranscriptionToken() при 401 от AssemblyAI');
+  test('mintTranscriptionToken() бросает BadGatewayException при недоступности провайдера', async () => {
+    fakePrismaLanguage.value = 'ru';
+    const svc = new LiveSessionService(createFakePrisma() as any, fakeConsent(), createFakeStt({ fail: true }) as any);
+    await assertThrowsAsync(() => svc.mintTranscriptionToken('u1'), BadGatewayException, 'сбой провайдера живой расшифровки');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: logNudgeEvent() сохраняет только числовые метрики, не сырое аудио/транскрипт', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new LiveSessionService(prisma as any, createFakeSecrets() as any, fakeConsent());
+    const svc = new LiveSessionService(prisma as any, fakeConsent(), createFakeStt() as any);
 
     const event = await svc.logNudgeEvent(USER_ID, PROJECT_ID, -12.5, 0.82);
     assertEqual(event.peakVolumeDb, -12.5, 'числовая метрика громкости сохранена');
@@ -127,14 +170,14 @@ async function run() {
   test('logNudgeEvent() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new LiveSessionService(prisma as any, createFakeSecrets() as any, fakeConsent());
+    const svc = new LiveSessionService(prisma as any, fakeConsent(), createFakeStt() as any);
     await assertThrowsAsync(() => svc.logNudgeEvent(USER_ID, PROJECT_ID, null, null), NotFoundException, 'logNudgeEvent() на чужой проект');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: markDismissed() честно фиксирует "легко проигнорировать", не блокирует, не наказывает', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new LiveSessionService(prisma as any, createFakeSecrets() as any, fakeConsent());
+    const svc = new LiveSessionService(prisma as any, fakeConsent(), createFakeStt() as any);
 
     const event = await svc.logNudgeEvent(USER_ID, PROJECT_ID, null, null);
     assertEqual(event.dismissed, false, 'по умолчанию не отклонён');
@@ -146,7 +189,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedProject({ id: 'other-proj', ownerId: USER_ID });
-    const svc = new LiveSessionService(prisma as any, createFakeSecrets() as any, fakeConsent());
+    const svc = new LiveSessionService(prisma as any, fakeConsent(), createFakeStt() as any);
 
     const eventInOtherProject = await svc.logNudgeEvent(USER_ID, 'other-proj', null, null);
     await assertThrowsAsync(
@@ -159,7 +202,7 @@ async function run() {
   test('list() возвращает события проекта, самые новые первыми', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new LiveSessionService(prisma as any, createFakeSecrets() as any, fakeConsent());
+    const svc = new LiveSessionService(prisma as any, fakeConsent(), createFakeStt() as any);
 
     await svc.logNudgeEvent(USER_ID, PROJECT_ID, null, null);
     await svc.logNudgeEvent(USER_ID, PROJECT_ID, null, null);

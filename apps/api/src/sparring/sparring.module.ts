@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SttModule } from '../stt/stt.module';
 import { SparringController } from './sparring.controller';
 import { SparringService } from './sparring.service';
 import { TelegramAuthModule } from '../telegram-auth/telegram-auth.module';
@@ -16,7 +17,7 @@ import { TextToSpeechModule } from '../text-to-speech/text-to-speech.module';
 // голосовому выводу реплик оппонента, не задублирован новой
 // интеграцией ElevenLabs.
 @Module({
-  imports: [TelegramAuthModule, AIRouterModule, ConversationsModule, SecretsModule, TextToSpeechModule],
+  imports: [TelegramAuthModule, AIRouterModule, ConversationsModule, SecretsModule, TextToSpeechModule, SttModule],
   controllers: [SparringController],
   providers: [SparringService],
   exports: [SparringService],
