@@ -83,7 +83,7 @@ export class MaterialChatController {
   ) {
     const { Readable } = await import('node:stream');
     const webStream = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
-    return this.materialChat.streamUploadVoiceReply(userId, sessionId, webStream);
+    return this.materialChat.streamUploadVoiceReply(userId, sessionId, webStream, req.headers['content-type'] ?? null);
   }
 
   @Post('material-chat-sessions/:sessionId/voice-reply')

@@ -281,14 +281,14 @@ export class MaterialChatService {
 
   // ═══════════════════════ голосовой ввод реплики — параллельный паттерн Пункта 69 ═══════════════════════
 
-  async streamUploadVoiceReply(userId: string, sessionId: string, fileStream: ReadableStream<Uint8Array>) {
+  async streamUploadVoiceReply(userId: string, sessionId: string, fileStream: ReadableStream<Uint8Array>, contentType?: string | null) {
     const session = await this.findOwnedSession(userId, sessionId);
     // ПОВТОРНЫЙ АУДИТ 2026-08-30 — см. тот же комментарий в
     // SparringService: модуль не проверял ни режим приватности, ни
     // согласия, хотя отправляет голос пользователя внешнему провайдеру.
     await this.consent.assertAudioMayLeaveDevice(userId, session.workingMaterial.projectId);
     // Пункт [stt-multi] 2026-09-02 — байты уходят провайдеру языка.
-    const { audioUrl, provider } = await this.stt.uploadAudio(fileStream, await this.userLanguage(userId));
+    const { audioUrl, provider } = await this.stt.uploadAudio(fileStream, await this.userLanguage(userId), contentType ?? null);
     return { audioUrl, sttProvider: provider };
   }
 
@@ -339,7 +339,13 @@ export class MaterialChatService {
     const job = await this.prisma.materialChatVoiceReplyJob.findFirst({
       where: { externalTranscriptionJobId: { in: sttJobIdVariants(payload.externalJobId) } },
     });
-    if (!job || job.status !== SparringVoiceReplyStatus.PENDING) return;
+    if (!job) {
+      // Реплика удалена (сессия, проект, аккаунт) до прихода вебхука —
+      // результат никому; убираем задачу у провайдера (аудит 2026-09-02).
+      await this.stt.discardOrphan(payload.providerHint, payload.externalJobId);
+      return;
+    }
+    if (job.status !== SparringVoiceReplyStatus.PENDING) return;
 
     // Аудит 2026-09-02 (STT): атомарный забор джобы. Проверка статуса
     // выше — обычное чтение, и между ней и записью COMPLETED проходит

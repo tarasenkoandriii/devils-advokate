@@ -117,7 +117,7 @@ export class ConversationsController {
     // Пункт [stt-multi] 2026-09-02: язык записи (если клиент его знает)
     // определяет, КОМУ уходят байты — тому же провайдеру, что возьмёт
     // задачу. Без него берётся мультиязычный провайдер по умолчанию.
-    return this.conversations.streamUploadAudio(userId, id, webStream, language ?? null);
+    return this.conversations.streamUploadAudio(userId, id, webStream, language ?? null, req.headers['content-type'] ?? null);
   }
 
   // Пункт [multimodal] §7.3 — сигналы подачи (паралингвистика).

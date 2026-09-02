@@ -154,6 +154,27 @@ export class TranscriptionService {
     return (await response.json()) as AssemblyAiTranscriptResult;
   }
 
+  /** Аудит 2026-09-02 (продолжение): DELETE транскрипта у AssemblyAI —
+   * снимает данные (текст, слова), оставляя пустую запись со статусом.
+   * До этого текст лежал у провайдера бессрочно, хотя согласие обещает
+   * «у нас — расшифровка, у провайдера — ничего». Best-effort: отказ —
+   * предупреждение, не ошибка (результат уже прочитан или не нужен);
+   * 404 — уже удалено. */
+  async deleteTranscript(apiKey: string, transcriptId: string): Promise<void> {
+    try {
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/transcript/${transcriptId}`,
+        { method: 'DELETE', headers: { Authorization: apiKey } },
+        10_000,
+      );
+      if (!response.ok && response.status !== 404) {
+        this.logger.warn(`AssemblyAI: не удалось удалить транскрипт ${transcriptId} → ${response.status}`);
+      }
+    } catch (err) {
+      this.logger.warn(`AssemblyAI: не удалось удалить транскрипт ${transcriptId}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   /** Парсинг РЕЗУЛЬТАТА (не входящего webhook-пейлоада — см. коммент к
    * AssemblyAiWebhookPayload выше) в структуру, готовую для записи в
    * Transcript/TranscriptSegment. Вызывающий код уже получил result через
@@ -260,16 +281,22 @@ export class TranscriptionService {
     // на английском был бы платформенным 504. Интервал нулевой в
     // тестах (jest выставляет NODE_ENV).
     const pollDelayMs = process.env.NODE_ENV === 'test' ? 0 : 1200;
-    for (let attempt = 0; attempt < 18; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
-      const result = await this.getTranscriptResult(apiKey, id);
-      if (result.status === 'completed') {
-        return { text: result.text ?? '', language: result.language_code ?? null };
+    try {
+      for (let attempt = 0; attempt < 18; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+        const result = await this.getTranscriptResult(apiKey, id);
+        if (result.status === 'completed') {
+          return { text: result.text ?? '', language: result.language_code ?? null };
+        }
+        if (result.status === 'error') {
+          throw new TranscriptionProviderError(`AssemblyAI voice note ${id} failed: ${result.error ?? 'unknown error'}`);
+        }
       }
-      if (result.status === 'error') {
-        throw new TranscriptionProviderError(`AssemblyAI voice note ${id} failed: ${result.error ?? 'unknown error'}`);
-      }
+      throw new TranscriptionProviderError('Распознавание заметки не уложилось в отведённое время — попробуйте короче');
+    } finally {
+      // Результат либо возвращён, либо потерян — у провайдера ему больше
+      // нечего делать (аудит 2026-09-02, та же дисциплина, что у Soniox).
+      await this.deleteTranscript(apiKey, id);
     }
-    throw new TranscriptionProviderError('Распознавание заметки не уложилось в отведённое время — попробуйте короче');
   }
 }

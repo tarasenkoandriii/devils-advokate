@@ -12,6 +12,7 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ExternalArtifactsCleanupService } from '../common/external-artifacts/external-artifacts-cleanup.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 
 export interface CreateProjectInput {
@@ -31,7 +32,10 @@ export interface ListProjectsOptions {
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly externalArtifacts: ExternalArtifactsCleanupService,
+  ) {}
 
   async create(userId: string, input: CreateProjectInput) {
     return this.prisma.project.create({
@@ -99,6 +103,12 @@ export class ProjectsService {
 
   async remove(userId: string, projectId: string): Promise<void> {
     await assertProjectOwnership(this.prisma, userId, projectId);
+    // Аудит 2026-09-02 (продолжение): каскад снимает строки, но не файлы
+    // в хранилище (доказательства ДТП, транзитное аудио разговоров) и не
+    // задачи распознавания у провайдера. «Удалить всё» обещало всё —
+    // теперь внешние артефакты убираются ДО каскада (best-effort: отказ
+    // удаления файла не оставляет проект в БД).
+    await this.externalArtifacts.discardForProject(projectId);
     await this.prisma.project.delete({ where: { id: projectId } });
   }
 }

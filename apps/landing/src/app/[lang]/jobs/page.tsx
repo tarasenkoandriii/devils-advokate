@@ -9,6 +9,7 @@
 
 import type { Metadata } from 'next';
 import { locales, ogLocales, type Locale } from '../../../lib/i18n/config';
+import { siteUrl } from '../../../lib/site-url';
 import { getJobsDictionary } from '../../../lib/i18n/jobs';
 import { StartInTelegram } from '../../../components/jobs/StartInTelegram';
 import { AudienceTabs } from '../../../components/jobs/AudienceTabs';
@@ -20,7 +21,7 @@ export function generateStaticParams() {
 }
 
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com';
+const SITE_URL = siteUrl();
 
 /** B2B-контакт (ТЗ §4). Пусто → кнопки «Написать нам» просто нет. */
 const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? '';

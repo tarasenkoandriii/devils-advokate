@@ -107,6 +107,26 @@ function createFakePrisma() {
         conversations.set(where.id, merged);
         return merged;
       },
+      // Аудит 2026-09-02: releaseMediaConsumer стал условным UPDATE —
+      // фейк понимает { gte, lt }, { decrement } и равенство по
+      // audioBlobPathname, как в реальном Prisma.
+      updateMany: async ({ where, data }: any) => {
+        const c = conversations.get(where.id);
+        if (!c) return { count: 0 };
+        const pmc = where.pendingMediaConsumers;
+        if (pmc && typeof pmc === 'object') {
+          if (pmc.gte !== undefined && !((c.pendingMediaConsumers ?? 0) >= pmc.gte)) return { count: 0 };
+          if (pmc.lt !== undefined && !((c.pendingMediaConsumers ?? 0) < pmc.lt)) return { count: 0 };
+        }
+        if (where.audioBlobPathname !== undefined && c.audioBlobPathname !== where.audioBlobPathname) return { count: 0 };
+        const next = { ...c };
+        for (const [k, v] of Object.entries(data)) {
+          if (v && typeof v === 'object' && 'decrement' in (v as any)) next[k] = (c[k] ?? 0) - (v as any).decrement;
+          else next[k] = v;
+        }
+        conversations.set(where.id, next);
+        return { count: 1 };
+      },
     },
     conversationParticipant: {
       upsert: async ({ where, create }: any) => {
@@ -248,6 +268,12 @@ function makeFakeStt(transcription: FakeTranscriptionService, provider = 'assemb
       const bare = storedId.includes(':') ? storedId.slice(storedId.indexOf(':') + 1) : storedId;
       const result = await transcription.getTranscriptResult('key', bare);
       return transcription.parseTranscriptResult(result);
+    },
+    discarded: [] as string[],
+    // Аудит 2026-09-02: вебхук на несуществующий разговор → уборка у
+    // провайдера; тест проверяет, что она вызвана, а обработчик не упал.
+    async discardOrphan(hint: string | null, id: string) {
+      this.discarded.push(`${hint}:${id}`);
     },
     async uploadAudio() {
       // Ревью 2026-09-02: загрузка идёт через маршрутизатор — байты
@@ -765,6 +791,44 @@ async function run() {
     assertEqual(prisma._getSegments().length, 1, 'транскрипт не удвоен');
   });
 
+  test('РЕГРЕССИЯ (аудит 2026-09-02): два ОДНОВРЕМЕННЫХ освобождения потребителей — файл удалён ровно один раз, счётчик 0, ссылка снята', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    const conv = await prisma.conversation.create({
+      data: {
+        projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBED',
+        occurredAt: new Date(), audioBlobPathname: 'conversation-audio/c9/race.m4a',
+        paralinguisticsEnabled: true, pendingMediaConsumers: 2,
+      },
+    });
+    const audioBlob = makeFakeAudioBlob();
+    const svc = new ConversationsService(
+      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, new FakeTranscriptionService() as any, makeFakeStt(new FakeTranscriptionService()) as any, audioBlob as any, makeFakeParalinguistics() as any,
+    );
+
+    // Вебхук расшифровки и завершение паралингвистики освобождают свои
+    // резервы одновременно. До правки оба читали 2 и оба писали 1 —
+    // файл висел до сторожевой; либо оба доходили до удаления.
+    await Promise.all([svc.releaseMediaConsumer(conv.id, 1), svc.releaseMediaConsumer(conv.id, 1)]);
+
+    assertEqual(prisma._getConversation(conv.id).pendingMediaConsumers, 0, 'оба декремента учтены');
+    assertEqual(audioBlob.deleteCalls, ['conversation-audio/c9/race.m4a'], 'удаление — ровно одно');
+    assertEqual(prisma._getConversation(conv.id).audioBlobPathname, null, 'ссылка снята');
+  });
+
+  test('releaseMediaConsumer не уводит счётчик в минус при лишнем освобождении', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    const conv = await prisma.conversation.create({
+      data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'TRANSCRIBED', occurredAt: new Date(), pendingMediaConsumers: 1 },
+    });
+    const svc = new ConversationsService(
+      prisma as any, { resolve: async () => 'fake-key' } as any, {} as ConsentService, new FakeTranscriptionService() as any, makeFakeStt(new FakeTranscriptionService()) as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
+    );
+    await svc.releaseMediaConsumer(conv.id, 2);
+    assertEqual(prisma._getConversation(conv.id).pendingMediaConsumers, 0, 'прижато к нулю, не -1');
+  });
+
   test('[blob] КЛЮЧЕВОЙ ТЕСТ: файл удаляется и при ОШИБКЕ расшифровки — на этой ветке файлы копятся дольше всего', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
@@ -817,12 +881,16 @@ async function run() {
   test('handleTranscriptionWebhook() не падает на неизвестный job id — просто не совпадает', async () => {
     const prisma = createFakePrisma();
     const fakeTranscription = new FakeTranscriptionService();
+    const stt = makeFakeStt(fakeTranscription);
     const svc = new ConversationsService(
-      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, makeFakeStt(fakeTranscription) as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
+      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, stt as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
     );
     const result = await svc.handleTranscriptionWebhook({ transcript_id: 'unknown-job', status: 'completed' } as any);
     assertEqual(result, { acknowledged: true, matched: false }, 'ответ на webhook с неизвестным job id');
     assertEqual(fakeTranscription.getResultCalls, [], 'для несуществующего разговора GET к AssemblyAI не делается вообще — экономия и отсутствие лишнего внешнего вызова');
+    // Аудит 2026-09-02 (продолжение): у провайдера задача бесхозная —
+    // убирается, чтобы запись не лежала у него весь retention.
+    assertEqual(stt.discarded, ['assemblyai:unknown-job'], 'бесхозная задача убрана у провайдера, названного формой вебхука');
   });
 
   test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): handleTranscriptionWebhook() без transcript_id — не падає, findFirst НЕ викликається з undefined', async () => {

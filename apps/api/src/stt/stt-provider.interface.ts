@@ -42,8 +42,12 @@ export interface SttProvider {
   readonly lanes: readonly SttLane[];
 
   /** Загрузка байтов туда, откуда провайдер сможет их забрать.
-   *  Возвращает ссылку, пригодную как audioUrl для submitWebhookJob. */
-  uploadAudio(apiKey: string, audio: ReadableStream<Uint8Array>): Promise<string>;
+   *  Возвращает ссылку, пригодную как audioUrl для submitWebhookJob.
+   *  `contentType` — MIME из запроса клиента (аудит 2026-09-02): у
+   *  multipart-загрузки Soniox файл без имени и типа, и провайдеру
+   *  остаётся угадывать формат по байтам; с типом угадывать не нужно.
+   *  Необязателен — без него поведение прежнее. */
+  uploadAudio(apiKey: string, audio: ReadableStream<Uint8Array>, contentType?: string | null): Promise<string>;
 
   /** Длинный файл: ставим задачу, результат придёт вебхуком. */
   submitWebhookJob(apiKey: string, params: SttWebhookSubmitParams): Promise<{ externalJobId: string }>;
@@ -61,6 +65,13 @@ export interface SttProvider {
 
   /** Короткоживущий ключ для прямого подключения браузера. */
   mintRealtimeToken?(apiKey: string, expiresInSeconds: number, languageHints: string[]): Promise<SttRealtimeCredentials>;
+
+  /** Аудит 2026-09-02 (продолжение): убрать у провайдера задачу, чей
+   *  результат нам уже НЕ НУЖЕН — вебхук пришёл на разговор/реплику,
+   *  которых больше нет (удалены пользователем до завершения). Без этого
+   *  запись лежала бы у субподрядчика весь его retention, хотя у нас от
+   *  неё не осталось ничего. Best-effort, ошибок не бросает. */
+  discard?(apiKey: string, externalJobId: string): Promise<void>;
 }
 
 /** Ошибка провайдера распознавания — общая для всех трёх, чтобы

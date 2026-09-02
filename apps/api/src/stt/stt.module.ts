@@ -12,10 +12,11 @@ import { AssemblyAiSttProvider } from './assemblyai-stt.provider';
 import { ElevenLabsSttProvider } from './elevenlabs-stt.provider';
 import { SonioxSttProvider } from './soniox-stt.provider';
 import { SttService } from './stt.service';
+import { VoiceReplyReaperService } from './voice-reply-reaper.service';
 
 @Module({
   imports: [SecretsModule],
-  providers: [TranscriptionService, AssemblyAiSttProvider, SonioxSttProvider, ElevenLabsSttProvider, SttService],
-  exports: [SttService],
+  providers: [TranscriptionService, AssemblyAiSttProvider, SonioxSttProvider, ElevenLabsSttProvider, SttService, VoiceReplyReaperService],
+  exports: [SttService, VoiceReplyReaperService],
 })
 export class SttModule {}

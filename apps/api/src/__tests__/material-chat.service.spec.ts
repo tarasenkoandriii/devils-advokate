@@ -389,6 +389,10 @@ async function run() {
   class FakeTranscriptionForWebhook {
     getResultCalls: string[] = [];
     transcriptResultByJobId: Record<string, any> = {};
+    discarded: string[] = [];
+    async discardOrphan(hint: string | null, id: string) {
+      this.discarded.push(`${hint}:${id}`);
+    }
     async fetchResult(storedId: string) {
       const bare = storedId.includes(':') ? storedId.slice(storedId.indexOf(':') + 1) : storedId;
       this.getResultCalls.push(bare);

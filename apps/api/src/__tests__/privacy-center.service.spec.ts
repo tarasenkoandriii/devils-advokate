@@ -21,6 +21,13 @@ function createFakePrisma() {
       findMany: async ({ where }: any) =>
         consents.filter((c) => c.userId === where.userId && (where.revokedAt === null ? c.revokedAt === null : true)),
     },
+    // Аудит 2026-09-02 (продолжение): выгрузка стала полной — коллекции
+    // пользовательского уровня. Содержимое здесь не проверяется, только
+    // что они запрошены и попали в ответ.
+    intakeSession: { findMany: async ({ where }: any) => (where.userId === 'user-1' ? [{ id: 'is-1' }] : []) },
+    candidateProfile: { findMany: async ({ where }: any) => (where.ownerUserId === 'user-1' ? [{ id: 'cp-1' }] : []) },
+    mediaReviewQueue: { findMany: async ({ where }: any) => (where.userId === 'user-1' ? [{ id: 'mq-1', items: [] }] : []) },
+    safeShareAction: { findMany: async () => [] },
     project: {
       count: async ({ where }: any) => projects.filter((p) => p.ownerId === where.ownerId).length,
       findMany: async ({ where }: any) => projects.filter((p) => p.ownerId === where.ownerId),
@@ -75,7 +82,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedFact({ id: 'fact-2', personId: 'person-1' });
     prisma._seedProjectPersonLink({ personId: 'person-1', projectId: 'proj-1' });
 
-    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { discardForUser: async () => ({ evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0 }) } as any);
     const overview = await service.getOverview(USER_ID);
 
     expect(overview.projectsCount).toBe(2);
@@ -90,7 +97,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedProject({ id: 'proj-1', ownerId: 'other-user' });
     prisma._seedPerson({ id: 'person-1', createdByUserId: 'other-user', displayName: 'Чужой' });
 
-    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { discardForUser: async () => ({ evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0 }) } as any);
     const overview = await service.getOverview(USER_ID);
 
     expect(overview.projectsCount).toBe(0);
@@ -103,7 +110,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedFact({ id: 'fact-1', personId: 'person-1' });
     prisma._seedFact({ id: 'fact-2', personId: 'person-1' });
 
-    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { discardForUser: async () => ({ evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0 }) } as any);
     await service.deletePerson(USER_ID, 'person-1');
 
     expect(prisma._personExists('person-1')).toBe(false);
@@ -114,7 +121,7 @@ describe('PrivacyCenterService', () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: 'person-1', createdByUserId: 'other-user', displayName: 'Чужой' });
 
-    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { discardForUser: async () => ({ evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0 }) } as any);
     await expect(service.deletePerson(USER_ID, 'person-1')).rejects.toThrow(NotFoundException);
     expect(prisma._personExists('person-1')).toBe(true);
   });
@@ -126,7 +133,7 @@ describe('PrivacyCenterService', () => {
     prisma._seedFact({ id: 'fact-1', personId: 'person-1', content: 'Факт' });
     prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
 
-    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { resolve: async () => null } as any);
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { discardForUser: async () => ({ evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0 }) } as any);
     const data = await service.exportData(USER_ID);
 
     expect(data.projects.length).toBe(1);
@@ -134,5 +141,29 @@ describe('PrivacyCenterService', () => {
     expect(data.people[0].facts.length).toBe(1);
     expect(data.consents.length).toBe(1);
     expect(typeof data.exportedAt).toBe('string');
+  });
+
+  it('РЕГРЕССИЯ (аудит 2026-09-02): «все мои данные» — не три коллекции: разговоры с транскриптами, спарринг, чаты, квиз, кандидаты, медиа входят; что не входит — названо', async () => {
+    const prisma = createFakePrisma();
+    let projectInclude: any = null;
+    prisma.project.findMany = async ({ where, include }: any) => { projectInclude = include; return where.ownerId === USER_ID ? [{ id: 'proj-1' }] : []; };
+    const service = new PrivacyCenterService(prisma as any, { record: async () => undefined } as any, { discardForUser: async () => ({}) } as any);
+    const data = await service.exportData(USER_ID);
+
+    // Ключи ответа — контракт полноты: новая коллекция без записи здесь
+    // должна ронять тест, а не оставаться тихой неполнотой.
+    expect(Object.keys(data).sort()).toEqual(
+      ['candidateProfiles', 'consents', 'exportedAt', 'intakeSessions', 'mediaReviewQueues', 'notIncluded', 'people', 'projects', 'safeShareActions'].sort(),
+    );
+    // Внутри проекта — то, что человек продиктовал продукту.
+    expect(projectInclude.conversations.include.transcript.include.segments).toBeTruthy();
+    expect(projectInclude.sparringSessions.include.messages).toBeTruthy();
+    expect(projectInclude.workingMaterials.include.chatSessions.include.messages).toBeTruthy();
+    for (const key of ['protectedNotes', 'commitments', 'agendas', 'scheduledConversations', 'motiveHypotheses']) {
+      expect(projectInclude[key]).toBe(true);
+    }
+    expect(data.intakeSessions).toHaveLength(1);
+    expect(data.candidateProfiles).toHaveLength(1);
+    expect(data.notIncluded.some((line: string) => /аудит/i.test(line))).toBe(true);
   });
 });

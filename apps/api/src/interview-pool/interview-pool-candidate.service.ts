@@ -166,7 +166,16 @@ export class InterviewPoolCandidateService {
     if (shares[0].expiresAt < new Date()) {
       throw new BadRequestException('Посилання прострочене');
     }
-    return shares.map((s: any) => ({ shareId: s.id, displayName: s.sourceCandidate.displayName, resumeText: s.sourceCandidate.resumeText }));
+    // Аудит 2026-09-02 (job-landing): `accepted` — чтобы повторно
+    // открытая ссылка не показывала кнопку «Принять» на уже принятом
+    // профиле (нажатие давало 400 «вже було прийнято»). Кто принял —
+    // не раскрываем: получателю нужен факт, не userId.
+    return shares.map((s: any) => ({
+      shareId: s.id,
+      displayName: s.sourceCandidate.displayName,
+      resumeText: s.sourceCandidate.resumeText,
+      accepted: s.acceptedAt != null,
+    }));
   }
 
   /** §4.6 ТЗ — "явна дія отримувача, не автоматичний імпорт". Приймає

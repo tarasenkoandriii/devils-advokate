@@ -15,6 +15,10 @@ export interface SttWebhookPayload {
   /** Идентификатор задачи в терминах ПРОВАЙДЕРА (без нашего префикса). */
   externalJobId: string | null;
   status: 'completed' | 'error' | string;
+  /** Кто прислал — по имени поля с идентификатором (аудит 2026-09-02:
+   *  нужно, чтобы убрать у провайдера задачу, владельца которой у нас
+   *  уже нет — в базе искать нечего, а провайдер известен только так). */
+  providerHint: 'assemblyai' | 'soniox' | null;
 }
 
 export function parseSttWebhookPayload(body: unknown): SttWebhookPayload {
@@ -24,5 +28,9 @@ export function parseSttWebhookPayload(body: unknown): SttWebhookPayload {
   const id = typeof payload.id === 'string' ? payload.id : null;
   const status = typeof payload.status === 'string' ? payload.status : 'unknown';
 
-  return { externalJobId: transcriptId ?? id, status };
+  return {
+    externalJobId: transcriptId ?? id,
+    status,
+    providerHint: transcriptId ? 'assemblyai' : id ? 'soniox' : null,
+  };
 }

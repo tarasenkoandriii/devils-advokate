@@ -209,10 +209,14 @@ async function run() {
     process.env.NODE_ENV = 'test'; // нулевая пауза опроса
     const calls: { url: string; body?: any }[] = [];
     let polls = 0;
+    let deletes = 0;
     (global as any).fetch = async (url: string, init: any) => {
       calls.push({ url, body: init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined });
       if (url.endsWith('/v2/upload')) return { ok: true, json: async () => ({ upload_url: 'https://cdn.assemblyai.com/upload/note-1' }) };
       if (url.endsWith('/v2/transcript')) return { ok: true, json: async () => ({ id: 'tr-note-1' }) };
+      // Аудит 2026-09-02 (продолжение): после результата — DELETE
+      // транскрипта у провайдера; это не опрос.
+      if (init?.method === 'DELETE') { deletes += 1; return { ok: true, status: 204 }; }
       polls += 1;
       return polls < 3
         ? { ok: true, json: async () => ({ status: 'processing', id: 'tr-note-1' }) }
@@ -228,6 +232,7 @@ async function run() {
       assertEqual(submit.body.speech_models, ['universal-3-5-pro', 'universal-2'], 'та же явная пара моделей, что в основном submitJob');
       assertEqual(submit.body.webhook_url, undefined, 'КЛЮЧЕВОЕ: без вебхука — результат забирается опросом, секрет вебхука не нужен');
       assertEqual(polls, 3, 'processing-статусы переживаются опросом до completed');
+      assertEqual(deletes, 1, 'текст заметки удалён у провайдера сразу после получения (DELETE /v2/transcript/{id})');
     } finally {
       process.env.NODE_ENV = prevEnv;
     }

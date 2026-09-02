@@ -176,7 +176,7 @@ describe('Фича 1 — сквозной путь: проект → согла�
     prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
     mockFetchOnce(openaiSuccessBody);
 
-    const projectsService = new ProjectsService(prisma as any);
+    const projectsService = new ProjectsService(prisma as any, { discardForProject: async () => ({}) } as any);
     const consentService = new ConsentService(prisma as any);
     const contentScanService = new ContentScanService(prisma as any);
     const aiRouter = new AIRouterService(prisma as any, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consentService, contentScanService, { resolve: async () => ({ uri: 'https://resolved.example/x' }) } as any);
@@ -217,7 +217,7 @@ describe('Фича 1 — сквозной путь: проект → согла�
     prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
     mockFetchOnce(openaiSuccessBody);
 
-    const projectsService = new ProjectsService(prisma as any);
+    const projectsService = new ProjectsService(prisma as any, { discardForProject: async () => ({}) } as any);
     const consentService = new ConsentService(prisma as any);
     const contentScanService = new ContentScanService(prisma as any);
     const aiRouter = new AIRouterService(prisma as any, fakeSecrets({ OPENAI_API_KEY: 'sk-test' }) as any, consentService, contentScanService, { resolve: async () => ({ uri: 'https://resolved.example/x' }) } as any);

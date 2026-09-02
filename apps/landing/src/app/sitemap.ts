@@ -1,8 +1,9 @@
 import type { MetadataRoute } from 'next';
 import { locales, defaultLocale } from '../lib/i18n/config';
+import { siteUrl } from '../lib/site-url';
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com';
+  const baseUrl = siteUrl();
 
   // Пункт [job-landing] 2026-09-01: страница /{lang}/jobs — вторая
   // индексируемая страница на каждый язык.

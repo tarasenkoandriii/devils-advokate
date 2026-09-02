@@ -210,9 +210,10 @@ devils-advocate/
 | `devils-advocate-hero-brief.md`, `-features-map-brief.md`, `-how-to-use-brief.md` | Детальные брифы на растровые иллюстрации лендинга |
 | `devils-advocate-positioning-vs-calculators.md`, `-vs-ai-wrapper.md`, `-vs-surveillance.md` | Позиционирование "мы не очередной..." |
 | `devils-advocate-illustration-vs-calculators.md`, `-vs-ai-wrapper.md`, `-vs-surveillance.md` | Иллюстративные брифы к каждому позиционированию |
-| `AUDIT-*.md` (14 файлов) | Отчёты аудитов, по одному на заход. Хронологически: `AUDIT-2026-08-30` (внешний), `-FULL`, `-DB`, `-TESTS`, `-DOCS`, `-FINAL`, точечные проверки периметров (`-ASSEMBLYAI`, `-ELEVENLABS`, `-FACTCHECKTOOLS`, `-GROK`, `-TELEGRAM-INITDATA`, `-WINDY`, `-PERIMETERS-MAP`) и последний — **`AUDIT-RERUN-2026-08-30.md`** (повторный сквозной, после Docker-стенда) |
+| `devils-advocate-stt-provider-2026-09-02.md` | Выбор STT-провайдера для ru/uk (Soniox) и реализация Пункта [stt-multi]: маршрут по языку, фоллбеки по полосам, ревью и второй аудит (§7) |
+| `AUDIT-*.md` (22 файла) | Отчёты аудитов, по одному на заход. Хронологически: `AUDIT-2026-08-30` (внешний), `-FULL`, `-DB`, `-TESTS`, `-DOCS`, `-FINAL`, точечные проверки периметров (`-ASSEMBLYAI`, `-ELEVENLABS`, `-FACTCHECKTOOLS`, `-GROK`, `-TELEGRAM-INITDATA`, `-WINDY`, `-PERIMETERS-MAP`), `AUDIT-RERUN-2026-08-30` (после Docker-стенда); 2026-09-01: `-PROJECT`, `-RERUN`, `-LANDING`, `-LINT-CI`, `-AI-CAPABILITIES`, `-ROUTER-SIMPLIFY`; 2026-09-02: `AUDIT-PROJECT-2026-09-02` (весь проект + ТЗ job-landing) и последний — **`AUDIT-STT-ROUTER-LANDING-2026-09-02.md`** (STT-провайдеры / AI-роутер / job-landing) |
 
-В корне репозитория из документации остаются только четыре рабочих файла — `README.md`, `TODO.md`, `DOCKER.md`, `VERCEL.md` — плюс справочник `API-AND-KEYS.md`. Всё остальное, включая отчёты аудитов, лежит в `docs/`.
+В корне репозитория из документации — рабочие файлы `README.md`, `TODO.md`, `DOCKER.md`, `VERCEL.md`, справочник `API-AND-KEYS.md` и ТЗ лендинга поиска работы `devils-advocate-job-landing-tz.md` (лежит в корне, поскольку ведётся как живой документ вместе с `TODO.md`). Всё остальное, включая отчёты аудитов, лежит в `docs/`. (Аудит 2026-09-02: таблица была устаревшей — «14 файлов» и последний отчёт от 30.08.)
 
 ## Локальная разработка
 

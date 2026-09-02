@@ -101,7 +101,7 @@ export class SparringController {
   ) {
     const { Readable } = await import('node:stream');
     const webStream = Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>;
-    return this.sparring.streamUploadVoiceReply(userId, sessionId, webStream);
+    return this.sparring.streamUploadVoiceReply(userId, sessionId, webStream, req.headers['content-type'] ?? null);
   }
 
   @Post('sparring-sessions/:sessionId/voice-reply')

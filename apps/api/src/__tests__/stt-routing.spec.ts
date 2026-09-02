@@ -15,7 +15,7 @@ import {
 } from '../stt/stt-language';
 import { formatSttJobId, parseSttJobId, sttJobIdVariants, SttService } from '../stt/stt.service';
 import { parseSttWebhookPayload } from '../stt/stt-webhook-payload';
-import { sonioxTokensToSegments, dominantSonioxLanguage, SonioxSttProvider } from '../stt/soniox-stt.provider';
+import { sonioxTokensToSegments, dominantSonioxLanguage, SonioxSttProvider, normalizeAudioMime, audioExtensionFor } from '../stt/soniox-stt.provider';
 import { AssemblyAiSttProvider } from '../stt/assemblyai-stt.provider';
 
 describe('sttProviderForLanguage', () => {
@@ -105,13 +105,17 @@ describe('идентификатор задачи', () => {
 
 describe('parseSttWebhookPayload', () => {
   it('понимает обе формы тела: transcript_id у AssemblyAI, id у Soniox', () => {
+    // providerHint — по имени поля: он нужен, чтобы убрать у провайдера
+    // задачу, владельца которой у нас уже нет (аудит 2026-09-02).
     expect(parseSttWebhookPayload({ transcript_id: 'a1', status: 'completed' })).toEqual({
       externalJobId: 'a1',
       status: 'completed',
+      providerHint: 'assemblyai',
     });
     expect(parseSttWebhookPayload({ id: 's1', status: 'error' })).toEqual({
       externalJobId: 's1',
       status: 'error',
+      providerHint: 'soniox',
     });
   });
 
@@ -251,6 +255,83 @@ describe('SonioxSttProvider: уборка у провайдера (аудит 20
     };
     const parsed = await new SonioxSttProvider().fetchResult('key', 'tr-1');
     expect(parsed.segments[0].text).toBe('ок');
+  });
+});
+
+describe('Soniox: имя и тип файла при загрузке (аудит 2026-09-02)', () => {
+  it('MIME из запроса нормализуется и даёт расширение; мусор — без типа и расширения', () => {
+    expect(normalizeAudioMime('audio/webm;codecs=opus')).toBe('audio/webm');
+    expect(normalizeAudioMime('Audio/MP4')).toBe('audio/mp4');
+    expect(normalizeAudioMime('application/octet-stream')).toBeNull();
+    expect(normalizeAudioMime(undefined)).toBeNull();
+    expect(audioExtensionFor('audio/webm')).toBe('.webm');
+    expect(audioExtensionFor('audio/mp4')).toBe('.m4a');
+    expect(audioExtensionFor(null)).toBe('');
+  });
+
+  it('uploadAudio кладёт в multipart файл с типом и расширением', async () => {
+    const originalFetch = (global as never as { fetch: unknown }).fetch;
+    let sentForm: FormData | null = null;
+    (global as never as { fetch: unknown }).fetch = async (_url: string, init: { body: FormData }) => {
+      sentForm = init.body;
+      return { ok: true, status: 200, statusText: 'OK', json: async () => ({ id: 'file-1' }) };
+    };
+    try {
+      const ref = await new SonioxSttProvider().uploadAudio('key', new Blob([new Uint8Array([1, 2, 3])]).stream(), 'audio/webm;codecs=opus');
+      expect(ref).toBe('soniox-file:file-1');
+      const file = sentForm!.get('file') as File;
+      expect(file.name).toBe('audio.webm');
+      expect(file.type).toBe('audio/webm');
+    } finally {
+      (global as never as { fetch: unknown }).fetch = originalFetch;
+    }
+  });
+});
+
+describe('SttService.discardOrphan (аудит 2026-09-02)', () => {
+  function build(discardLog: string[], failing = false) {
+    const make = (name: string, withDiscard: boolean) => ({
+      name,
+      lanes: ['sync', 'webhook', 'realtime'],
+      ...(withDiscard
+        ? {
+            async discard(_key: string, id: string) {
+              if (failing) throw new Error('сеть');
+              discardLog.push(`${name}:${id}`);
+            },
+          }
+        : {}),
+    });
+    const secrets = { resolve: async () => 'key' };
+    return new SttService(secrets as never, make('soniox', true) as never, make('assemblyai', true) as never, make('elevenlabs', false) as never);
+  }
+
+  it('убирает задачу у провайдера, названного формой вебхука; без подсказки — ничего', async () => {
+    const log: string[] = [];
+    const svc = build(log);
+    await svc.discardOrphan('soniox', 'tr-1');
+    await svc.discardOrphan('assemblyai', 'a-1');
+    await svc.discardOrphan(null, 'x');
+    expect(log).toEqual(['soniox:tr-1', 'assemblyai:a-1']);
+  });
+
+  it('отказ уборки не бросает наружу — вебхук всё равно подтверждается', async () => {
+    const svc = build([], true);
+    await expect(svc.discardOrphan('soniox', 'tr-1')).resolves.toBeUndefined();
+  });
+});
+
+describe('AssemblyAiSttProvider: удаление транскрипта после чтения (аудит 2026-09-02)', () => {
+  it('fetchResult читает результат и затем DELETE; отказ DELETE не теряет результат', async () => {
+    const calls: string[] = [];
+    const transcription = {
+      getTranscriptResult: async (_k: string, id: string) => { calls.push(`GET ${id}`); return { status: 'completed', id, utterances: [] }; },
+      parseTranscriptResult: () => ({ language: 'en', segments: [{ diarizationLabel: 'A', text: 'hi', startMs: 0, endMs: 1, confidence: null }] }),
+      deleteTranscript: async (_k: string, id: string) => { calls.push(`DELETE ${id}`); },
+    };
+    const parsed = await new AssemblyAiSttProvider(transcription as never).fetchResult('key', 'a-1');
+    expect(parsed.segments[0].text).toBe('hi');
+    expect(calls).toEqual(['GET a-1', 'DELETE a-1']);
   });
 });
 

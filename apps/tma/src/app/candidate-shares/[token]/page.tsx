@@ -24,6 +24,8 @@ interface SharePreviewItem {
   shareId: string;
   displayName: string | null;
   resumeText: string | null;
+  /** Уже принят кем-то ранее (аудит 2026-09-02) — кнопки «Принять» нет. */
+  accepted?: boolean;
 }
 
 export default function CandidateSharePage() {
@@ -83,6 +85,8 @@ export default function CandidateSharePage() {
             {item.resumeText && <p className="domain-entities__body">{item.resumeText}</p>}
             {accepted[item.shareId] ? (
               <p>Добавлен в вашу базу.</p>
+            ) : item.accepted ? (
+              <p className="card-section__empty">Этот профиль по ссылке уже принят ранее.</p>
             ) : (
               <button
                 type="button"

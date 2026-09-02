@@ -476,6 +476,44 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     ).rejects.toThrow(/ни у одной активной модели нет ключа провайдера: google \(GEMINI_API_KEY\)/);
   });
 
+  it('РЕГРЕССИЯ (аудит 2026-09-02): явно выбранная ФОНОВАЯ модель в синхронном execute() отвергается с точной причиной, а не берётся «по просьбе»', async () => {
+    // Пробел в покрытии, названный аудитом: селектор движков мог отдать
+    // id Gemini (фоновая полоса) в обычный execute(). Уважать выбор
+    // здесь нельзя — Gemini не помещается в maxDuration синхронной
+    // функции; ошибка обязана назвать и модель, и полосу.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedModelVersion({ id: 'mv-gemini', version: 'gemini-3.7-flash', model: { name: 'gemini-flash', provider: { name: 'google', apiEndpoint: 'https://generativelanguage.googleapis.com', credentialRef: 'GEMINI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-gemini', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const getCallCount = mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+    const router = buildRouter(prisma, { GEMINI_API_KEY: 'g', OPENAI_API_KEY: 'sk' });
+
+    await expect(
+      router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'вопрос', preferredModelVersionId: 'mv-gemini' }),
+    ).rejects.toThrow(/выбранная модель \(mv-gemini\) не входит в активные модели этой задачи на полосе sync/);
+    expect(getCallCount()).toBe(0);
+  });
+
+  it('РЕГРЕССИЯ (аудит 2026-09-02): суточный лимит действует и на enqueue() — фоновая полоса не обходит потолок', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-gemini', version: 'gemini-3.7-flash', model: { name: 'gemini-flash', provider: { name: 'google', apiEndpoint: 'https://generativelanguage.googleapis.com', credentialRef: 'GEMINI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-gemini', availability: 'active', vision: true, audio: true });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const router = buildRouter(prisma, { GEMINI_API_KEY: 'g' });
+    try {
+      process.env.AI_CALLS_PER_USER_PER_DAY = '5';
+      fakeAiJobCount = 5;
+      await expect(
+        router.enqueue({ userId: USER_ID, taskType: 'media-review', userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'abc' } } as any] }),
+      ).rejects.toThrow(/суточный лимит AI-вызовов/);
+    } finally {
+      delete process.env.AI_CALLS_PER_USER_PER_DAY;
+      fakeAiJobCount = 0;
+    }
+  });
+
   it('КЛЮЧЕВОЙ ТЕСТ [ai-locale]: база без колонки languageCode не убивает AI-вызов', async () => {
     // РЕГРЕССИЯ 2026-09-02, найдена владельцем в проде: код с колонкой
     // выкатился раньше, чем к базе применили ai_locale_2026_09_02.sql.

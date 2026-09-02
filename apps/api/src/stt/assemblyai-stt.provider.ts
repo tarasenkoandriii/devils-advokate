@@ -47,7 +47,22 @@ export class AssemblyAiSttProvider implements SttProvider {
 
   async fetchResult(apiKey: string, externalJobId: string): Promise<ParsedTranscript> {
     const result = await this.transcription.getTranscriptResult(apiKey, externalJobId);
-    return this.transcription.parseTranscriptResult(result);
+    const parsed = this.transcription.parseTranscriptResult(result);
+    // Аудит 2026-09-02 (продолжение): та же дисциплина, что у Soniox, —
+    // результат у нас, у провайдера ему больше нечего делать. У AssemblyAI
+    // DELETE снимает данные транскрипта (текст, слова), оставляя пустую
+    // запись со статусом; до этого текст лежал у него бессрочно, хотя
+    // согласие пользователя обещает «сохраняется расшифровка у нас, а не
+    // файл у провайдера». Повторная доставка вебхука после удаления не
+    // страшна: обработчики не переобрабатывают завершённое.
+    await this.discard(apiKey, externalJobId);
+    return parsed;
+  }
+
+  /** См. TranscriptionService.deleteTranscript — единственная точка с URL
+   *  и заголовками AssemblyAI остаётся там. */
+  discard(apiKey: string, externalJobId: string): Promise<void> {
+    return this.transcription.deleteTranscript(apiKey, externalJobId);
   }
 
   transcribeSync(apiKey: string, audio: Buffer, languageCode?: string): Promise<{ text: string; language: string | null }> {

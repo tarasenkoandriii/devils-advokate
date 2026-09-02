@@ -422,9 +422,11 @@ GROUP BY 1, 2, 3 ORDER BY 4 DESC;
    `TELEGRAM_BOT_USERNAME`) — иначе ссылки-приглашения отвечают 503 с
    именем недостающей переменной.
 3. **Окружение лендинга**: `NEXT_PUBLIC_TELEGRAM_BOT_URL` в той же
-   форме, что и `TELEGRAM_MINI_APP_URL`; `NEXT_PUBLIC_SITE_URL` (иначе
-   sitemap и OG уедут на example.com); `NEXT_PUBLIC_CONTACT_EMAIL`,
-   если нужна кнопка «Написать нам».
+   форме, что и `TELEGRAM_MINI_APP_URL`; `NEXT_PUBLIC_SITE_URL` — ПОЛНЫЙ
+   адрес с `https://`, без слэша на конце (иначе sitemap и OG уедут на
+   example.com; инцидент 2026-09-02: значение без протокола ронило
+   сборку всех страниц — теперь нормализуется, см. `VERCEL.md` §3а);
+   `NEXT_PUBLIC_CONTACT_EMAIL`, если нужна кнопка «Написать нам».
 4. **Проверка вручную**: открыть `/{lang}/jobs?utm_source=test`, нажать
    CTA кандидата, пройти первый шаг квиза, убедиться в базе:
    `SELECT source, campaign FROM intake_sessions ORDER BY "createdAt" DESC LIMIT 1;`

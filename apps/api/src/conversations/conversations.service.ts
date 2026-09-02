@@ -226,6 +226,9 @@ export class ConversationsService implements OnModuleInit {
       // 200, иначе AssemblyAI будет бесконечно ретраить webhook на
       // задачу, которая у нас уже не существует (например Conversation
       // удалена пользователем через Privacy Center до завершения job).
+      // Аудит 2026-09-02 (продолжение): а у провайдера запись при этом
+      // оставалась на весь retention — убираем её, результат никому.
+      await this.stt.discardOrphan(payload.providerHint, payload.externalJobId);
       return { acknowledged: true, matched: false };
     }
 
@@ -372,30 +375,49 @@ export class ConversationsService implements OnModuleInit {
    * расширение окна хранения, отражённое в тексте согласия
    * EPHEMERAL_SERVER, не только здесь. */
   async releaseMediaConsumer(conversationId: string, count = 1): Promise<void> {
+    // Аудит 2026-09-02 (STT), продолжение: декремент был «прочитать →
+    // посчитать → записать» двумя запросами, и два потребителя,
+    // освобождающиеся одновременно (вебхук расшифровки и завершение
+    // паралингвистики), могли оба прочитать 2 и оба записать 1 — файл
+    // оставался висеть до сторожевой. Теперь декремент — одно условное
+    // UPDATE (Prisma `decrement` с условием gte, чтобы не уйти ниже
+    // нуля), а удаление файла — тоже под условием: обнулить ссылку
+    // может только один вызов, и только он удаляет байты. Второй
+    // одновременный вызов видит count = 0 и ничего не делает.
+    const decremented = await this.prisma.conversation.updateMany({
+      where: { id: conversationId, pendingMediaConsumers: { gte: count } },
+      data: { pendingMediaConsumers: { decrement: count } },
+    });
+    if (decremented.count === 0) {
+      // Счётчик меньше count (лишний релиз или рассинхрон) — прижимаем
+      // к нулю, не уходим в минус.
+      await this.prisma.conversation.updateMany({
+        where: { id: conversationId, pendingMediaConsumers: { lt: count } },
+        data: { pendingMediaConsumers: 0 },
+      });
+    }
+
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
       select: { pendingMediaConsumers: true, audioBlobPathname: true },
     });
-    if (!conversation) return;
+    if (!conversation || conversation.pendingMediaConsumers !== 0 || !conversation.audioBlobPathname) return;
 
-    const remaining = Math.max(0, (conversation.pendingMediaConsumers ?? 0) - count);
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: { pendingMediaConsumers: remaining },
+    // Забираем право на удаление: обнуляем ссылку ТОЛЬКО если она ещё та
+    // же. Кто обнулил — тот удаляет; байты удаляются после снятия
+    // ссылки, и инвариант «pathname в БД ⇒ файл существует» держится.
+    const pathname = conversation.audioBlobPathname;
+    const claimed = await this.prisma.conversation.updateMany({
+      where: { id: conversationId, audioBlobPathname: pathname },
+      data: {
+        audioBlobPathname: null,
+        audioBlobBytes: null,
+        audioBlobContentType: null,
+        mediaLeaseExpiresAt: null,
+      },
     });
-
-    if (remaining === 0 && conversation.audioBlobPathname) {
-      await this.audioBlob.deleteByPathname(conversation.audioBlobPathname);
-      await this.prisma.conversation.update({
-        where: { id: conversationId },
-        data: {
-          audioBlobPathname: null,
-          audioBlobBytes: null,
-          audioBlobContentType: null,
-          mediaLeaseExpiresAt: null,
-        },
-      });
-    }
+    if (claimed.count === 0) return;
+    await this.audioBlob.deleteByPathname(pathname);
   }
 
   /** Сторожевая §7.2: потребители зависли дольше MEDIA_LEASE_MAX_AGE →
@@ -441,6 +463,7 @@ export class ConversationsService implements OnModuleInit {
     conversationId: string,
     fileStream: ReadableStream<Uint8Array>,
     languageCode?: string | null,
+    contentType?: string | null,
   ) {
     const conversation = await this.findOwnedConversation(userId, conversationId);
 
@@ -459,7 +482,7 @@ export class ConversationsService implements OnModuleInit {
     // провайдеру, который возьмёт задачу, и его имя возвращается
     // клиенту: requestTranscription получит его как sttProvider и не
     // будет пытаться отдать чужую ссылку соседу.
-    const { audioUrl, provider: sttProvider } = await this.stt.uploadAudio(fileStream, languageCode ?? null);
+    const { audioUrl, provider: sttProvider } = await this.stt.uploadAudio(fileStream, languageCode ?? null, contentType ?? null);
     return { audioUrl, sttProvider };
   }
 

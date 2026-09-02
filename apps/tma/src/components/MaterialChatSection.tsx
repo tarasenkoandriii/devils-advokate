@@ -27,6 +27,9 @@ import {
 import { MaterialChatSession, MaterialChatVoiceReplyJob } from '../lib/types';
 import { haptic } from '../lib/telegram';
 
+/** Потолок опроса статуса голосовой реплики (аудит 2026-09-02). */
+const VOICE_REPLY_POLL_MAX_MS = 3 * 60 * 1000;
+
 interface MaterialChatSectionProps {
   projectId: string;
   workingMaterialId: string;
@@ -196,6 +199,7 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
   }
 
   function pollVoiceReplyStatus(sessionId: string, jobId: string) {
+    const startedAt = Date.now();
     async function check() {
       let job: MaterialChatVoiceReplyJob;
       try {
@@ -206,6 +210,17 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
         return;
       }
       if (job.status === 'PENDING' || job.status === 'PROCESSING') {
+        // Аудит 2026-09-02: потолок ожидания. Без него клиент опрашивал
+        // статус бесконечно, если вебхук провайдера так и не пришёл;
+        // серверная сторожевая переведёт джобу в FAILED позже (30 мин),
+        // но держать человека у «…» столько нельзя — через три минуты
+        // говорим прямо и даём записать заново.
+        if (Date.now() - startedAt > VOICE_REPLY_POLL_MAX_MS) {
+          setVoiceStatus('idle');
+          haptic('error');
+          setError('Распознавание заняло слишком долго — попробуйте записать реплику ещё раз');
+          return;
+        }
         pollTimeoutRef.current = setTimeout(check, 2000);
         return;
       }

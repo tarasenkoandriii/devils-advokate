@@ -3,6 +3,7 @@ import { ReactNode } from 'react';
 import { Unbounded, Inter } from 'next/font/google';
 import { locales, ogLocales, defaultLocale, type Locale } from '../../lib/i18n/config';
 import { getDictionary } from '../../lib/i18n/get-dictionary';
+import { siteUrl } from '../../lib/site-url';
 import '../globals.css';
 
 // Unbounded для дисплейного начертания — уже отработанный в других
@@ -41,7 +42,10 @@ export async function generateMetadata({
     // построить абсолютные URL для OG/Twitter-картинок — часть
     // краулеров относительные игнорирует. Fallback совпадает с
     // sitemap.ts.
-    metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com'),
+    // Инцидент 2026-09-02: значение без протокола роняло prerender всех
+    // страниц (`new URL` → Invalid URL). Теперь — через siteUrl():
+    // нормализация и запасное значение вместо падения сборки.
+    metadataBase: new URL(siteUrl()),
     title: dict.meta.title,
     description: dict.meta.description,
     alternates: {

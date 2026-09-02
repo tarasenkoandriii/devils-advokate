@@ -228,6 +228,10 @@ class FakeTranscriptionService {
     return { provider: 'assemblyai' as const, externalJobId: this.externalJobId, storedId: this.storedJobId };
   }
 
+  discarded: string[] = [];
+  async discardOrphan(hint: string | null, id: string) {
+    this.discarded.push(`${hint}:${id}`);
+  }
   async fetchResult(storedId: string) {
     const bare = storedId.includes(':') ? storedId.slice(storedId.indexOf(':') + 1) : storedId;
     this.getResultCalls.push(bare);
@@ -509,9 +513,13 @@ async function run() {
 
   test('handleVoiceReplyWebhook() молча игнорирует неизвестный externalTranscriptionJobId (не роняет обработчик)', async () => {
     const prisma = createFakePrisma();
-    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, new FakeTranscriptionService() as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
+    const stt = new FakeTranscriptionService();
+    const svc = new SparringService(prisma as any, new FakeAIRouterService() as any, stt as any, new FakeSecretsService() as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
     // Не должно бросить исключение — AssemblyAI будет ретраить webhook на не-200, важно не падать на неизвестном job.
-    await svc.handleVoiceReplyWebhook({ transcript_id: 'unknown-job-id', status: 'completed' } as any);
+    await svc.handleVoiceReplyWebhook({ id: 'unknown-job-id', status: 'completed' } as any);
+    // Аудит 2026-09-02 (продолжение): бесхозная задача убирается у
+    // провайдера (форма { id } — Soniox).
+    assertEqual(stt.discarded, ['soniox:unknown-job-id'], 'уборка бесхозной задачи у провайдера');
   });
 
   test('РЕГРЕСІЯ (фінальний аудит 2026-08-30): handleVoiceReplyWebhook() без transcript_id — не падає, GET до AssemblyAI не робиться', async () => {

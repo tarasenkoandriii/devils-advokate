@@ -211,7 +211,7 @@ describe('InterviewPoolCandidateService', () => {
 
     const preview = await service.previewShare(token);
 
-    expect(preview[0]).toEqual({ shareId: expect.any(String), displayName: 'Кандидат', resumeText: 'CV текст' });
+    expect(preview[0]).toEqual({ shareId: expect.any(String), displayName: 'Кандидат', resumeText: 'CV текст', accepted: false });
     expect(Object.keys(preview[0])).not.toContain('pipelineStatuses');
     expect(Object.keys(preview[0])).not.toContain('relevanceEntries');
   });

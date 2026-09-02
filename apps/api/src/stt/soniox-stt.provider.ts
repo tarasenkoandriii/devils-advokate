@@ -153,6 +153,34 @@ export function dominantSonioxLanguage(tokens: SonioxToken[]): string | null {
   return best;
 }
 
+/** MIME из запроса → чистый тип без параметров (`audio/webm;codecs=opus`
+ *  → `audio/webm`); не аудио/видео — null. */
+export function normalizeAudioMime(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const base = raw.split(';')[0].trim().toLowerCase();
+  return /^(audio|video)\/[a-z0-9.+-]+$/.test(base) ? base : null;
+}
+
+const AUDIO_EXTENSIONS: Record<string, string> = {
+  'audio/webm': '.webm',
+  'video/webm': '.webm',
+  'audio/ogg': '.ogg',
+  'audio/mpeg': '.mp3',
+  'audio/mp3': '.mp3',
+  'audio/mp4': '.m4a',
+  'audio/x-m4a': '.m4a',
+  'audio/aac': '.aac',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/wave': '.wav',
+  'audio/flac': '.flac',
+  'video/mp4': '.mp4',
+};
+
+export function audioExtensionFor(mime: string | null): string {
+  return (mime && AUDIO_EXTENSIONS[mime]) ?? '';
+}
+
 @Injectable()
 export class SonioxSttProvider implements SttProvider {
   readonly name = 'soniox' as const;
@@ -212,7 +240,7 @@ export class SonioxSttProvider implements SttProvider {
    *  `soniox-file:<id>`, который submitWebhookJob разбирает обратно.
    *  Так вызывающий код (три модуля с голосовым вводом) остаётся
    *  провайдеро-независимым: у него в руках «строка-ссылка». */
-  async uploadAudio(apiKey: string, audio: ReadableStream<Uint8Array>): Promise<string> {
+  async uploadAudio(apiKey: string, audio: ReadableStream<Uint8Array>, contentType?: string | null): Promise<string> {
     // FormData требует Blob/File — стрим собираем в память. Это путь
     // КОРОТКИХ записей (реплика в спарринге, заметка): длинный разговор
     // грузится напрямую в приватный blob и приходит сюда ссылкой.
@@ -223,10 +251,14 @@ export class SonioxSttProvider implements SttProvider {
       if (done) break;
       if (value) chunks.push(value);
     }
-    const blob = new Blob(chunks);
+    const type = normalizeAudioMime(contentType);
+    const blob = new Blob(chunks, type ? { type } : undefined);
 
     const form = new FormData();
-    form.append('file', blob, 'audio');
+    // Имя с расширением по MIME (аудит 2026-09-02): без него multipart
+    // уходил как безымянный «audio» без типа — формат провайдер
+    // определял по байтам. Расширение — подсказка, не условие.
+    form.append('file', blob, `audio${audioExtensionFor(type)}`);
 
     const data = await this.request<{ id: string }>(apiKey, '/files', { method: 'POST', body: form }, 45_000);
     return `soniox-file:${data.id}`;
@@ -254,6 +286,20 @@ export class SonioxSttProvider implements SttProvider {
     });
 
     return { externalJobId: data.id };
+  }
+
+  /** Уборка без чтения результата — для задач, чей владелец у нас
+   *  удалён (см. интерфейс). file_id узнаём из статуса; если статус не
+   *  прочитался, удаляем хотя бы саму задачу. */
+  async discard(apiKey: string, externalJobId: string): Promise<void> {
+    let fileId: string | null | undefined;
+    try {
+      const status = await this.request<SonioxTranscription>(apiKey, `/transcriptions/${externalJobId}`);
+      fileId = status.file_id;
+    } catch {
+      fileId = null;
+    }
+    await this.cleanup(apiKey, externalJobId, fileId);
   }
 
   async fetchResult(apiKey: string, externalJobId: string): Promise<ParsedTranscript> {

@@ -118,6 +118,7 @@ export class SttService {
   async uploadAudio(
     audio: ReadableStream<Uint8Array>,
     languageCode?: string | null,
+    contentType?: string | null,
   ): Promise<{ audioUrl: string; provider: SttProviderName }> {
     // РЕВЬЮ 2026-09-02: здесь не было ни фоллбека, ни обработки
     // отсутствующего ключа — без SONIOX_API_KEY голосовая реплика
@@ -146,6 +147,7 @@ export class SttService {
         const audioUrl = await this.provider(name).uploadAudio(
           key,
           new Blob([new Uint8Array(buffered)]).stream(),
+          contentType,
         );
         if (failures.length > 0) {
           this.logger.warn(`Аудио принял запасной провайдер ${name}. Основной отказал: ${failures.join('; ')}`);
@@ -219,6 +221,24 @@ export class SttService {
   async fetchResult(storedId: string): Promise<ParsedTranscript> {
     const { provider, externalJobId } = parseSttJobId(storedId);
     return this.provider(provider).fetchResult(await this.apiKey(provider), externalJobId);
+  }
+
+  /**
+   * Вебхук пришёл на задачу, владельца которой у нас нет (разговор или
+   * реплика удалены до завершения). Результат не нужен — убираем у
+   * провайдера, чтобы запись не лежала у него весь retention. Провайдер
+   * известен только по форме вебхука (providerHint); без него — ничего.
+   * Best-effort: ошибок наружу нет, вебхук всё равно подтверждается.
+   */
+  async discardOrphan(providerHint: SttProviderName | null, externalJobId: string): Promise<void> {
+    if (!providerHint) return;
+    const provider = this.provider(providerHint);
+    if (!provider.discard) return;
+    try {
+      await provider.discard(await this.apiKey(providerHint), externalJobId);
+    } catch (err) {
+      this.logger.warn(`Уборка бесхозной задачи ${providerHint}:${externalJobId} не удалась: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**

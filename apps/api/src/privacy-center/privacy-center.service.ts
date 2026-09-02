@@ -24,10 +24,9 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
-import { SecretsService } from '../secrets/secrets.service';
-import { deleteBlob } from '../common/vercel-blob';
 import { createHash } from 'node:crypto';
-import { resolveBlobToken } from '../common/blob-token';
+import { ExternalArtifactsCleanupService } from '../common/external-artifacts/external-artifacts-cleanup.service';
+import { AIJobStatus, Prisma } from '@prisma/client';
 
 // 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
 // сам создаёт переменную под именем BLOB_READ_WRITE_TOKEN (без
@@ -38,7 +37,7 @@ export class PrivacyCenterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
-    private readonly secrets: SecretsService,
+    private readonly externalArtifacts: ExternalArtifactsCleanupService,
   ) {}
 
   /** Аудит моделей БД 2026-08-30, §2.4 — право на удаление (GDPR art. 17).
@@ -52,9 +51,21 @@ export class PrivacyCenterService {
    *    аудитом), включая профили кандидатов, созданные пользователем и
    *    расшаренные в команды (право на удаление сильнее удобства команды).
    *
+   * Аудит 2026-09-02 (продолжение) — два пробела в шаге 1:
+   * - транзитные аудиофайлы РАЗГОВОРОВ (Conversation.audioBlobPathname —
+   *   файл ждёт расшифровку/паралингвистику) не удалялись вовсе: шаг 1
+   *   знал только про доказательства ДТП. Каскад снимал строку, файл
+   *   оставался в хранилище без ссылки — навсегда (сторожевая ищет по
+   *   строкам, а строки уже нет);
+   * - задачи распознавания В ПОЛЁТЕ (разговор в TRANSCRIBING, голосовая
+   *   реплика PENDING/PROCESSING) оставались у провайдера на весь его
+   *   retention: вебхук пришёл бы на удалённую сущность. Теперь они
+   *   убираются у провайдера до каскада (best-effort).
+   *
    * Что НЕ удаляется отсюда и честно перечислено в ответе:
-   * - копии транскриптов у STT-провайдера (AssemblyAI хранит по своей
-   *   политике; у нас — только текст в БД, он удаляется);
+   * - у STT-провайдеров после чтения результата транскрипт удаляется
+   *   нами сразу (Пункт [stt-multi], аудит 2026-09-02); что остаётся —
+   *   пустая запись задачи со статусом и метаданные по их политике;
    * - записи AuditLog (юридически обязаны сохраняться, ПД в них нет —
    *   before/after фильтруются при записи);
    * - команды/группы без владельца остаются (без членов). */
@@ -65,20 +76,13 @@ export class PrivacyCenterService {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, telegramId: true } });
     if (!user) throw new NotFoundException('User not found');
 
-    // 1) внешние артефакты
-    const evidence = await this.prisma.dtpEvidenceItem.findMany({
-      where: { config: { project: { ownerId: userId } } },
-      select: { id: true, blobUrl: true },
-    });
-    let blobsDeleted = 0;
-    let blobsFailed = 0;
-    if (evidence.length > 0) {
-      const token = await resolveBlobToken(this.secrets).catch(() => null);
-      for (const e of evidence) {
-        if (!token) { blobsFailed++; continue; }
-        try { await deleteBlob(token, e.blobUrl); blobsDeleted++; } catch { blobsFailed++; }
-      }
-    }
+    // 1) внешние артефакты — доказательства ДТП, транзитные аудиофайлы
+    //    разговоров, задачи распознавания в полёте (см.
+    //    ExternalArtifactsCleanupService; тот же сервис — у удаления проекта)
+    const artifacts = await this.externalArtifacts.discardForUser(userId);
+    const evidenceCount = artifacts.evidenceBlobs;
+    const blobsDeleted = artifacts.evidenceDeleted;
+    const blobsFailed = artifacts.evidenceFailed;
 
     // 2) аудит до удаления — без telegramId в открытом виде
     const telegramIdHash = createHash('sha256').update(user.telegramId).digest('hex').slice(0, 16);
@@ -88,23 +92,68 @@ export class PrivacyCenterService {
       action: 'user.deleted',
       resource: 'User',
       resourceId: userId,
-      before: { telegramIdHash, ...counts, evidenceBlobs: evidence.length },
-      after: { blobsDeleted, blobsFailed },
+      before: { telegramIdHash, ...counts, evidenceBlobs: evidenceCount, conversationAudioBlobs: artifacts.conversationAudioBlobs, sttJobsInFlight: artifacts.sttJobsDiscarded },
+      after: { blobsDeleted, blobsFailed, sttJobsDiscarded: artifacts.sttJobsDiscarded },
     });
 
     // 3) каскад
     await this.prisma.user.delete({ where: { id: userId } });
 
+    // 4) следы AI-вызовов (аудит 2026-09-02, продолжение). AIJob.requestUserId
+    //    — не FK, каскад его не касается, и после удаления аккаунта в
+    //    ai_jobs оставались: сериализованный запрос неисполненных джоб
+    //    (pendingRequest — ТЕКСТ пользователя целиком), обрывки ответов
+    //    провайдера (partialResult) и все выводы AI (ai_inferences.output
+    //    — разбор ЕГО ситуации). Строки джоб остаются ради телеметрии
+    //    (счёт по taskType/статусу — там нет содержимого), содержимое —
+    //    нет. Порядок: ПОСЛЕ каскада — все ссылки на инференсы из сущностей
+    //    пользователя уже сняты каскадом, оставшиеся связи объявлены
+    //    SetNull/Cascade (проверено по схеме).
+    const aiTraces = await this.scrubAiTraces(userId);
+
     return {
       deleted: true,
-      removed: counts,
-      externalArtifacts: { evidenceBlobs: evidence.length, deleted: blobsDeleted, failed: blobsFailed },
+      removed: { ...counts, aiInferences: aiTraces.inferencesDeleted, aiJobsCancelled: aiTraces.jobsCancelled },
+      externalArtifacts: {
+        evidenceBlobs: evidenceCount,
+        deleted: blobsDeleted,
+        failed: blobsFailed,
+        conversationAudioBlobs: artifacts.conversationAudioBlobs,
+        sttJobsDiscarded: artifacts.sttJobsDiscarded,
+      },
       notRemovedHere: [
-        'Копии транскриптов у STT-провайдера (AssemblyAI) — по его политике хранения; у нас удалён текст.',
+        'Метаданные задач у STT-провайдеров (Soniox, AssemblyAI): текст транскриптов мы удаляем сразу после получения, задачи в полёте — при удалении аккаунта; остаются пустые записи задач по политике провайдера.',
+        'Обезличенные записи AI-вызовов (тип задачи, статус, длительность) — для телеметрии; тексты запросов и ответов удалены.',
+        'Фоновые AI-задачи, уже отправленные провайдеру (Gemini), у нас отменены и результат не сохраняется; у провайдера они завершаются по его политике.',
         'Журнал аудита — хранится без персональных данных.',
         'Команды рекрутеров и инвест-группы — остаются без вашего членства.',
       ],
     };
+  }
+
+  /** Содержимое AI-вызовов пользователя: выводы удаляются, неисполненные
+   * джобы отменяются (воркер их больше не возьмёт: submitQueued/pollRunning
+   * выбирают только QUEUED/RUNNING), сериализованные запросы и обрывки
+   * ответов обнуляются. Строки джоб остаются — телеметрия без содержимого. */
+  private async scrubAiTraces(userId: string) {
+    const jobs = await this.prisma.aIJob.findMany({ where: { requestUserId: userId }, select: { id: true } });
+    const jobIds = jobs.map((j) => j.id);
+    if (jobIds.length === 0) return { inferencesDeleted: 0, jobsCancelled: 0 };
+
+    const inferences = await this.prisma.aIInference.deleteMany({ where: { aiJobId: { in: jobIds } } });
+    const cancelled = await this.prisma.aIJob.updateMany({
+      where: { id: { in: jobIds }, status: { in: [AIJobStatus.QUEUED, AIJobStatus.RUNNING] } },
+      data: { status: AIJobStatus.CANCELLED, completedAt: new Date(), partialResult: 'аккаунт удалён — задача отменена' },
+    });
+    await this.prisma.aIJob.updateMany({
+      where: { id: { in: jobIds } },
+      data: { pendingRequest: Prisma.DbNull },
+    });
+    await this.prisma.aIJob.updateMany({
+      where: { id: { in: jobIds }, status: { not: AIJobStatus.CANCELLED } },
+      data: { partialResult: null },
+    });
+    return { inferencesDeleted: inferences.count, jobsCancelled: cancelled.count };
   }
 
   private async countUserData(userId: string) {
@@ -163,30 +212,79 @@ export class PrivacyCenterService {
    * описывал асинхронный джоб с генерацией файла, но это требует
    * файлового хранилища, которого нет в этом MVP-проходе. Осознанное
    * упрощение для объёма данных одного пользователя на старте продукта. */
+  /** GDPR art. 15 — право на доступ.
+   *
+   * Аудит 2026-09-02 (продолжение): кнопка в TMA называется «Скачать все
+   * мои данные», а выгрузка отдавала три коллекции (проекты с пятью
+   * связями, персоны с фактами, согласия) — без разговоров и
+   * транскриптов, без ответов квиза, спарринга, чатов по материалам,
+   * заметок, обязательств, профилей кандидатов. То есть большая часть
+   * того, что человек продиктовал продукту, в «все мои данные» не
+   * попадала. Теперь — основные коллекции с содержимым, и рядом честный
+   * список того, что НЕ входит и почему. Полнота проверяется тестом по
+   * ключам ответа: новая коллекция без записи здесь — падение теста, а
+   * не тихая неполнота. */
   async exportData(userId: string) {
-    const [projects, people, consents] = await Promise.all([
-      this.prisma.project.findMany({
-        where: { ownerId: userId },
-        include: {
-          objective: true,
-          boundaries: true,
-          arguments: true,
-          steelmanCases: true,
-          scripts: true,
-        },
-      }),
-      this.prisma.person.findMany({
-        where: { createdByUserId: userId },
-        include: { facts: true },
-      }),
-      this.prisma.consentRecord.findMany({ where: { userId } }),
-    ]);
+    const [projects, people, consents, intakeSessions, candidateProfiles, mediaReviewQueues, safeShareActions] =
+      await Promise.all([
+        this.prisma.project.findMany({
+          where: { ownerId: userId },
+          include: {
+            objective: true,
+            boundaries: true,
+            arguments: true,
+            steelmanCases: true,
+            scripts: true,
+            conversations: {
+              include: {
+                participants: true,
+                transcript: { include: { segments: { orderBy: { startMs: 'asc' } } } },
+              },
+            },
+            sparringSessions: { include: { messages: { orderBy: { createdAt: 'asc' } } } },
+            workingMaterials: {
+              include: {
+                versions: true,
+                chatSessions: { include: { messages: { orderBy: { createdAt: 'asc' } } } },
+              },
+            },
+            protectedNotes: true,
+            commitments: true,
+            agendas: true,
+            scheduledConversations: true,
+            motiveHypotheses: true,
+            predictions: true,
+            outcomeScenarios: true,
+            protocols: true,
+            closingMessages: true,
+          },
+        }),
+        this.prisma.person.findMany({
+          where: { createdByUserId: userId },
+          include: { facts: true },
+        }),
+        this.prisma.consentRecord.findMany({ where: { userId } }),
+        this.prisma.intakeSession.findMany({ where: { userId } }),
+        this.prisma.candidateProfile.findMany({ where: { ownerUserId: userId } }),
+        this.prisma.mediaReviewQueue.findMany({ where: { userId }, include: { items: true } }),
+        this.prisma.safeShareAction.findMany({ where: { userId } }),
+      ]);
 
     return {
       exportedAt: new Date().toISOString(),
       projects,
       people,
       consents,
+      intakeSessions,
+      candidateProfiles,
+      mediaReviewQueues,
+      safeShareActions,
+      notIncluded: [
+        'Аудиофайлы — не хранятся (транзит до расшифровки, затем удаляются).',
+        'Обезличенные записи AI-вызовов (тип задачи, статус, длительность) — технической телеметрии без вашего текста.',
+        'Журнал аудита — служебный, без персональных данных.',
+        'Данные других участников команд и групп — не ваши.',
+      ],
     };
   }
 }

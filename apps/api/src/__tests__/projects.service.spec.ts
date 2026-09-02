@@ -40,10 +40,15 @@ function createFakePrisma() {
   };
 }
 
+function fakeCleanup() {
+  const calls: string[] = [];
+  return { calls, discardForProject: async (id: string) => { calls.push(id); return {} as never; } } as any;
+}
+
 describe('ProjectsService', () => {
   it('create() создаёт проект с ownerId = userId', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     const project = await service.create('user-1', { question: 'Разговор о зарплате' });
     expect(project.ownerId).toBe('user-1');
     expect(project.question).toBe('Разговор о зарплате');
@@ -51,7 +56,7 @@ describe('ProjectsService', () => {
 
   it('list() возвращает только проекты владельца', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     await service.create('user-1', { question: 'Q1' });
     await service.create('user-1', { question: 'Q2' });
     await service.create('user-2', { question: 'Чужой проект' });
@@ -63,7 +68,7 @@ describe('ProjectsService', () => {
 
   it('list() ограничивает take потолком 100', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     await service.create('user-1', { question: 'Q1' });
     const result = await service.list('user-1', { take: 99999 });
     expect(result.take).toBe(100);
@@ -71,7 +76,7 @@ describe('ProjectsService', () => {
 
   it('getDetail() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     const project = await service.create('user-2', { question: 'Чужой' });
 
     await expect(service.getDetail('user-1', project.id)).rejects.toThrow(NotFoundException);
@@ -79,13 +84,13 @@ describe('ProjectsService', () => {
 
   it('getDetail() бросает NotFoundException для несуществующего id (не отличимо от "чужой")', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     await expect(service.getDetail('user-1', 'does-not-exist')).rejects.toThrow(NotFoundException);
   });
 
   it('update() не позволяет изменить чужой проект', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     const project = await service.create('user-2', { question: 'Чужой' });
 
     await expect(service.update('user-1', project.id, { question: 'Взлом' })).rejects.toThrow(
@@ -95,27 +100,33 @@ describe('ProjectsService', () => {
 
   it('update() успешно меняет свой проект', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const service = new ProjectsService(prisma as any, fakeCleanup());
     const project = await service.create('user-1', { question: 'Старый вопрос' });
 
     const updated = await service.update('user-1', project.id, { question: 'Новый вопрос' });
     expect(updated.question).toBe('Новый вопрос');
   });
 
-  it('remove() не позволяет удалить чужой проект', async () => {
+  it('remove() не позволяет удалить чужой проект — и не трогает внешние артефакты', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const cleanup = fakeCleanup();
+    const service = new ProjectsService(prisma as any, cleanup);
     const project = await service.create('user-2', { question: 'Чужой' });
 
     await expect(service.remove('user-1', project.id)).rejects.toThrow(NotFoundException);
+    expect(cleanup.calls).toEqual([]);
   });
 
-  it('remove() успешно удаляет свой проект', async () => {
+  it('remove() успешно удаляет свой проект, сначала убрав внешние артефакты (аудит 2026-09-02)', async () => {
     const prisma = createFakePrisma();
-    const service = new ProjectsService(prisma as any);
+    const cleanup = fakeCleanup();
+    const service = new ProjectsService(prisma as any, cleanup);
     const project = await service.create('user-1', { question: 'Мой проект' });
 
     await service.remove('user-1', project.id);
+    // Каскад БД не видит файлы в хранилище и задачи у STT-провайдера —
+    // «Удалить всё» без этого шага оставляло их навсегда.
+    expect(cleanup.calls).toEqual([project.id]);
     await expect(service.getDetail('user-1', project.id)).rejects.toThrow(NotFoundException);
   });
 });
