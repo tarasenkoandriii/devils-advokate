@@ -126,6 +126,28 @@ describe('ParalinguisticsService — персистенс и жизненный 
     expect(deps.prisma._evidence[0].aiInferenceId).toBe('inf-1');
     // Потребитель файла освобождён после персистенса.
     expect(released).toEqual([1]);
+    // Пункт [job-died-quietly] 2026-09-06: выдуманный сегмент
+    // по-прежнему ПРОПУСКАЕТСЯ (это верно — иначе полетели бы и
+    // валидные сигналы), но число больше не остаётся в логе сервера.
+    expect(deps.prisma._updates).toContainEqual({ paralinguisticsSkipped: 1, paralinguisticsError: null });
+  });
+
+  // ── Пункт [job-died-quietly] 2026-09-06 ──
+  it('КЛЮЧЕВОЙ ТЕСТ: удачный проход СНИМАЕТ число отброшенного и прошлую ошибку', async () => {
+    const deps = makeDeps([{ id: 'seg-1', participantId: 'part-1' }]);
+    deps.prisma._output = JSON.stringify({
+      segments: [{ segmentId: 'seg-1', signals: [{ type: 'EMOTIONAL_SHIFT' }] }],
+    });
+    const svc = new ParalinguisticsService(deps.prisma, deps.aiRouter);
+    svc.onModuleInit();
+    svc.wireRelease(async () => undefined);
+
+    await deps.aiRouter.handlers.get('conversation-paralinguistics')({ kind: 'completed', jobId: 'job-1', aiInferenceId: 'inf-1' });
+
+    // Ноль пишется тоже — иначе подпись «список неполон» пережила бы
+    // причину, по которой появилась, и висела бы после удачного
+    // повторного прохода.
+    expect(deps.prisma._updates).toContainEqual({ paralinguisticsSkipped: 0, paralinguisticsError: null });
   });
 
   it('failed-исход тоже освобождает потребителя файла — иначе blob висит до сторожевой', async () => {
@@ -142,6 +164,25 @@ describe('ParalinguisticsService — персистенс и жизненный 
 
     expect(deps.prisma._signals).toHaveLength(0);
     expect(released).toEqual([1]);
+    // Пункт [job-died-quietly] 2026-09-06: провал оставлял след ТОЛЬКО в
+    // логе сервера. Экран рисует блок «Подача» лишь при непустом списке
+    // отметок — значит при провале не появлялось ничего, и человек,
+    // включивший галочку, читал пустоту как «ничего не было».
+    expect(deps.prisma._updates).toContainEqual({ paralinguisticsError: 'budget_exceeded' });
+  });
+
+  it('[job-died-quietly]: причина провала обрезается, но не теряется — она от провайдера, не от нас', async () => {
+    const deps = makeDeps([{ id: 'seg-1', participantId: null }]);
+    const svc = new ParalinguisticsService(deps.prisma, deps.aiRouter);
+    svc.onModuleInit();
+    svc.wireRelease(async () => undefined);
+
+    const длинная = 'провайдер вернул ошибку: ' + 'ю'.repeat(3000);
+    await deps.aiRouter.handlers.get('conversation-paralinguistics')({ kind: 'failed', jobId: 'job-1', reason: длинная });
+
+    const written = deps.prisma._updates.find((u: any) => typeof u.paralinguisticsError === 'string');
+    expect(written.paralinguisticsError).toHaveLength(1000);
+    expect(written.paralinguisticsError.startsWith('провайдер вернул ошибку:')).toBe(true);
   });
 
   it('enqueueForConversation: сегменты уходят в текстовую часть промпта, медиа-блок ПЕРВЫМ с mime-типом из БД', async () => {

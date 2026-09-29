@@ -1,3 +1,4 @@
+import { resetMigrationLagForTests } from '../common/enum-migration-lag';
 import { InterviewPoolRelevanceService } from '../interview-pool/interview-pool-relevance.service';
 
 function createFakePrisma() {
@@ -93,8 +94,15 @@ function createFakePrisma() {
     },
     poolRelevanceSnapshot: {
       create: async ({ data }: any) => {
-        const snap = { id: nextId(), createdAt: new Date(), ...data };
+        const snap = { id: nextId(), createdAt: new Date(), notAssessed: null, ...data };
         snapshots.push(snap);
+        return snap;
+      },
+      // Сверка «пустота, неотличимая от полноты» 2026-09-04: снимок
+      // дописывается списком тех, кого сверить не удалось.
+      update: async ({ where, data }: any) => {
+        const snap = snapshots.find((x: any) => x.id === where.id);
+        if (snap) Object.assign(snap, data);
         return snap;
       },
       findFirst: async ({ where }: any) => {
@@ -291,8 +299,93 @@ describe('InterviewPoolRelevanceService', () => {
 
     const snapshot = await service.regenerate('u1', project.id);
 
+    // КЛЮЧЕВОЙ ТЕСТ (сверка «пустота, неотличимая от полноты» 2026-09-04):
+    // раньше провалившийся кандидат просто ИСЧЕЗАЛ из снимка. Рекрутер
+    // видел одного из двух и не мог отличить «сравнили, совпадений нет»
+    // от «не сравнивали вовсе» — а по этому снимку он решает, с кем
+    // продолжать разговор.
+    const notAssessed = (snapshot as any).notAssessed as Array<{ displayName: string; reason: string }> | null;
+    if (!notAssessed || notAssessed.length !== 1) {
+      throw new Error(`FAIL: непроверенный кандидат не назван в снимке: ${JSON.stringify(notAssessed)}`);
+    }
+    if (!/сбой AI/i.test(notAssessed[0].reason)) {
+      throw new Error(`FAIL: причина пропуска не названа человеческим текстом: ${notAssessed[0].reason}`);
+    }
+    if (!/не результат сравнения/i.test(notAssessed[0].reason)) {
+      throw new Error('FAIL: не сказано главное — что это НЕ результат сравнения');
+    }
+
     // Один кандидат провалився (не потрапив у знімок), інший — успішно
     expect(snapshot!.entries.length).toBe(1);
+  });
+
+  // ── Пункт [lag-told-only-the-log] 2026-09-24 ──
+  //
+  // Терпимость к неприменённой миграции сделана по верному правилу —
+  // «пробел конфигурации не должен выглядеть как отказ функции», — но
+  // предупреждение уходило В ЛОГ СЕРВЕРА и никуда больше. А последствие
+  // названо в самом предупреждении: «пропуски снова невидимы». Экран
+  // рисует блок «Не вошли в этот снимок» только при непустом списке,
+  // значит при отставании не рисует ничего, и снимок выглядит ПОЛНЫМ.
+  it('КЛЮЧЕВОЙ ТЕСТ [lag-told-only-the-log]: неприменённая миграция доходит до читателя снимка, а не только до лога', async () => {
+    resetMigrationLagForTests();
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id, jobTitle: 'Backend Engineer' });
+    prisma._seedQuestion({ configId: config.id, text: 'Q1', isRequired: true, orderIndex: 0 });
+    const candidate = prisma._seedCandidate({ ownerUserId: 'u1', displayName: 'Кандидат' });
+    const status = prisma._seedStatus({ projectId: project.id, candidateProfileId: candidate.id });
+    prisma._seedStageProgress({ statusId: status.id, conversationId: 'conv-1', completedAt: new Date() });
+    prisma._seedSegment({ id: 'seg-1', conversationId: 'conv-1', text: 'Відповідь' });
+
+    // База без колонки: ровно то, что происходит у владельца, пока
+    // миграция не применена.
+    prisma.poolRelevanceSnapshot.update = async () => {
+      throw Object.assign(new Error('The column `notAssessed` does not exist'), { code: 'P2022' });
+    };
+    // AI падает — значит кандидат в снимок не попадёт, и список
+    // непроверенных был бы единственным следом пропуска.
+    const aiRouter = { execute: async () => { throw new Error('провайдер недоступен'); } };
+    const service = makeService(prisma, aiRouter);
+
+    const snapshot: any = await service.regenerate('u1', project.id);
+
+    // Список действительно не сохранился — иначе тест проверял бы не то.
+    expect(snapshot.notAssessed ?? null).toBeNull();
+    // И именно поэтому отставание обязано дойти до читателя.
+    //
+    // `toBeTruthy`, а НЕ `not.toBeNull`: у отсутствующего поля значение
+    // `undefined`, которое `not.toBeNull()` проходит насквозь. Первая
+    // редакция этих двух строк была написана именно так, и мутация
+    // «убрать пометку из getLatest» прошла мимо — проверка выглядела
+    // существующей, ничего не проверяя.
+    expect(snapshot.pendingMigration).toBeTruthy();
+    expect(snapshot.pendingMigration.migration).toContain('pool_snapshot_not_assessed');
+    expect(snapshot.pendingMigration.consequence).toMatch(/пропуски/i);
+
+    // И на повторном чтении — тоже: последний снимок читают чаще, чем
+    // только что созданный.
+    const latest: any = await service.getLatest('u1', project.id);
+    expect(latest.pendingMigration).toBeTruthy();
+    expect(latest.pendingMigration.migration).toContain('pool_snapshot_not_assessed');
+  });
+
+  it('[lag-told-only-the-log]: миграция применена — пометки нет, иначе её перестанут читать', async () => {
+    resetMigrationLagForTests();
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id, jobTitle: 'Backend Engineer' });
+    prisma._seedQuestion({ configId: config.id, text: 'Q1', isRequired: true, orderIndex: 0 });
+    const candidate = prisma._seedCandidate({ ownerUserId: 'u1', displayName: 'Кандидат' });
+    const status = prisma._seedStatus({ projectId: project.id, candidateProfileId: candidate.id });
+    prisma._seedStageProgress({ statusId: status.id, conversationId: 'conv-1', completedAt: new Date() });
+    prisma._seedSegment({ id: 'seg-1', conversationId: 'conv-1', text: 'Відповідь' });
+
+    const aiRouter = { execute: async () => ({ text: JSON.stringify({ criteriaBreakdown: [], attentionPoints: [], followUpRequests: [] }) }) };
+    const service = makeService(prisma, aiRouter);
+    const snapshot: any = await service.regenerate('u1', project.id);
+
+    expect(snapshot.pendingMigration).toBeNull();
   });
 
   it('кандидат без жодної завершеної співбесіди (немає conversationId у stageProgress) пропускається, не викликає AI даремно', async () => {

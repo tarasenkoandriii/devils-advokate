@@ -37,7 +37,7 @@ export default function DomainProjectsPage() {
       .finally(() => setLoading(false));
   }, [manifest]);
 
-  if (!manifest) return <main className="page"><p className="generation-error">Неизвестный сценарий.</p><Link href="/domains">← Сценарии</Link></main>;
+  if (!manifest) return <main className="page"><p role="alert" className="generation-error">Неизвестный сценарий.</p><Link href="/domains">← Сценарии</Link></main>;
 
   const fields = [{ name: 'question', label: 'Опишите ситуацию одной фразой', type: 'textarea' as const, required: true }, ...(manifest.createProjectFields ?? [])];
 
@@ -69,13 +69,13 @@ export default function DomainProjectsPage() {
         <button type="button" className="primary" onClick={() => setCreating(true)}>+ Новый проект · {manifest.title}</button>
       )}
       {loading && <p>Загрузка…</p>}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {!loading && items.length === 0 && <p className="card-section__empty">Пока нет проектов в этом сценарии.</p>}
       <ul className="project-list">
         {items.map((p) => (
           <li key={p.id}><Link href={`/domains/${manifest.id}/${p.id}`}>
             <span className="project-list__question">{p.question}</span>
-            <span className="project-list__meta">{new Date(p.updatedAt).toLocaleDateString()}</span>
+            <span className="project-list__meta">{new Date(p.updatedAt).toLocaleDateString('ru-RU')}</span>
           </Link></li>
         ))}
       </ul>

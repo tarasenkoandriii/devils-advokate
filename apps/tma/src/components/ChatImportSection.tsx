@@ -101,7 +101,7 @@ export function ChatImportSection({ projectId, onImported }: ChatImportSectionPr
             Файл экспорта (.txt / .json / .eml)
             <input type="file" accept=".txt,.json,.eml" onChange={handleFileSelected} />
           </label>
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           {success && <p className="conversations-section__hint">✓ Переписка импортирована.</p>}
         </div>
       )}
@@ -121,7 +121,7 @@ export function ChatImportSection({ projectId, onImported }: ChatImportSectionPr
               ))}
             </select>
           </label>
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <div className="conversations-section__add-actions">
             <button type="button" onClick={handleConfirmImport} disabled={importing}>
               {importing ? 'Импортируем…' : 'Подтвердить импорт'}

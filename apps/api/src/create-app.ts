@@ -10,6 +10,7 @@
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { validationException } from './common/validation-message';
 import { NestExpressApplication, ExpressAdapter } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/api-exception.filter';
@@ -46,7 +47,16 @@ export async function createNestApp(options: CreateAppOptions = {}): Promise<Nes
   //    точечно, начиная с высокорисковых (лимиты длины текста в
   //    AI/TTS, URL, публичные POST) — недекорированные DTO проходят
   //    как раньше.
-  app.useGlobalPipes(new StringQueryGuardPipe(), new ValidationPipe({ transform: true }));
+  //    Пункт [refusal-spoke-english] 2026-09-24: `exceptionFactory` —
+  //    потому что сообщения по умолчанию у class-validator английские и
+  //    называют поля именами из кода. Это самый частый отказ API, и он
+  //    не попадал ни под одно правило о языке: правила смотрели на
+  //    строковые литералы внутри `new …Exception(…)`, а здесь литерала
+  //    нет вовсе.
+  app.useGlobalPipes(
+    new StringQueryGuardPipe(),
+    new ValidationPipe({ transform: true, exceptionFactory: validationException }),
+  );
 
   // CORS — параметризован через переменную окружения, не открыт всем
   // подряд. TMA — веб-страница внутри Telegram WebView на собственном

@@ -63,7 +63,7 @@ export class YouTubeSearchService {
     });
     if (count >= DAILY_LIMIT_PER_USER) {
       throw new ForbiddenException(
-        `Досягнуто денний ліміт пошуку YouTube (${DAILY_LIMIT_PER_USER}/добу) — спільна квота проєкту обмежена (§2.1 ТЗ), спробуйте завтра`,
+        `Достигнут суточный лимит поиска YouTube (${DAILY_LIMIT_PER_USER}/сутки) — общая квота проекта ограничена (§2.1 ТЗ), попробуйте завтра`,
       );
     }
   }
@@ -84,7 +84,7 @@ export class YouTubeSearchService {
     try {
       searchResponse = await fetchWithTimeout(searchUrl.toString());
     } catch {
-      throw new BadGatewayException('YouTube Data API недоступний — спробуйте пізніше');
+      throw new BadGatewayException('YouTube Data API недоступен — попробуйте позже');
     }
 
     // Записуємо факт спроби пошуку ДО перевірки успішності відповіді —
@@ -95,7 +95,7 @@ export class YouTubeSearchService {
 
     if (!searchResponse.ok) {
       throw new BadGatewayException(
-        `YouTube Data API повернув помилку (${searchResponse.status}) — можливо вичерпано квоту проєкту`,
+        `YouTube Data API вернул ошибку (${searchResponse.status}) — возможно, исчерпана квота проекта`,
       );
     }
 

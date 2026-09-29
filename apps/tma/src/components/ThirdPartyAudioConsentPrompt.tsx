@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { grantConsent, hasConsent, listConsents } from '../lib/features';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 // Аудит 2026-09-02 (STT): текст обновлён — провайдеров стало два, и
 // согласие, называющее только AssemblyAI, при ru/uk-сессии описывало не
@@ -35,8 +36,12 @@ export function ThirdPartyAudioConsentPrompt({ source, onGranted, onCancel }: Th
       await grantConsent({ consentType: 'THIRD_PARTY_AUDIO_RECORDING', version: CONSENT_VERSION, source });
       haptic('success');
       onGranted();
-    } catch {
-      haptic('error');
+    } catch (err) {
+      // Пункт [one-buzz-was-the-whole-answer] 2026-09-24. Здесь
+      // стояла одна вибрация. Экран согласия — худшее место для
+      // такого молчания: человек нажал «согласен», запрос упал, и
+      // он уходит, не зная, записано согласие или нет.
+      reportFailure(err, 'Не удалось записать согласие на запись третьих лиц');
     } finally {
       setGranting(false);
     }

@@ -30,24 +30,38 @@ describe('LegalDisclaimerService', () => {
     expect(result!.references.some((r) => r.actName.includes('MiFID'))).toBe(true);
   });
 
-  it('регресійний тест (за прямим запитом користувача): country="UA", mode=INVESTMENT — null, дисклеймер структурно приховано, не показано порожній стан', async () => {
+  // Пункт [silent-jurisdiction] 2026-09-06. Здесь стояло
+  // `expect(result).toBeNull()` с пометкой «за прямим запитом
+  // користувача: дисклеймер структурно приховано». Решение изменено
+  // ТЕМ ЖЕ ВЛАДЕЛЬЦЕМ после измерения: из 36 пар «режим × юрисдикция»
+  // были собраны шесть, то есть блок о законе исчезал почти всегда —
+  // включая ДТП и семейное право в Украине. Тест переписан вслед за
+  // решением, а не код подогнан под старый тест.
+  // Второй заход [silent-jurisdiction]: UA/INVESTMENT собран, поэтому
+  // случай «пробел назван» проверяется на бакете OTHER — он не собран
+  // намеренно (честной ссылки «на все прочие страны» не существует).
+  it('bucket=OTHER, mode=INVESTMENT — пробел НАЗВАН, а не спрятан (прежнее поведение: null)', async () => {
     const prisma = createFakePrisma();
-    prisma._seedUser({ id: 'u1', country: 'UA' });
+    prisma._seedUser({ id: 'u1', country: 'BR' });
     const service = makeService(prisma);
 
     const result = await service.getDisclaimer('u1', 'INVESTMENT' as any);
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result.coverage).toBe('not-researched');
+    expect(result.bucket).toBe('OTHER');
+    expect(result.references).toEqual([]);
   });
 
-  it('country=null, mode=INTERVIEW_POOL (бакет OTHER, для якого нічого не досліджено) — null, запит НЕ падає з помилкою', async () => {
+  it('country=null, mode=INTERVIEW_POOL (бакет OTHER) — пробел назван, запит НЕ падає з помилкою', async () => {
     const prisma = createFakePrisma();
     prisma._seedUser({ id: 'u1', country: null });
     const service = makeService(prisma);
 
     const result = await service.getDisclaimer('u1', 'INTERVIEW_POOL' as any);
 
-    expect(result).toBeNull();
+    expect(result.coverage).toBe('not-researched');
+    expect(result.bucket).toBe('OTHER');
   });
 
   it('регресійний тест (аудит юрисдикції 2026-08-30): country=НАЗВА (не код) без countryCode — той самий баг, що зробив дисклеймер завжди null для ВСІХ користувачів до фіксу', async () => {
@@ -86,15 +100,15 @@ describe('LegalDisclaimerService', () => {
     expect(result!.bucket).toBe('US');
   });
 
-  it('нічого немає взагалі (ні country, ні countryCode, ні ipCountryCode) — OTHER, null, без падіння', async () => {
+  it('нічого немає взагалі (ні country, ні countryCode, ні ipCountryCode) — OTHER, пробел назван, без падіння', async () => {
     const prisma = createFakePrisma();
     prisma._seedUser({ id: 'u1', country: null, countryCode: null, ipCountryCode: null });
     const service = makeService(prisma);
 
-    await expect(service.getDisclaimer('u1', 'INVESTMENT' as any)).resolves.toBeNull();
+    await expect(service.getDisclaimer('u1', 'INVESTMENT' as any)).resolves.toMatchObject({ bucket: 'OTHER', coverage: 'not-researched' });
   });
 
-  it('регресійний тест: mode=MAJOR_PURCHASE — null для КОЖНОГО бакета без винятку', async () => {
+  it('mode=MAJOR_PURCHASE — US/EU/UA зібрано, OTHER чесно названий несобранным', async () => {
     const prisma = createFakePrisma();
     prisma._seedUser({ id: 'u1', country: 'US' });
     prisma._seedUser({ id: 'u2', country: 'DE' });
@@ -109,7 +123,12 @@ describe('LegalDisclaimerService', () => {
       service.getDisclaimer('u4', 'MAJOR_PURCHASE' as any),
     ]);
 
-    expect(results.every((r) => r === null)).toBe(true);
+    // Пункт [silent-jurisdiction] 2026-09-06: UA собран в этой сверке,
+    // остальные три бакета честно названы несобранными — и это видно
+    // на экране, а не только здесь.
+    // US, EU и UA собраны во втором заходе; OTHER не собран намеренно.
+    expect(results.map((r) => r.coverage)).toEqual(['seeded', 'seeded', 'seeded', 'not-researched']);
+    expect(results[2].references.length).toBeGreaterThan(0);
   });
 
   it('country="US", mode=INTERVIEW_POOL — NYC LL144 присутній, з явним застереженням про лише резидентів NYC', async () => {

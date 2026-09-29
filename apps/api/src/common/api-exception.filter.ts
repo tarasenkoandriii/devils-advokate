@@ -16,6 +16,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { enumMigrations, latestManualMigration, MANUAL_MIGRATIONS } from '../admin-db-state/manual-migrations';
 import { ApiErrorResponse } from './api-response.interceptor';
 import { isUnknownEnumValueError } from './enum-migration-lag';
 
@@ -60,7 +61,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     const body: ApiErrorResponse = {
       success: false,
-      error: { message },
+      error: { message, ...(infra ? {} : this.extractDetails(exception)) },
     };
 
     response.status(status).json(body);
@@ -83,7 +84,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
         message:
           'Схема базы данных не накатана или устарела: в базе нет таблиц/колонок, которые описаны в schema.prisma. ' +
           'Выполните `npx prisma db push` против этой базы (через DIRECT_URL, порт 5432 — DDL не проходит через pgbouncer), ' +
-          'затем `npm run prisma:seed`. Подробности — VERCEL.md, раздел «Первый деплой базы данных».',
+          'затем `npm run prisma:seed`. ' +
+          // Пункт [latest-migration-was-from-memory] 2026-09-24: число и
+          // последняя выводятся из реестра, а не помнятся. Что именно не
+          // применено — показывает вкладка «БД» в админке: там у каждой
+          // миграции своя проба по схеме.
+          `Кроме того, вручную применяются ${MANUAL_MIGRATIONS.length} миграций (последняя — ${latestManualMigration()}); ` +
+          'какие из них не прошли на этом инстансе — видно на вкладке «БД» в админке. ' +
+          'Подробности — VERCEL.md, раздел «Первый деплой базы данных».',
       };
     }
 
@@ -93,10 +101,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
     if (isUnknownEnumValueError(exception)) {
       return {
         status: HttpStatus.SERVICE_UNAVAILABLE,
+        // Пункт [latest-migration-was-from-memory] 2026-09-24: здесь
+        // стоял ОДИН файл, названный по памяти, — и притом не тот. Файлов
+        // с `ALTER TYPE … ADD VALUE` два, и ошибка от первого отправляла
+        // оператора чинить второй. Теперь называются все, из реестра.
         message:
-          'База данных не знает нового значения перечисления: не применена ручная миграция ALTER TYPE ' +
-          '(см. apps/api/prisma/manual-migrations/, последняя — voice_reply_processing_2026_09_02.sql). ' +
-          'Выполните её отдельным вызовом по DIRECT_URL, без транзакции. Это конфигурация, а не сбой функции.',
+          'База данных не знает нового значения перечисления: не применена ручная миграция ALTER TYPE. ' +
+          `Кандидаты (apps/api/prisma/manual-migrations/): ${enumMigrations().map((m) => m.file).join(', ')}. ` +
+          'Выполните нужную отдельным вызовом по DIRECT_URL, без транзакции. Это конфигурация, а не сбой функции.',
       };
     }
 
@@ -113,6 +125,22 @@ export class ApiExceptionFilter implements ExceptionFilter {
     }
 
     return null;
+  }
+
+  /** code и прочие скалярные поля объекта HttpException — как есть
+   * (Пункт [job-domain-v2]: `{ code: 'COMPANY_REQUIRED' }`,
+   * `{ existingSheetId }`). message/statusCode/error не дублируются. */
+  private extractDetails(exception: unknown): { code?: string; details?: Record<string, unknown> } {
+    if (!(exception instanceof HttpException)) return {};
+    const response = exception.getResponse();
+    if (typeof response !== 'object' || response === null) return {};
+    const out: { code?: string; details?: Record<string, unknown> } = {};
+    for (const [k, v] of Object.entries(response as Record<string, unknown>)) {
+      if (k === 'message' || k === 'statusCode' || k === 'error') continue;
+      if (k === 'code' && typeof v === 'string') out.code = v;
+      else if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) (out.details ??= {})[k] = v;
+    }
+    return out;
   }
 
   private extractMessage(exception: HttpException): string {

@@ -4,13 +4,21 @@ import { BadGatewayException, BadRequestException } from '@nestjs/common';
 function createFakePrisma() {
   const projects = new Map<string, any>();
   const topics: any[] = [];
+  const projectPeople: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
   return {
     _seedProject(p: any) { projects.set(p.id, p); },
+    _seedProjectPerson(pp: any) { projectPeople.push(pp); },
     _seedTopic(t: any) { topics.push({ id: t.id ?? nextId(), firstDetectedAt: new Date(), lastDetectedAt: new Date(), ...t }); },
     _getTopics() { return topics; },
+
+    // Пункт [project-log-v2] — проверка выбранного пользователем собеседника.
+    projectPerson: {
+      findFirst: async ({ where }: any) =>
+        projectPeople.find((pp) => pp.projectId === where.projectId && pp.personId === where.personId) ?? null,
+    },
 
     project: {
       findFirst: async ({ where }: any) => {
@@ -168,6 +176,62 @@ async function run() {
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
     const svc = new ProbingDetectorService(prisma as any, failingRouter as any);
     await assertThrowsAsync(() => svc.analyze(USER_ID, PROJECT_ID, 'x'), BadGatewayException, 'analyze() при недоступности провайдера');
+  });
+
+  // ─── Пункт [project-log-v2]: собеседник у темы прощупывания ───
+  // Нужен логу проекта (§3.39): запись «возвращается к теме X» обязана
+  // называть человека. Выбирает его пользователь — детектор по голосу не
+  // угадывает, кто говорит.
+
+  test('КЛЮЧЕВОЙ ТЕСТ: собеседника указывает пользователь, и чужого человека проекту не приписать', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: 'person-1' });
+    const fakeRouter = new FakeAIRouterService();
+    fakeRouter.responseText = '[{"topicDescription":"бюджет на переезд"}]';
+    const svc = new ProbingDetectorService(prisma as any, fakeRouter as any);
+
+    await svc.analyze(USER_ID, PROJECT_ID, 'x', undefined, 'person-1');
+    assertEqual(prisma._getTopics()[0].personId, 'person-1', 'тема названа выбранным человеком');
+
+    const { NotFoundException } = await import('@nestjs/common');
+    await assertThrowsAsync(
+      () => svc.analyze(USER_ID, PROJECT_ID, 'x', undefined, 'person-из-другого-проекта'),
+      NotFoundException,
+      'человек не из этого проекта',
+    );
+  });
+
+  test('тему без собеседника можно доименовать позже, но уже названного человека новый вызов не подменяет', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: 'person-1' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: 'person-2' });
+    prisma._seedTopic({ projectId: PROJECT_ID, topicDescription: 'бюджет', repeatCount: 1, confidence: 0.3, personId: null });
+    const existingId = prisma._getTopics()[0].id;
+    const fakeRouter = new FakeAIRouterService();
+    fakeRouter.responseText = `[{"matchedTopicId":"${existingId}","topicDescription":"бюджет"}]`;
+    const svc = new ProbingDetectorService(prisma as any, fakeRouter as any);
+
+    await svc.analyze(USER_ID, PROJECT_ID, 'x', undefined, 'person-1');
+    assertEqual(prisma._getTopics()[0].personId, 'person-1', 'тема, начатая без собеседника, доименована');
+
+    await svc.analyze(USER_ID, PROJECT_ID, 'x', undefined, 'person-2');
+    assertEqual(prisma._getTopics()[0].personId, 'person-1', 'вторая сессия НЕ переписывает авторство темы на другого человека');
+  });
+
+  test('без выбранного собеседника детектор работает как раньше — предупреждения есть, имени нет', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedTopic({ projectId: PROJECT_ID, topicDescription: 'бюджет', repeatCount: 1, confidence: 0.3 });
+    const existingId = prisma._getTopics()[0].id;
+    const fakeRouter = new FakeAIRouterService();
+    fakeRouter.responseText = `[{"matchedTopicId":"${existingId}","topicDescription":"бюджет"}]`;
+    const svc = new ProbingDetectorService(prisma as any, fakeRouter as any);
+
+    const warnings = await svc.analyze(USER_ID, PROJECT_ID, 'x');
+    assertEqual(warnings.length, 1, 'предупреждение на экране сопровождения не зависит от выбора собеседника');
+    assertEqual(prisma._getTopics()[0].personId ?? null, null, 'имя не выдумано — тема просто не попадёт в лог проекта');
   });
 
   test('list() возвращает отслеживаемые темы проекта, самые недавние первыми', async () => {

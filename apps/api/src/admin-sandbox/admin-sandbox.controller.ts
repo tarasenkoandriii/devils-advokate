@@ -9,6 +9,8 @@ import { AdminSessionGuard } from '../admin-auth/admin-session.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { AdminSandboxService, SandboxAnalysisKind } from './admin-sandbox.service';
+import { AdminSandboxHiringService } from './admin-sandbox-hiring.service';
+import { EvidenceKind, TermsSide } from '@prisma/client';
 
 class YouTubeSearchDto {
   query!: string;
@@ -98,7 +100,10 @@ class HealthConfigDto {
 @UseGuards(AdminSessionGuard)
 @UseInterceptors(ApiResponseInterceptor)
 export class AdminSandboxController {
-  constructor(private readonly sandbox: AdminSandboxService) {}
+  constructor(
+    private readonly sandbox: AdminSandboxService,
+    private readonly hiring: AdminSandboxHiringService,
+  ) {}
 
   @Get('status')
   async status(@CurrentUser() userId: string) {
@@ -575,6 +580,86 @@ export class AdminSandboxController {
   @Get('job-search/statistics/:projectId')
   async jsStatistics(@CurrentUser() userId: string, @Param('projectId') projectId: string) {
     return this.sandbox.jsStatistics(userId, projectId);
+  }
+
+  // ── Пункт [job-domain-v2] — найм v2: лист условий соискателя (продолжение
+  // job-search) и цепочка работодателя. Логика — AdminSandboxHiringService. ──
+
+  @Post('terms-sheets/open-for-vacancy')
+  async tsOpen(@CurrentUser() userId: string, @Body() dto: { vacancyId: string }) {
+    return this.hiring.openForVacancy(userId, dto.vacancyId);
+  }
+
+  @Get('terms-sheets/:sheetId')
+  async tsSummary(@CurrentUser() userId: string, @Param('sheetId') sheetId: string) {
+    return this.hiring.summary(userId, sheetId);
+  }
+
+  @Post('terms-sheets/confirm-all')
+  async tsConfirmAll(@CurrentUser() userId: string, @Body() dto: { sheetId: string }) {
+    return this.hiring.confirmAllDrafts(userId, dto.sheetId);
+  }
+
+  @Post('terms-sheets/propose')
+  async tsPropose(@CurrentUser() userId: string, @Body() dto: { sheetId: string; text: string; evidenceKind?: string; bySide?: string }) {
+    const kind = (Object.values(EvidenceKind) as string[]).includes(dto.evidenceKind ?? '') ? (dto.evidenceKind as EvidenceKind) : EvidenceKind.OFFER_TEXT;
+    const side = dto.bySide === 'CANDIDATE' ? TermsSide.CANDIDATE : TermsSide.EMPLOYER;
+    return this.hiring.propose(userId, dto.sheetId, dto.text, kind, side);
+  }
+
+  @Post('terms-sheets/cv-variant')
+  async tsCvVariant(@CurrentUser() userId: string, @Body() dto: { sheetId: string }) {
+    return this.hiring.cvVariant(userId, dto.sheetId);
+  }
+
+  @Post('terms-sheets/offer-draft')
+  async tsOfferDraft(@CurrentUser() userId: string, @Body() dto: { sheetId: string }) {
+    return this.hiring.offerDraft(userId, dto.sheetId);
+  }
+
+  @Post('employer-hiring/project')
+  async ehProject(@CurrentUser() userId: string, @Body() dto: { question: string }) {
+    return this.hiring.ehCreateProject(userId, dto.question);
+  }
+
+  @Post('employer-hiring/company')
+  async ehCompany(@CurrentUser() userId: string, @Body() dto: { projectId: string; legalName?: string | null; registryCode?: string | null; domain?: string | null }) {
+    return this.hiring.ehIdentifyCompany(userId, dto.projectId, { legalName: dto.legalName, registryCode: dto.registryCode, domain: dto.domain });
+  }
+
+  @Post('employer-hiring/brief')
+  async ehBrief(@CurrentUser() userId: string, @Body() dto: { projectId: string; rawText: string }) {
+    return this.hiring.ehBrief(userId, dto.projectId, dto.rawText);
+  }
+
+  @Post('employer-hiring/config')
+  async ehConfig(@CurrentUser() userId: string, @Body() dto: { projectId: string; jobTitle: string; extendedDescription?: string; salaryRange?: string | null; officeLocation?: string | null }) {
+    return this.hiring.ehConfig(userId, dto.projectId, dto);
+  }
+
+  @Post('employer-hiring/questionnaire')
+  async ehQuestionnaire(@CurrentUser() userId: string, @Body() dto: { projectId: string }) {
+    return this.hiring.ehQuestionnaire(userId, dto.projectId);
+  }
+
+  @Post('employer-hiring/posting')
+  async ehPosting(@CurrentUser() userId: string, @Body() dto: { projectId: string }) {
+    return this.hiring.ehPosting(userId, dto.projectId);
+  }
+
+  @Post('employer-hiring/candidate')
+  async ehCandidate(@CurrentUser() userId: string, @Body() dto: { projectId: string; displayName: string; resumeText?: string }) {
+    return this.hiring.ehCandidate(userId, dto.projectId, dto.displayName, dto.resumeText);
+  }
+
+  @Get('employer-hiring/matrix/:projectId')
+  async ehMatrix(@CurrentUser() userId: string, @Param('projectId') projectId: string) {
+    return this.hiring.ehMatrix(userId, projectId);
+  }
+
+  @Get('employer-hiring/state/:projectId')
+  async ehState(@CurrentUser() userId: string, @Param('projectId') projectId: string) {
+    return this.hiring.ehState(userId, projectId);
   }
 
   // ── Пункт [sandbox-domain-conversations] 2026-09-01 — b-подэтапы:

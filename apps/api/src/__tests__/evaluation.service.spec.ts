@@ -101,6 +101,18 @@ function createFakePrisma() {
         metrics.set(m.name, m);
         return m;
       },
+      // Пункт [check-then-create-2] 2026-09-27: метрика заводится
+      // `upsert`-ом — пара «прочитать и вставить» падала бы на гонке двух
+      // прогонов и роняла ВЕСЬ прогон из-за метрики, которая к этому
+      // моменту уже есть. Фейк повторяет ровно это поведение, включая
+      // возврат существующей записи.
+      upsert: async ({ where, create }: any) => {
+        const found = metrics.get(where.name);
+        if (found) return found;
+        const m = { id: nextId(), ...create };
+        metrics.set(m.name, m);
+        return m;
+      },
     },
     releaseGate: {
       create: async ({ data }: any) => {

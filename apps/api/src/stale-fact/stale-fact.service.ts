@@ -20,12 +20,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { STALE_THRESHOLD_DAYS } from '../evidence-gap/evidence-gap.service';
 import { FactStatus } from '@prisma/client';
+import { FactSourceType } from '@prisma/client';
 
 export interface StaleFactWarning {
   id: string;
   personId: string;
   personDisplayName: string | null;
   content: string;
+  sourceType: FactSourceType;
   lastVerifiedAt: Date | null;
   ageInDays: number;
 }
@@ -71,7 +73,7 @@ export class StaleFactService {
   }
 
   private filterAndFormatStale(
-    facts: Array<{ id: string; personId: string; content: string; lastVerifiedAt: Date | null; createdAt: Date }>,
+    facts: Array<{ id: string; personId: string; content: string; sourceType: FactSourceType; lastVerifiedAt: Date | null; createdAt: Date }>,
     personLinks: Array<{ personId: string; person: { displayName: string | null } }>,
   ): StaleFactWarning[] {
     const nameByPersonId = new Map<string, string | null>(
@@ -88,6 +90,11 @@ export class StaleFactService {
           personId: f.personId,
           personDisplayName: nameByPersonId.get(f.personId) ?? null,
           content: f.content,
+          // Пункт [source-collapse] 2026-09-05: «давно не подтверждался»
+          // значит разное для записи со слов и для догадки — вторая не
+          // подтверждалась никогда, и звать человека перепроверять её
+          // как факт значит называть её фактом.
+          sourceType: f.sourceType,
           lastVerifiedAt: f.lastVerifiedAt,
           ageInDays,
         };

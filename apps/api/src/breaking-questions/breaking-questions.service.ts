@@ -15,6 +15,7 @@
 // данных, тот же принцип, что ClosingMessageService/CompromiseSheetService.
 
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
+import { MAX_LIVE_WINDOW_CHARS, assertWithinLimit } from '../ai-router/prompt-limits';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -57,6 +58,10 @@ export class BreakingQuestionsService {
     if (!transcriptWindow.trim()) {
       throw new BadRequestException('transcriptWindow не может быть пустым');
     }
+    // Аудит границ ввода 2026-09-03: окно живого цикла — последние минуты
+    // разговора, а не архив. Клиент вызывает цикл сам, каждые 15–45 секунд,
+    // и содержимое окна задаёт тоже он.
+    assertWithinLimit(transcriptWindow, MAX_LIVE_WINDOW_CHARS, 'Окно транскрипта');
     await assertProjectOwnership(this.prisma, userId, projectId);
 
     const [projectArguments, motiveHypotheses] = await Promise.all([

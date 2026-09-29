@@ -6,16 +6,23 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { AIJobStatus, ConversationProcessingStatus, MediaReviewItemStatus } from '@prisma/client';
 import { MediaReviewAutoService } from './media-review-auto.service';
 
-export interface CreateQueueItemInput {
-  youtubeVideoId: string;
-  title: string;
-  channelName: string;
-  thumbnailUrl: string;
-  durationSeconds?: number;
-  publishedAt?: string;
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class CreateQueueItemInput {
+  // Идентификатор ролика YouTube — 11 символов из фиксированного набора.
+  // Проверка формы здесь не косметика: значение уходит в построение URL.
+  @IsString() @Matches(/^[A-Za-z0-9_-]{11}$/) youtubeVideoId!: string;
+  @IsString() @MinLength(1) @MaxLength(500) title!: string;
+  @IsString() @MinLength(1) @MaxLength(200) channelName!: string;
+  @IsString() @MaxLength(2000) thumbnailUrl!: string;
+  // Двенадцать часов — верх для ролика; больше означает ошибку ввода.
+  @IsOptional() @IsInt() @Min(0) @Max(43_200) durationSeconds?: number;
+  @IsOptional() @IsISO8601() publishedAt?: string;
 }
 
 // Conversation.status — детальніший конвеєр (UPLOADED→TRANSCRIBING→

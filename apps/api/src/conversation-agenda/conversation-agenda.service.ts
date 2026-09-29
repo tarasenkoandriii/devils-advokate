@@ -21,13 +21,25 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ConversationProcessingStatus } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { partialBasis, promptBasisNote } from '../common/partial-basis';
+import { orderLabel } from '../common/server-time';
+import { allStringsFilled } from '../common/claim-substance';
+
+/** Пункт [shown-not-all] 2026-09-05 — лимит законен, молчание о нём нет. */
+const PAST_CONVERSATIONS_LIMIT = 5;
 
 const TASK_TYPE = 'conversation-agenda-generation';
 
-function isValidAgendaPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidAgendaPayload(text: string): boolean {
   try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string');
+    // Пункт [finding-without-substance-2] 2026-09-26: пустой массив
+    // законен — повестки может не быть. Пустая СТРОКА в массиве — пункт
+    // повестки, который человек уносит в разговор, не прочитав в нём
+    // ничего. Реестр: `common/claim-substance.ts`.
+    return allStringsFilled(JSON.parse(text));
   } catch {
     return false;
   }
@@ -53,9 +65,21 @@ export class ConversationAgendaService {
         status: { in: [ConversationProcessingStatus.TRANSCRIBED, ConversationProcessingStatus.ANALYZED] },
       },
       include: { transcript: { include: { segments: true } } },
-      orderBy: { occurredAt: 'desc' },
-      take: 5, // последние 5 — не весь архив разом, чтобы не раздувать промпт бесконечно на давних проектах
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+      take: PAST_CONVERSATIONS_LIMIT, // последние 5 — не весь архив разом, чтобы не раздувать промпт бесконечно на давних проектах
     });
+
+    // Пункт [shown-not-all] 2026-09-05: лимит был законен, молчание о
+    // нём — нет. Повестка следующего разговора строилась по последним
+    // пяти разговорам и подавалась модели как весь архив; на давнем
+    // проекте это ровно те пять, где нужного может не быть.
+    const pastConversationsTotal = await this.prisma.conversation.count({
+      where: {
+        projectId,
+        status: { in: [ConversationProcessingStatus.TRANSCRIBED, ConversationProcessingStatus.ANALYZED] },
+      },
+    });
+    const pastBasis = partialBasis('разговоры', pastConversations.length, pastConversationsTotal, 'recent');
 
     const activePrompt = await this.prisma.promptVersion.findFirst({
       where: { promptId: TASK_TYPE, status: 'ACTIVE' },
@@ -65,13 +89,16 @@ export class ConversationAgendaService {
 
     const objectiveContext = objective?.desiredOutcome ? `Цель: ${objective.desiredOutcome}\n\n` : '';
     const transcriptsContext = pastConversations
-      .map((c: any, i: number) => {
+      // Пункт [server-said-which-day] 2026-09-24: нумерация была, а
+      // рядом стояло число по UTC — и направление списка (от недавнего к
+      // раннему) не называлось вслух.
+      .map((c: any, i: number, all: any[]) => {
         const text = (c.transcript?.segments ?? []).map((s: any) => s.text).join(' ');
-        return text ? `Разговор ${i + 1} (${c.occurredAt.toISOString().slice(0, 10)}): ${text}` : null;
+        return text ? `Разговор ${orderLabel(i, all.length, true)}: ${text}` : null;
       })
       .filter(Boolean)
       .join('\n\n');
-    const userPrompt = `${objectiveContext}${transcriptsContext || 'Прошлых расшифрованных разговоров пока нет — сформируй повестку только на основе цели.'}`;
+    const userPrompt = `${objectiveContext}Прошлые разговоры${promptBasisNote(pastBasis)}:\n${transcriptsContext || 'Прошлых расшифрованных разговоров пока нет — сформируй повестку только на основе цели.'}`;
 
     let result;
     try {

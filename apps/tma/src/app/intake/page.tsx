@@ -16,6 +16,7 @@ import { hasConsent, listConsents } from '../../lib/features';
 import { useBackButton } from '../../hooks/useBackButton';
 import { haptic } from '../../lib/telegram';
 import { currentStartAttribution } from '../../lib/start-param';
+import { confidenceWording } from '../../lib/confidence';
 
 function scenarioTitle(s: IntakeScenario): string {
   if (s === 'UNIVERSAL') return 'Универсальный сценарий';
@@ -64,6 +65,12 @@ function firstScreenCopy(): { intro: string; placeholder: string } {
     return {
       intro: 'Расскажите о найме — своими словами, голосом или текстом: какая вакансия, сколько кандидатов, что важно проверить на собеседовании. Мы соберём из этого сценарий подбора; аудио не сохраняется — только текст.',
       placeholder: 'Например: закрываем вакансию senior backend, восемь кандидатов, нужен единый опросник…',
+    };
+  }
+  if (audience === 'employer') {
+    return {
+      intro: 'Расскажите о найме в свою компанию — своими словами, голосом или текстом: кого ищете, что важно в человеке, какие условия готовы предложить. Мы соберём из этого сценарий найма; приложение не отбирает за вас — решения принимают люди. Аудио не сохраняется — только текст.',
+      placeholder: 'Например: нанимаю менеджера по продажам в свою компанию, двое кандидатов уже есть, хочу единый список вопросов…',
     };
   }
   return {
@@ -151,7 +158,7 @@ export default function IntakePage() {
     <main className="page">
       <h1>🎤 Подбор сценария</h1>
       {!session && <p className="card-section__empty">{copy.intro}</p>}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       {session && (
         <ol className="domain-onboarding__answers">
@@ -175,8 +182,21 @@ export default function IntakePage() {
       {session && decision && !session.nextQuestion && (
         <section className="domain-onboarding__draft">
           <h3>Похоже на: {scenarioTitle(decision.suggestedScenario)}</h3>
-          {decision.belowThreshold && <p className="card-section__empty">Уверенность невысокая ({Math.round(decision.confidence * 100)}%) — по умолчанию предлагаем универсальный сценарий, но выбор за вами.</p>}
-          {!decision.belowThreshold && <p className="card-section__empty">Уверенность {Math.round(decision.confidence * 100)}%. Это предложение — подтвердите или выберите другой.</p>}
+          {/* Пункт [unmeasured-confidence] 2026-09-05: число возвращает
+              сама модель — её слова о себе, а не проверка продукта.
+              Порог (0.6) продукт применяет к чужой самооценке, и это
+              стоит называть, а не выдавать за измерение. */}
+          {decision.belowThreshold && (
+            <p className="card-section__empty">
+              {confidenceWording(decision.confidence, 'model-self')} — этого не хватило до порога, поэтому по умолчанию
+              предлагаем универсальный сценарий. Выбор за вами.
+            </p>
+          )}
+          {!decision.belowThreshold && (
+            <p className="card-section__empty">
+              {confidenceWording(decision.confidence, 'model-self')}. Это предложение — подтвердите или выберите другой.
+            </p>
+          )}
           {session.extracted && (
             <dl className="domain-dl">
               <div><dt>Ситуация</dt><dd>{session.extracted.question}</dd></div>
@@ -186,7 +206,7 @@ export default function IntakePage() {
           )}
 
           {unsupported && (
-            <p className="generation-error">
+            <p role="alert" className="generation-error">
               Сценарий «{unsupported}» на сервере есть, но экран для него в приложении ещё не собран — перейти в него нельзя.
               Всё сказанное не потеряно: выберите универсальный сценарий или другой из списка.
             </p>

@@ -8,6 +8,8 @@ import { haptic } from '../../../lib/telegram';
 import { DtpAdvisors, DtpFault, DtpOverview, DtpParticipants, useDtpList } from './DtpPanels';
 import { BudgetByCurrency, ComparisonMatrix, CrossCheckList, TextDocument } from '../shared/ConsultationPipeline';
 import { DtpConfig, DtpEvidenceAccess, DtpEvidenceItem, BUDGET_CATEGORY_LABEL, dateTime } from './dtp-types';
+import { checkLocationConsent, LocationConsentPrompt } from '../../LocationConsentPrompt';
+import { LOCATION_PURPOSES } from '../../../lib/location-purposes';
 
 // ── Доказательства ──
 
@@ -38,17 +40,51 @@ function EvidenceCard({ e }: { e: DtpEvidenceItem }) {
 export function DtpEvidence({ configId, manifest }: { configId: string; manifest: DomainManifest }) {
   const [tick, setTick] = useState(0);
   const [adding, setAdding] = useState(false);
+  // Пункт [consent-purpose] 2026-09-05: у геометки на доказательстве не
+  // было СВОЕЙ двери вовсе. Согласие требовалось (`requireConsent`
+  // LOCATION), но спросить его на этом экране было негде — оно
+  // приезжало из экрана погоды, где написано «координаты никогда не
+  // сохраняются». Здесь координаты остаются в материале, который
+  // человек собирается кому-то предъявлять.
+  const [pendingGeo, setPendingGeo] = useState<Record<string, unknown> | null>(null);
   const spec = manifest.entities.find((e) => e.key === 'evidence')!;
   const { data, error } = useDtpList<DtpEvidenceItem>(`/dtp/configs/${configId}/evidence`, tick);
+
+  async function saveEvidence(v: Record<string, unknown>) {
+    await domainApi.postJson(`/dtp/configs/${configId}/evidence`, v);
+    haptic('success');
+    setAdding(false);
+    setPendingGeo(null);
+    setTick((t) => t + 1);
+  }
+
+  async function submitEvidence(v: Record<string, unknown>) {
+    const hasGeo = v.latitude !== undefined && v.latitude !== null && v.latitude !== ''
+      && v.longitude !== undefined && v.longitude !== null && v.longitude !== '';
+    if (hasGeo && !(await checkLocationConsent(LOCATION_PURPOSES.DTP_EVIDENCE))) {
+      setPendingGeo(v);
+      return;
+    }
+    await saveEvidence(v);
+  }
+
   return (
     <section className="dtp-section">
-      <p className="dtp-hint">Файл получает хеш и время фиксации при загрузке, каждый просмотр пишется в журнал — это и есть «доказательная фиксация»: вы сможете показать, что снимок не менялся. Геометка — только по вашему согласию.</p>
-      {error && <p className="generation-error">{error}</p>}
+      <p className="dtp-hint">Файл получает хеш и время фиксации при загрузке, каждый просмотр пишется в журнал — это и есть «доказательная фиксация»: вы сможете показать, что снимок не менялся. Геометка — только по вашему согласию, и она сохраняется вместе с файлом.</p>
+      {error && <p role="alert" className="generation-error">{error}</p>}
+      {pendingGeo && (
+        <LocationConsentPrompt
+          source="dtp-evidence"
+          purposes={[LOCATION_PURPOSES.DTP_EVIDENCE]}
+          onGranted={() => { void saveEvidence(pendingGeo); }}
+          onCancel={() => setPendingGeo(null)}
+        />
+      )}
       {data && data.length === 0 && <p className="card-section__empty">Пока ничего не зафиксировано. Снимите повреждения, номера, положение машин, знаки.</p>}
       {data?.map((e) => <EvidenceCard key={e.id} e={e} />)}
       {adding ? (
         <EntityForm fields={spec.fields} initial={{ capturedAt: new Date().toISOString(), hasAudio: false }} submitLabel="Зафиксировать" onCancel={() => setAdding(false)}
-          onSubmit={async (v) => { await domainApi.postJson(`/dtp/configs/${configId}/evidence`, v); haptic('success'); setAdding(false); setTick((t) => t + 1); }} />
+          onSubmit={submitEvidence} />
       ) : <button type="button" className="primary" onClick={() => setAdding(true)}>+ Фото / видео</button>}
     </section>
   );

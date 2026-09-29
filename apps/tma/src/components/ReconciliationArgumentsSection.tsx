@@ -7,6 +7,7 @@
 // ArgumentsList.tsx (обычные PRO/CON).
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { generateReconciliationArguments, listReconciliationArguments } from '../lib/features';
 import { ReconciliationArgument } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -17,14 +18,18 @@ interface ReconciliationArgumentsSectionProps {
 
 export function ReconciliationArgumentsSection({ projectId }: ReconciliationArgumentsSectionProps) {
   const [args, setArgs] = useState<ReconciliationArgument[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     listReconciliationArguments(projectId)
-      .then(setArgs)
-      .catch(() => setArgs([]))
+      .then((v) => { setArgs(v); setNotLoaded(false); })
+      .catch(() => { setArgs([]); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -50,6 +55,7 @@ export function ReconciliationArgumentsSection({ projectId }: ReconciliationArgu
 
   return (
     <section className="reconciliation-arguments-section">
+      {notLoaded && <NotLoadedNotice what="аргументы примирения" />}
       <h3>Аргументы для примирения</h3>
       <p className="conversations-section__hint">
         Не для победы в споре — для снижения накала и примирения. Источник — религиозные первоисточники по вашей
@@ -67,7 +73,7 @@ export function ReconciliationArgumentsSection({ projectId }: ReconciliationArgu
         </ul>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <button type="button" onClick={handleGenerate} disabled={generating}>
         {generating ? 'Ищем…' : 'Показать аргументы для примирения'}
       </button>

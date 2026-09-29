@@ -17,21 +17,27 @@
 
 import { useEffect, useState } from 'react';
 
+// Пункт [job-domain-v2] §8.5: третья аудитория — работодатель, нанимающий сам
+// (#employers). Та же навигация по секциям, ничего не скрывается.
+type Audience = 'candidates' | 'agencies' | 'employers';
+
 export function AudienceTabs({
   candidatesLabel,
   agenciesLabel,
+  employersLabel,
   navLabel,
 }: {
   candidatesLabel: string;
   agenciesLabel: string;
+  employersLabel: string;
   navLabel: string;
 }) {
-  const [active, setActive] = useState<'candidates' | 'agencies' | null>(null);
+  const [active, setActive] = useState<Audience | null>(null);
 
   useEffect(() => {
     const fromHash = () => {
       const h = window.location.hash.replace('#', '');
-      setActive(h === 'agencies' ? 'agencies' : h === 'candidates' ? 'candidates' : null);
+      setActive(h === 'agencies' || h === 'candidates' || h === 'employers' ? h : null);
     };
     fromHash();
     window.addEventListener('hashchange', fromHash);
@@ -53,6 +59,13 @@ export function AudienceTabs({
         className={`jobs-tabs__tab${active === 'agencies' ? ' jobs-tabs__tab--active' : ''}`}
       >
         {agenciesLabel}
+      </a>
+      <a
+        href="#employers"
+        aria-current={active === 'employers' ? 'true' : undefined}
+        className={`jobs-tabs__tab${active === 'employers' ? ' jobs-tabs__tab--active' : ''}`}
+      >
+        {employersLabel}
       </a>
     </nav>
   );

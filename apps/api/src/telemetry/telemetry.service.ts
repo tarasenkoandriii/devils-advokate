@@ -171,7 +171,7 @@ export class TelemetryService {
 
     const jobs: JobRow[] = await this.prisma.aIJob.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit,
     });
 

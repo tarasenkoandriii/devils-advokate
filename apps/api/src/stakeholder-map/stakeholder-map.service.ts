@@ -21,12 +21,14 @@
 // извлечению связей из текста реплик) — только текстовая подсказка,
 // пользователь решает, добавлять ли реального человека вручную.
 
+import { projectFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, StakeholderRole } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled, filled, substanceSite } from '../common/claim-substance';
 
 const SUGGEST_ROLES_TASK_TYPE = 'stakeholder-role-suggestion';
 const TARGETED_ARGUMENTS_TASK_TYPE = 'stakeholder-argument-generation';
@@ -54,17 +56,24 @@ interface RawSuggestRolesPayload {
   gapSuggestions: RawGapSuggestion[];
 }
 
-function isValidSuggestRolesPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidSuggestRolesPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (typeof parsed !== 'object' || parsed === null) return false;
     if (!Array.isArray(parsed.roleSuggestions) || !Array.isArray(parsed.gapSuggestions)) return false;
     const validRoles = ['DECISION_MAKER', 'ADVISOR', 'BLOCKER', 'ALLY'];
+    // Пункт [finding-without-substance-2] 2026-09-26: `personId` с
+    // неизвестным значением уже отфильтровывается по знакомым id, а
+    // обоснования — нет. Роль человеку предлагают ВМЕСТЕ с доводом:
+    // предложение без довода — утверждение о человеке без опоры.
     return (
       parsed.roleSuggestions.every(
-        (r: any) => typeof r.personId === 'string' && validRoles.includes(r.role) && typeof r.reasoning === 'string',
+        (r: any) => typeof r.personId === 'string' && validRoles.includes(r.role) && filled(r.reasoning),
       ) &&
-      parsed.gapSuggestions.every((g: any) => typeof g.roleHint === 'string' && typeof g.reasoning === 'string')
+      parsed.gapSuggestions.every((g: any) => filled(g.roleHint) && filled(g.reasoning))
     );
   } catch {
     return false;
@@ -77,13 +86,17 @@ interface RawTargetedArgument {
   weight?: number;
 }
 
-function isValidTargetedArgumentsPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidTargetedArgumentsPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
     return parsed.every(
       (item) =>
-        typeof item.text === 'string' &&
+        // Пункт [finding-without-substance-2] 2026-09-26.
+        allFilled(item, substanceSite('isValidTargetedArgumentsPayload').required.map((f) => f.field)) &&
         (item.stance === 'pro' || item.stance === 'con') &&
         (item.weight === undefined || typeof item.weight === 'number'),
     );
@@ -108,7 +121,10 @@ export class StakeholderMapService {
 
     const links = await this.prisma.projectPerson.findMany({
       where: { projectId },
-      include: { person: { include: { facts: true } } },
+      // Пункт [scope-not-applied] 2026-09-06: карта фигурантов —
+      // разбор внутри проекта, значит и факты берутся по проектному
+      // правилу, а не все подряд.
+      include: { person: { include: { facts: { where: projectFactsScopeWhere(projectId) } } } },
     });
     if (links.length === 0) {
       throw new BadRequestException('В проекте пока нет ни одного добавленного человека — сначала добавьте хотя бы одного в разделе "Участники"');
@@ -192,7 +208,8 @@ export class StakeholderMapService {
    * targetPersonId, не смешивается с общепроектными аргументами. */
   async generateArgumentsForStakeholder(userId: string, projectId: string, personId: string, engineId?: string) {
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
-    const link = await this.prisma.projectPerson.findFirst({ where: { projectId, personId }, include: { person: { include: { facts: true } } } });
+    // Пункт [scope-not-applied] 2026-09-06 — то же проектное правило.
+    const link = await this.prisma.projectPerson.findFirst({ where: { projectId, personId }, include: { person: { include: { facts: { where: projectFactsScopeWhere(projectId) } } } } });
     if (!link) {
       throw new NotFoundException(`Person ${personId} not found in project ${projectId}`);
     }

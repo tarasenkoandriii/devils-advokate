@@ -30,6 +30,19 @@ export class LibraryController {
   ) {
     return this.library.submitProject(userId, projectId, dto.title, dto.category);
   }
+
+  /** Пункт [own-submission] 2026-09-04 — судьба СВОЕЙ отправки.
+   *
+   * Имя маршрута повторяет уже существующий `venue-applications/mine`:
+   * там такой список был с самого начала (правда, до этого захода его
+   * не вызывал никто) — заводить рядом второе имя для того же смысла
+   * незачем. Не в `LibraryModerationController`: тот за
+   * `AdminSessionGuard`, а это действие обычного человека, своё о
+   * своём. */
+  @Get('library-submissions/mine')
+  async listMine(@CurrentUser() userId: string) {
+    return this.library.listMySubmissions(userId);
+  }
 }
 
 // Пункт [admin-panel] (devils-advocate-admin-panel-tz.md §4.1) —

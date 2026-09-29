@@ -14,19 +14,37 @@ import {
   deleteAccount,
   AccountDeletionResult,
   revokeConsent,
+  ConsentRevocationReport,
   getSafeShareLog,
   getRetentionClasses,
+  accountDeletionPreview,
+  getDecisionsAboutYou,
+  DecisionsAboutYou,
+  ThirdPartyLoss,
 } from '../../lib/features';
 import { PrivacyOverview, SafeShareLogEntry, RetentionClassInfo, ConsentType } from '../../lib/types';
 import { useBackButton } from '../../hooks/useBackButton';
 import { haptic } from '../../lib/telegram';
 import { OnboardingForm } from '../../components/OnboardingForm';
+import { AccountDeletionSection } from '../../components/AccountDeletion';
+import { DecisionsAboutYouSection } from '../../components/DecisionsAboutYou';
 
 export default function PrivacyPage() {
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletionResult, setDeletionResult] = useState<AccountDeletionResult | null>(null);
+  // Пункт [screen-said-what-server-unsaid] 2026-09-25: список «что
+  // остаётся» приходит с сервера и ДО удаления — тот же, что придёт
+  // после. Своей копии этого текста экран больше не держит.
+  const [remainsPreview, setRemainsPreview] = useState<string[]>([]);
+  // Пункт [cascade-took-a-stranger] 2026-09-26: что удаление заберёт у
+  // других — ДО решения, а не приписка после.
+  const [takesFromOthers, setTakesFromOthers] = useState<ThirdPartyLoss[]>([]);
+  const [takesFromOthersNote, setTakesFromOthersNote] = useState('');
+  // Пункт [right-with-no-door] 2026-09-25: решения о человеке читались
+  // только из скачанного JSON — на телефоне внутри Telegram.
+  const [decisions, setDecisions] = useState<DecisionsAboutYou | null>(null);
   const router = useRouter();
   const [overview, setOverview] = useState<PrivacyOverview | null>(null);
   const [safeShareLog, setSafeShareLog] = useState<SafeShareLogEntry[]>([]);
@@ -35,6 +53,13 @@ export default function PrivacyPage() {
   const [error, setError] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Пункт [consent-revocation] 2026-09-04: отзыв согласия отвечал молча
+  // («готово»), и человек достраивал молчание в свою пользу — читал его
+  // как «всё, что собрано под этим согласием, удалено». Для одиннадцати
+  // типов из тринадцати это неправда: отзыв запрещает будущее, а не
+  // отменяет прошлое. Теперь после отзыва показывается, ЧТО именно
+  // произошло и чего отзыв НЕ отменяет.
+  const [revocation, setRevocation] = useState<ConsentRevocationReport | null>(null);
 
   const { isTelegramAvailable } = useBackButton(() => router.push('/'));
 
@@ -43,6 +68,12 @@ export default function PrivacyPage() {
       getPrivacyOverview().then(setOverview),
       getSafeShareLog().then(setSafeShareLog),
       getRetentionClasses().then(setRetentionClasses),
+      accountDeletionPreview().then((p) => {
+        setRemainsPreview(p.notRemovedHere);
+        setTakesFromOthers(p.takesFromOthers);
+        setTakesFromOthersNote(p.takesFromOthersNote);
+      }),
+      getDecisionsAboutYou().then(setDecisions),
     ]).catch((err) => setError(err instanceof Error ? err.message : 'Не удалось загрузить данные'));
   }
 
@@ -69,7 +100,8 @@ export default function PrivacyPage() {
 
   async function handleRevokeConsent(type: ConsentType) {
     try {
-      await revokeConsent(type);
+      const report = await revokeConsent(type);
+      setRevocation(report);
       await load();
       haptic('success');
     } catch (err) {
@@ -109,7 +141,7 @@ export default function PrivacyPage() {
       )}
 
       <h1>Приватность</h1>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <OnboardingForm />
 
@@ -129,13 +161,34 @@ export default function PrivacyPage() {
         ) : (
           <p className="card-section__empty">Активных согласий нет</p>
         )}
+        {revocation && (
+          <div className="consent-revocation-report">
+            <p>
+              {revocation.revoked
+                ? `Согласие отозвано (записей: ${revocation.recordsRevoked}).`
+                : 'Активного согласия этого типа не было — отзывать было нечего.'}
+            </p>
+            {revocation.alsoDone.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+            {/* Всегда, даже когда отзывать было нечего: человек должен
+                увидеть границу отзыва, а не додумать её. */}
+            <p className="muted">Что это НЕ отменяет: {revocation.doesNotUndo}</p>
+          </div>
+        )}
       </section>
 
       <section className="card-section">
         <h3>Проекты</h3>
+        {/* Пункт [delete-project] 2026-09-04: эта фраза стояла здесь и
+            указывала на кнопку, которой не существовало — маршрут
+            удаления проекта не звал ни один экран, и единственным
+            доступным человеку удалением было удаление всего аккаунта.
+            Теперь кнопка есть, фраза стала правдой, а ссылка сокращает
+            путь от указания до действия. */}
         <p>
-          Всего проектов: {overview?.projectsCount ?? 0}. Удаление отдельного проекта — на его
-          странице.
+          Всего проектов: {overview?.projectsCount ?? 0}. Удаление отдельного проекта — внизу его
+          страницы, раздел «Удалить проект»: <Link href="/projects">открыть список проектов</Link>.
         </p>
       </section>
 
@@ -210,34 +263,42 @@ export default function PrivacyPage() {
         )}
       </section>
 
+      <DecisionsAboutYouSection decisions={decisions} />
+
       <section className="card-section" style={{ borderColor: '#d33' }}>
         <h3>Удалить аккаунт и все данные</h3>
-        <p className="card-section__empty">
-          Проекты, разговоры и транскрипты, люди и факты о них, согласия, доказательства ДТП, анализы, профили кандидатов, intake-сессии — всё удаляется безвозвратно. Команды и группы без вас останутся. Транзитные аудиофайлы разговоров удаляются тоже, а незавершённые задачи распознавания отзываются у провайдера; текст транскриптов у провайдеров мы удаляем сразу после получения, у них остаются только пустые записи задач по их политике. Тексты ваших запросов к AI и его ответы удаляются, незавершённые AI-задачи отменяются; у нас остаются лишь обезличенные записи о вызовах (тип задачи, статус) для статистики и запись в журнале аудита без персональных данных.
-        </p>
-        {deletionResult ? (
-          <div className="dtp-status dtp-status--ok">
-            Аккаунт удалён. Удалено: {Object.entries(deletionResult.removed).map(([k, v]) => `${k}: ${v}`).join(', ')}.
-            {deletionResult.externalArtifacts.failed > 0 && ` Не удалось удалить файлов во внешнем хранилище: ${deletionResult.externalArtifacts.failed} — напишите нам, удалим вручную.`}
-            <br />При следующем открытии приложение начнёт с чистого листа.
-          </div>
-        ) : (
-          <>
-            <label className="entity-form__field">
-              <span>Чтобы подтвердить, введите слово УДАЛИТЬ</span>
-              <input value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} placeholder="УДАЛИТЬ" />
-            </label>
-            {deleteError && <p className="generation-error">{deleteError}</p>}
-            <button type="button" className="secondary" style={{ borderColor: '#d33', color: '#d33' }} disabled={deleting || deleteConfirm.trim().toUpperCase() !== 'УДАЛИТЬ'}
-              onClick={async () => {
-                if (!window.confirm('Это необратимо. Удалить аккаунт и все данные?')) return;
-                setDeleting(true); setDeleteError(null);
-                try { setDeletionResult(await deleteAccount()); haptic('success'); }
-                catch (e) { haptic('error'); setDeleteError(e instanceof Error ? e.message : 'Не удалось удалить'); }
-                finally { setDeleting(false); }
-              }}>{deleting ? 'Удаляем…' : 'Удалить аккаунт'}</button>
-          </>
-        )}
+        {/* Пункт [screen-said-what-server-unsaid] 2026-09-25: здесь стоял
+            второй, написанный руками список «что остаётся» — и он
+            разошёлся с серверным после правки [audit-trail]. Теперь текст
+            один и приходит оттуда же, откуда придёт после удаления. */}
+        <AccountDeletionSection
+          remains={remainsPreview}
+          takesFromOthers={takesFromOthers}
+          takesFromOthersNote={takesFromOthersNote}
+          result={deletionResult}
+          intro={
+            <p className="card-section__empty">
+              Проекты, разговоры и транскрипты, люди и факты о них, согласия, доказательства ДТП, анализы, профили кандидатов, intake-сессии — всё удаляется безвозвратно. Транзитные аудиофайлы разговоров удаляются тоже, а незавершённые задачи распознавания отзываются у провайдера.
+            </p>
+          }
+          form={
+            <>
+              <label className="entity-form__field">
+                <span>Чтобы подтвердить, введите слово УДАЛИТЬ</span>
+                <input value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} placeholder="УДАЛИТЬ" />
+              </label>
+              {deleteError && <p role="alert" className="generation-error">{deleteError}</p>}
+              <button type="button" className="secondary" style={{ borderColor: '#d33', color: '#d33' }} disabled={deleting || deleteConfirm.trim().toUpperCase() !== 'УДАЛИТЬ'}
+                onClick={async () => {
+                  if (!window.confirm('Это необратимо. Удалить аккаунт и все данные?')) return;
+                  setDeleting(true); setDeleteError(null);
+                  try { setDeletionResult(await deleteAccount()); haptic('success'); }
+                  catch (e) { haptic('error'); setDeleteError(e instanceof Error ? e.message : 'Не удалось удалить'); }
+                  finally { setDeleting(false); }
+                }}>{deleting ? 'Удаляем…' : 'Удалить аккаунт'}</button>
+            </>
+          }
+        />
       </section>
     </main>
   );

@@ -8,14 +8,18 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { assertProjectOwnership } from '../common/project-ownership';
 
-export interface SaveNegotiationBoundariesInput {
-  idealOutcome?: string;
-  acceptableOutcome?: string;
-  batna?: string;
-  watna?: string;
-  walkAwayPoint?: string;
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class SaveNegotiationBoundariesInput {
+  @IsOptional() @IsString() @MaxLength(4000) idealOutcome?: string;
+  @IsOptional() @IsString() @MaxLength(4000) acceptableOutcome?: string;
+  @IsOptional() @IsString() @MaxLength(4000) batna?: string;
+  @IsOptional() @IsString() @MaxLength(4000) watna?: string;
+  @IsOptional() @IsString() @MaxLength(4000) walkAwayPoint?: string;
 }
 
 @Injectable()

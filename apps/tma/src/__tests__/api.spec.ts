@@ -118,7 +118,61 @@ async function run() {
     } catch (err) {
       if (!(err instanceof ApiRequestError)) throw err;
       assertEqual(err.httpStatus, 403, 'httpStatus взят из реального response.status, не выдуман');
-      assertEqual(err.message, 'Forbidden', 'message взят из тела ошибки сервера');
+      // Пункт [error-language] 2026-09-04: раньше здесь проверялось, что
+      // текст сервера доходит до человека дословно. Именно это и было
+      // дефектом: сообщение без кириллицы написано для разработчика, а
+      // экран показывает `err.message` как есть. Теперь человеку —
+      // человеческая фраза, а исходный текст сохраняется рядом.
+      assertEqual(err.technicalMessage, 'Forbidden', 'исходный текст сервера не потерян');
+      assertEqual(err.message, 'Это действие вам недоступно.', 'человеку — фраза на его языке');
+    }
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [error-language]: русское сообщение сервера доходит ДОСЛОВНО', async () => {
+    // Обратная половина правила и более важная: сообщений, написанных
+    // для человека, в продукте большинство, и они осмысленны. Подменять
+    // их общей фразой было бы хуже исходного дефекта — человек потерял
+    // бы единственное объяснение, что именно не так.
+    const exact = 'Спарринг уже завершён — писать в него больше нельзя';
+    mockFetchOnce(400, { success: false, error: { message: exact } });
+    try {
+      await apiGet('/projects/1');
+      throw new Error('FAIL: ожидалось исключение, не брошено');
+    } catch (err) {
+      if (!(err instanceof ApiRequestError)) throw err;
+      assertEqual(err.message, exact, 'осмысленное русское сообщение не заменено общей фразой');
+    }
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [error-language]: инженерная строка с внутренним идентификатором не доходит до человека', async () => {
+    // Ровно то, что человек видел на экране: имя модели и cuid.
+    mockFetchOnce(404, {
+      success: false,
+      error: { message: 'DtpParticipant cmf3x9q0000abcdefghijklm not found' },
+    });
+    try {
+      await apiGet('/projects/1');
+      throw new Error('FAIL: ожидалось исключение, не брошено');
+    } catch (err) {
+      if (!(err instanceof ApiRequestError)) throw err;
+      assertEqual(err.message.includes('cmf3x9q'), false, 'внутренний идентификатор не показан человеку');
+      assertEqual(err.message.includes('DtpParticipant'), false, 'имя модели не показано человеку');
+      assertEqual(
+        err.technicalMessage,
+        'DtpParticipant cmf3x9q0000abcdefghijklm not found',
+        'для диагностики исходный текст сохранён',
+      );
+    }
+  });
+
+  test('[error-language]: незнакомый статус — общая фраза по-русски, а не пустая строка', async () => {
+    mockFetchOnce(418, { success: false, error: { message: 'I am a teapot' } });
+    try {
+      await apiGet('/projects/1');
+      throw new Error('FAIL: ожидалось исключение, не брошено');
+    } catch (err) {
+      if (!(err instanceof ApiRequestError)) throw err;
+      assertEqual(/[А-Яа-я]/.test(err.message), true, 'человеку сказано что-то по-русски');
     }
   });
 

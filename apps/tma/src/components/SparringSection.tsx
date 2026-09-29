@@ -20,6 +20,7 @@
 // случай сбоя предзаготовки, не основным путём — см. useEffect ниже.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   endSparringSession,
   getSparringSession,
@@ -32,7 +33,9 @@ import {
   uploadSparringVoiceReply,
 } from '../lib/features';
 import { ArchetypeType, ProjectPersonLink, SparringSession, SparringVoiceReplyJob } from '../lib/types';
+import { AnalysisBasisNote } from './AnalysisBasisNote';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 import { SpeakButton } from './SpeakButton';
 import { CompromiseSheetSection } from './CompromiseSheetSection';
 
@@ -62,6 +65,10 @@ const ARCHETYPE_LABELS: Record<ArchetypeType, string> = {
 
 export function SparringSection({ projectId }: SparringSectionProps) {
   const [sessions, setSessions] = useState<SparringSession[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [people, setPeople] = useState<ProjectPersonLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState<SparringSession | null>(null);
@@ -72,6 +79,10 @@ export function SparringSection({ projectId }: SparringSectionProps) {
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Пункт [partial-basis] 2026-09-04: на чём построен образ оппонента.
+  // Один раз на сессию, а не на каждую реплику: свойство относится к
+  // данным о человеке, а повтор на каждом ответе стал бы шумом.
+  const [basisNote, setBasisNote] = useState<string | null>(null);
 
   const [recording, setRecording] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'uploading' | 'transcribing'>('idle');
@@ -94,8 +105,8 @@ export function SparringSection({ projectId }: SparringSectionProps) {
 
   const reload = useCallback(() => {
     return listSparringSessions(projectId)
-      .then(setSessions)
-      .catch(() => setSessions([]));
+      .then((v) => { setSessions(v); setNotLoaded(false); })
+      .catch(() => { setSessions([]); setNotLoaded(true); });
   }, [projectId]);
 
   // Пункт 90 (§3.26 ТЗ) — "реплики AI-собеседника озвучиваются
@@ -126,7 +137,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
   }, [activeSession?.messages, activeSession?.id]);
 
   useEffect(() => {
-    void Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
+    void Promise.all([reload(), listPeople(projectId).then((v) => { setPeople(v); setNotLoaded(false); }).catch(() => { setPeople([]); setNotLoaded(true); })]).finally(() =>
       setLoading(false),
     );
     return () => {
@@ -145,6 +156,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
         selectedArchetype === 'CUSTOM' ? customArchetype.trim() : undefined,
       );
       setActiveSession(session);
+      setBasisNote(session.basisNote);
       // Пункт 90 — свежесозданная сессия: открывающая реплика ЕЩЁ НЕ
       // звучала, эффект автовоспроизведения должен её проиграть.
       initializedSessionIdRef.current = session.id;
@@ -169,8 +181,8 @@ export function SparringSection({ projectId }: SparringSectionProps) {
       initializedSessionIdRef.current = full.id;
       const existingMessages = full.messages ?? [];
       lastPlayedMessageIdRef.current = existingMessages.length > 0 ? existingMessages[existingMessages.length - 1].id : null;
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось открыть сессию спарринга');
     }
   }
 
@@ -198,8 +210,8 @@ export function SparringSection({ projectId }: SparringSectionProps) {
       setActiveSession((prev) => (prev ? { ...prev, status: ended.status, endedAt: ended.endedAt } : prev));
       await reload();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось завершить сессию спарринга');
     }
   }
 
@@ -261,9 +273,9 @@ export function SparringSection({ projectId }: SparringSectionProps) {
       let job: SparringVoiceReplyJob;
       try {
         job = await getSparringVoiceReplyStatus(sessionId, jobId);
-      } catch {
+      } catch (err) {
         setVoiceStatus('idle');
-        haptic('error');
+        reportFailure(err, 'Не удалось получить голосовой ответ');
         return;
       }
       if (job.status === 'PENDING' || job.status === 'PROCESSING') {
@@ -308,6 +320,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
         <button type="button" onClick={() => setActiveSession(null)}>
           ← К списку сессий
         </button>
+        <AnalysisBasisNote note={basisNote} />
         <h3>
           Спарринг{' '}
           {(() => {
@@ -341,7 +354,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
           ))}
         </ul>
 
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
 
         {activeSession.status === 'ACTIVE' ? (
           <div className="conversations-section__add">
@@ -391,6 +404,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
 
   return (
     <section className="sparring-section">
+      {notLoaded && <NotLoadedNotice what="прошлые сессии спарринга и список людей проекта" />}
       <h3>Спарринг с оппонентом (Red Team)</h3>
       <p className="conversations-section__hint">
         AI генерирует реалистичные возражения и тренирует вас отвечать на них — до реального разговора.
@@ -453,7 +467,7 @@ export function SparringSection({ projectId }: SparringSectionProps) {
             </select>
           </label>
         )}
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
         <div className="conversations-section__add-actions">
           <button type="button" onClick={handleStart} disabled={starting}>
             {starting ? 'Начинаем…' : 'Начать спарринг'}

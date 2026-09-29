@@ -25,13 +25,19 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { buildUserPrompt } from '../arguments/argument-generation.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allStringsFilled } from '../common/claim-substance';
 
 const TASK_TYPE = 'missing-information-detection';
 
-function isValidQuestionsPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidQuestionsPayload(text: string): boolean {
   try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string');
+    // Пункт [finding-without-substance-2] 2026-09-26: промпт прямо
+    // разрешает пустой массив («данных достаточно»), поэтому пустая
+    // строка — не способ сказать «нечего спросить», а вопрос без текста.
+    return allStringsFilled(JSON.parse(text));
   } catch {
     return false;
   }

@@ -18,8 +18,9 @@
 // хорошим — риск переоценён) считаются раздельно, чтобы показать
 // направление расхождения, не просто "вы часто ошибаетесь".
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { MIN_RATE_SAMPLE_SIZE, rateVisibility } from './rate-visibility';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, DecisionOutcomeRating, EscalationCategory } from '@prisma/client';
 
@@ -38,7 +39,12 @@ const ESCALATION_RANK: Record<EscalationCategory, number> = {
 // два случая недостаточно, чтобы говорить о паттерне, не единичной
 // случайности. Порог произвольный, но разумный, явно
 // задокументированный, не скрытый магическим числом без объяснения.
-const MIN_CATEGORY_SAMPLE_SIZE = 3;
+//
+// Пункт [rate-on-one-case] 2026-09-06: та же причина слово в слово
+// относится и к ОБЩЕЙ доле, к которой порог применён не был. Константа
+// теперь одна на оба места (rate-visibility.ts) — двум одинаковым
+// правилам незачем жить отдельно и расходиться.
+const MIN_CATEGORY_SAMPLE_SIZE = MIN_RATE_SAMPLE_SIZE;
 
 export interface CategoryCalibrationStats {
   category: string | null;
@@ -46,7 +52,16 @@ export interface CategoryCalibrationStats {
   matchCount: number;
   overOptimisticCount: number; // прогноз склонялся "за", исход оказался плохим
   overCautiousCount: number; // прогноз склонялся "против", исход оказался хорошим
-  matchRate: number; // 0..1, доля среди классифицируемых случаев (MIXED/TOO_EARLY_TO_TELL не входят)
+  /** Случаи, по которым доля вообще считается: есть взвешенный прогноз
+   * и определённый исход (MIXED / «слишком рано судить» не входят). */
+  classifiable: number;
+  /** 0..1 — или null, если показывать долю рано. Пункт
+   * [rate-on-one-case] 2026-09-06: раньше здесь было 0 при пустой
+   * выборке, и ноль-как-«не считали» был неотличим от ноля-как-«ни
+   * разу не совпало». */
+  matchRate: number | null;
+  rateShown: boolean;
+  minSample: number;
 }
 
 // Пункт 73 (§3.34 ТЗ) — "Статистика успешности разговоров", пункт 53
@@ -145,11 +160,16 @@ export class DecisionOutcomeService {
       list.push(o);
       categoryGroups.set(o.category, list);
     }
+    // Пункт [rate-on-one-case] 2026-09-06: фильтр стоял по `list.length`
+    // — числу ВСЕХ исходов категории, — а доля считается по
+    // классифицируемым. Пять отмеченных исходов, из которых
+    // классифицируется один, проходили порог и печатались как «1 из 1
+    // (100%)». Порог стоял, но считал не те случаи; теперь считает те.
     const byCategory: CategoryCalibrationStats[] = [...categoryGroups.entries()]
-      .filter(([, list]) => list.length >= MIN_CATEGORY_SAMPLE_SIZE)
-      .map(([category, list]) => this.computeStats(list, category));
+      .map(([category, list]) => this.computeStats(list, category))
+      .filter((stats) => stats.classifiable >= MIN_CATEGORY_SAMPLE_SIZE);
 
-    return { totalRecorded: outcomes.length, overall, byCategory };
+    return { totalRecorded: outcomes.length, overall, byCategory, minSample: MIN_RATE_SAMPLE_SIZE };
   }
 
   /** "Скользящие окна, не привязаны к календарной неделе" (buкально
@@ -210,9 +230,22 @@ export class DecisionOutcomeService {
   /** "sessionId генерируется клиентом при старте AssistanceScreen,
    * события — только переходы между категориями, не каждый замер" —
    * см. обоснование в schema.prisma над EscalationCategoryEvent. */
-  async logEscalationCategory(userId: string, projectId: string, sessionId: string, category: EscalationCategory) {
+  async logEscalationCategory(
+    userId: string,
+    projectId: string,
+    sessionId: string,
+    category: EscalationCategory,
+    // Пункт [project-log-v2]: с кем идёт разговор — необязательно, выбирает
+    // пользователь. Без него событие остаётся метрикой сглаживания, но в лог
+    // проекта (§3.39) не попадает: безымянных цветных записей там не бывает.
+    personId?: string | null,
+  ) {
     await assertProjectOwnership(this.prisma, userId, projectId);
-    return this.prisma.escalationCategoryEvent.create({ data: { projectId, sessionId, category } });
+    if (personId) {
+      const link = await this.prisma.projectPerson.findFirst({ where: { projectId, personId } });
+      if (!link) throw new NotFoundException(`Person ${personId} not found in project ${projectId}`);
+    }
+    return this.prisma.escalationCategoryEvent.create({ data: { projectId, sessionId, category, personId: personId ?? null } });
   }
 
   private computeStats(outcomes: any[], category: string | null): CategoryCalibrationStats {
@@ -236,14 +269,17 @@ export class DecisionOutcomeService {
       }
     }
 
-    const classifiable = matchCount + overOptimisticCount + overCautiousCount;
+    const visibility = rateVisibility({ matchCount, overOptimisticCount, overCautiousCount });
     return {
       category,
       sampleSize: outcomes.length,
       matchCount,
       overOptimisticCount,
       overCautiousCount,
-      matchRate: classifiable === 0 ? 0 : matchCount / classifiable,
+      classifiable: visibility.classifiable,
+      matchRate: visibility.matchRate,
+      rateShown: visibility.rateShown,
+      minSample: visibility.minSample,
     };
   }
 }

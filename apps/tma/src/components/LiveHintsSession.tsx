@@ -77,9 +77,12 @@ export function LiveHintsSession({ projectId, mode = 'conversation' }: LiveHints
       // провайдер — для русского и украинского это Soniox, для
       // английского прежний AssemblyAI.
       credentials = await mintTranscriptionToken();
-    } catch {
+    } catch (err) {
       setCaptureState('error');
-      setCaptureError('Не удалось получить доступ к транскрипции');
+      // Аудит согласий 2026-09-03: общая фраза скрывала причину отказа —
+      // «нет согласия» и «режим MAXIMUM_PRIVACY» лечатся разными
+      // действиями пользователя, и он должен знать, каким именно.
+      setCaptureError(err instanceof Error ? err.message : 'Не удалось получить доступ к транскрипции');
       captureHandle.stop();
       return;
     }
@@ -185,7 +188,7 @@ export function LiveHintsSession({ projectId, mode = 'conversation' }: LiveHints
       )}
       {captureState === 'error' && (
         <>
-          <p className="generation-error">{captureError}</p>
+          <p role="alert" className="generation-error">{captureError}</p>
           <button type="button" onClick={handleStart}>
             Попробовать снова
           </button>

@@ -20,6 +20,7 @@ import { LocationSuggestion } from '../lib/types';
 import { haptic } from '../lib/telegram';
 import { checkLocationConsent, LocationConsentPrompt } from './LocationConsentPrompt';
 import { VoiceEnrollmentSection } from './VoiceEnrollmentSection';
+import { LOCATION_PURPOSES } from '../lib/location-purposes';
 
 const RELIGION_OPTIONS = [
   { value: '', label: 'Не указывать' },
@@ -75,7 +76,7 @@ export function OnboardingForm() {
   // Пункт 77 (§3.32 ТЗ) — единый геозапрос, тот же гейт, что в
   // WeatherForecastSection.tsx/VenueRecommendationSection.tsx.
   async function handleDetectFromLocation() {
-    const hasConsent = await checkLocationConsent();
+    const hasConsent = await checkLocationConsent(LOCATION_PURPOSES.ONBOARDING_CITY);
     if (!hasConsent) {
       setShowConsentPrompt(true);
       return;
@@ -152,7 +153,7 @@ export function OnboardingForm() {
         </select>
       </label>
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <button type="button" onClick={handleSave} disabled={saving}>
         {saving ? 'Сохраняем…' : 'Сохранить'}
@@ -161,6 +162,7 @@ export function OnboardingForm() {
       <div className="onboarding-geo-suggestion">
         {showConsentPrompt ? (
           <LocationConsentPrompt
+          purposes={[LOCATION_PURPOSES.ONBOARDING_CITY]}
             source="onboarding"
             onGranted={() => {
               setShowConsentPrompt(false);
@@ -173,7 +175,7 @@ export function OnboardingForm() {
             {detecting ? 'Определяем…' : 'Определить по местоположению'}
           </button>
         )}
-        {suggestionError && <p className="generation-error">{suggestionError}</p>}
+        {suggestionError && <p role="alert" className="generation-error">{suggestionError}</p>}
         {suggestion && (
           <div className="onboarding-geo-suggestion__card">
             <p className="conversations-section__hint">

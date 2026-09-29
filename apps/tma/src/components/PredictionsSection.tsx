@@ -9,9 +9,11 @@
 // нужна для этого прогноза.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { createPrediction, listPredictions, recordActualOutcome } from '../lib/features';
 import { Prediction } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 interface PredictionsSectionProps {
   projectId: string;
@@ -19,6 +21,10 @@ interface PredictionsSectionProps {
 
 export function PredictionsSection({ projectId }: PredictionsSectionProps) {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newPrediction, setNewPrediction] = useState('');
@@ -26,8 +32,8 @@ export function PredictionsSection({ projectId }: PredictionsSectionProps) {
 
   const reload = useCallback(() => {
     return listPredictions(projectId)
-      .then(setPredictions)
-      .catch(() => setPredictions([]));
+      .then((v) => { setPredictions(v); setNotLoaded(false); })
+      .catch(() => { setPredictions([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
@@ -44,8 +50,8 @@ export function PredictionsSection({ projectId }: PredictionsSectionProps) {
       setShowAddForm(false);
       await reload();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось добавить предсказание');
     } finally {
       setAdding(false);
     }
@@ -55,6 +61,7 @@ export function PredictionsSection({ projectId }: PredictionsSectionProps) {
 
   return (
     <section className="predictions-section">
+      {notLoaded && <NotLoadedNotice what="сохранённые предсказания" />}
       <h3>Прогноз против реальности</h3>
 
       {predictions.length === 0 && !showAddForm && (
@@ -148,7 +155,7 @@ function PredictionRow({ prediction, onResolved }: { prediction: Prediction; onR
             Что случилось на самом деле
             <input value={actualOutcome} onChange={(e) => setActualOutcome(e.target.value)} />
           </label>
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <div className="conversations-section__add-actions">
             <button type="button" onClick={handleResolve} disabled={saving || !actualOutcome.trim()}>
               {saving ? 'Анализируем…' : 'Сохранить'}

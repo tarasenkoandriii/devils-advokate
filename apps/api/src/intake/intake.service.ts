@@ -16,6 +16,7 @@ import { InterviewPoolOnboardingService } from '../interview-pool/interview-pool
 import { InvestmentOnboardingService } from '../investment/investment-onboarding.service';
 import { MajorPurchaseOnboardingService } from '../major-purchase/major-purchase-onboarding.service';
 import { JobSearchOnboardingService } from '../job-search/job-search-onboarding.service';
+import { EmployerHiringService } from '../employer-hiring/employer-hiring.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 export const INTAKE_TASK_TYPE = 'intake-classify';
@@ -26,7 +27,7 @@ export const INTAKE_MAX_FOLLOW_UPS = 3;
 /** Сессии без dispatch дольше этого — ABANDONED (ТЗ §2.2 п.7). */
 export const INTAKE_ABANDON_AFTER_MS = 24 * 60 * 60 * 1000;
 
-export const INTAKE_SCENARIOS = ['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase', 'job-search'] as const;
+export const INTAKE_SCENARIOS = ['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase', 'job-search', 'employer-hiring'] as const;
 export type IntakeScenario = (typeof INTAKE_SCENARIOS)[number];
 
 export interface IntakeAnswer { question: string | null; text: string; at: string }
@@ -43,6 +44,7 @@ export const INTAKE_DEFAULT_SYSTEM_PROMPT = `Ты — модуль первич�
 - "investment" — инвестиционные предложения, советники, доходность, комиссии.
 - "major-purchase" — покупка жилья или автомобиля: варианты, встречи с продавцами.
 - "job-search" — человек сам ищет работу: составить резюме, оценить вакансии, куда откликаться.
+- "employer-hiring" — компания нанимает СЕБЕ (не агентство для клиента): «нам нужен сотрудник», внутренний бриф, текст вакансии, свои собеседования, оффер.
 - "UNIVERSAL" — любой другой спор, переговоры или решение.
 Отвечай ТОЛЬКО JSON без пояснений:
 {"scenario": string, "confidence": number 0..1, "followUpQuestion": string|null,
@@ -81,6 +83,11 @@ export function landingContextHint(source: string | null | undefined): string | 
     return 'Контекст: пользователь пришёл с посадочной страницы для рекрутеров и агентств — он нанимает ' +
       '(вакансия, кандидаты, собеседования). Если описание не противоречит этому явно, это сценарий "interview-pool".';
   }
+  // Пункт [job-domain-v2] §8.5 — третья аудитория лендинга «Нанимаю сам».
+  if (source === 'employer_landing') {
+    return 'Контекст: пользователь пришёл с посадочной страницы для работодателей — компания нанимает сотрудника себе ' +
+      '(внутренний бриф, текст вакансии, собеседования, оффер). Если описание не противоречит этому явно, это сценарий "employer-hiring".';
+  }
   return null;
 }
 
@@ -101,6 +108,7 @@ export class IntakeService {
     private readonly investment: InvestmentOnboardingService,
     private readonly majorPurchase: MajorPurchaseOnboardingService,
     private readonly jobSearch: JobSearchOnboardingService,
+    private readonly employerHiring: EmployerHiringService,
   ) {}
 
   private async findOwnedSession(userId: string, sessionId: string) {
@@ -224,7 +232,7 @@ export class IntakeService {
    * предложил, пользователь выбрал; выбор может отличаться от предложения —
    * оба сохраняются. */
   async dispatch(userId: string, sessionId: string, scenario: IntakeScenario, options: { contractType?: 'PRENUP' | 'DIVORCE_SETTLEMENT' } = {}) {
-    if (!INTAKE_SCENARIOS.includes(scenario)) throw new BadRequestException(`Unknown scenario: ${scenario}`);
+    if (!INTAKE_SCENARIOS.includes(scenario)) throw new BadRequestException(`Неизвестный сценарий: ${scenario}`);
     const session = await this.findOwnedSession(userId, sessionId);
     if (session.status === IntakeStatus.DISPATCHED) throw new BadRequestException('Сессия уже передана в сценарий');
     const answers = (session.answers as unknown as IntakeAnswer[]) ?? [];
@@ -276,6 +284,7 @@ export class IntakeService {
       case 'investment': return this.investment;
       case 'major-purchase': return this.majorPurchase;
       case 'job-search': return this.jobSearch;
+      case 'employer-hiring': return this.employerHiring;
     }
   }
 

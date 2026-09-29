@@ -13,7 +13,13 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Сверка «половины операции» 2026-09-04: находка и её основание
+    // пишутся одной транзакцией, поэтому фейк её поддерживает. Он
+    // выполняет колбэк на себе же — отката у in-memory фейка нет, и
+    // притворяться, что есть, было бы хуже отсутствия: тест держит
+    // ФАКТ вызова в транзакции (см. atomicity-spec), а не её семантику.
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedConversation(c: any) { conversations.set(c.id, c); },
     _seedTranscript(t: any) { transcripts.set(t.id, t); },
@@ -77,6 +83,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 class FakeAIRouterService {
@@ -168,7 +175,7 @@ async function run() {
     ]);
     const svc = new ManipulationDetectorService(prisma as any, fakeRouter as any);
 
-    const created = await svc.detect(USER_ID, CONV_ID);
+    const { points: created } = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created.length, 1, 'один сигнал создан');
     assertEqual(created[0].signalType, 'MANIPULATION_PATTERN', 'signalType корректный');
     assertEqual(created[0].technique, 'whataboutism', 'technique из ответа AI');
@@ -185,7 +192,7 @@ async function run() {
     ]);
     const svc = new ManipulationDetectorService(prisma as any, fakeRouter as any);
 
-    const created = await svc.detect(USER_ID, CONV_ID);
+    const { points: created } = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created.length, 1, 'только валидная точка создана');
   });
 
@@ -213,7 +220,7 @@ async function run() {
     // resolveTechniqueAndDescription() не найдёт, что резолвить.
     prisma._seedAIInference({ id: fakeRouter.aiInferenceId, output: fakeRouter.responseText });
 
-    const list = await svc.list(USER_ID, CONV_ID);
+    const { points: list } = await svc.list(USER_ID, CONV_ID);
     assertEqual(list.length, 2, 'оба сигнала видны через list() без нового AI-вызова');
     assertEqual(list[0].technique, 'переход на личности', 'technique восстановлен для первого по порядку сегмента');
     assertEqual(list[1].technique, 'whataboutism', 'technique восстановлен для второго');

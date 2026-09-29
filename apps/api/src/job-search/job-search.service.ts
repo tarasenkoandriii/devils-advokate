@@ -19,14 +19,21 @@
 //    сверка возвращает покрытие критериев + нейтральные заметки,
 //    решение «откликаться ли» принимает кандидат.
 
-import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { takeSource, type SourceIntake } from '../common/source-intake';
+import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../common/unique-violation';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { JobSearchCriterionCategory, JobVacancyLocationMatch } from '@prisma/client';
+import { ClauseCoverage, EvidenceKind, JobSearchCriterionCategory, JobVacancyLocationMatch, TermsClauseKind, TermsSide } from '@prisma/client';
+import { TermsSheetService } from '../terms-sheet/terms-sheet.service';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { ExtractedJobSearchConfigDraft } from './job-search-onboarding.service';
 import { assertOwnedJobSearchProject } from './job-search-access';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { assertEveryElementHasEvidence } from './cv-evidence';
+// Чистая функция, не сервис: импорт односторонний и DI не задевает
+// (vacancy-intake сам импортирует только job-search-access).
+import { contentHashOf } from '../vacancy-intake/vacancy-intake.service';
 
 const CV_TASK_TYPE = 'job-search-cv-draft';
 const MATCH_TASK_TYPE = 'job-search-vacancy-match';
@@ -108,9 +115,15 @@ const MATCH_SYSTEM_PROMPT =
 
 @Injectable()
 export class JobSearchService {
+  private readonly logger = new Logger(JobSearchService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    // Пункт [job-domain-v2] §6.2: matchBreakdown зеркалится в лист
+    // VACANCY_RESPONSE черновиками позиций (если лист открыт). Optional —
+    // спеки v1 конструируют сервис двумя аргументами.
+    @Optional() private readonly sheets?: TermsSheetService,
   ) {}
 
   async createConfig(userId: string, projectId: string, draft: ExtractedJobSearchConfigDraft) {
@@ -118,30 +131,46 @@ export class JobSearchService {
 
     const existing = await this.prisma.jobSearchConfig.findUnique({ where: { projectId } });
     if (existing) {
-      throw new BadRequestException(`JobSearchConfig for project ${projectId} already exists`);
+      throw new BadRequestException(`Поиск работы для этого проекта уже настроен`);
     }
     for (const c of draft.criteria) {
       if (!Object.values(JobSearchCriterionCategory).includes(c.category)) {
-        throw new BadRequestException(`Unknown criterion category: ${c.category}`);
+        throw new BadRequestException(`Неизвестная категория критерия: ${c.category}`);
       }
     }
 
-    return this.prisma.jobSearchConfig.create({
-      data: {
-        projectId,
-        desiredRole: draft.desiredRole,
-        city: draft.city ?? undefined,
-        region: draft.region ?? undefined,
-        salaryExpectation: draft.salaryExpectation ?? undefined,
-        currency: draft.currency ?? undefined,
-        employmentFormat: draft.employmentFormat ?? undefined,
-        experienceSummary: draft.experienceSummary ?? undefined,
-        criteria: {
-          create: draft.criteria.map((c) => ({ text: c.text, category: c.category, isRequired: c.isRequired, orderIndex: c.orderIndex })),
+    // Пункт [check-then-create] 2026-09-04: проверка выше остаётся, но
+    // она НЕ гарантия — между ней и вставкой есть окно, и два
+    // одновременных нажатия (двойной тап, повтор при плохой связи)
+    // проходили её оба. `projectId` уникален, поэтому второй вызов падал
+    // с P2002, и человек читал внутреннюю ошибку сервера вместо того же
+    // «уже настроено», что и при обычном повторе. Гонку здесь не
+    // исключить без блокировки, но ответ обязан быть один и тот же
+    // независимо от того, кто успел раньше.
+    try {
+      // `return await`, а не `return`: без await промис уходит из
+      // try/catch, и отказ базы летит мимо обработчика — ошибка
+      // была бы «поймана» только на бумаге.
+      return await this.prisma.jobSearchConfig.create({
+        data: {
+          projectId,
+          desiredRole: draft.desiredRole,
+          city: draft.city ?? undefined,
+          region: draft.region ?? undefined,
+          salaryExpectation: draft.salaryExpectation ?? undefined,
+          currency: draft.currency ?? undefined,
+          employmentFormat: draft.employmentFormat ?? undefined,
+          experienceSummary: draft.experienceSummary ?? undefined,
+          criteria: {
+            create: draft.criteria.map((c) => ({ text: c.text, category: c.category, isRequired: c.isRequired, orderIndex: c.orderIndex })),
+          },
         },
-      },
-      include: { criteria: { orderBy: { orderIndex: 'asc' } } },
-    });
+        include: { criteria: { orderBy: { orderIndex: 'asc' } } },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new BadRequestException(`Поиск работы для этого проекта уже настроен`);
+      throw err;
+    }
   }
 
   async getConfig(userId: string, projectId: string) {
@@ -251,6 +280,9 @@ export class JobSearchService {
     if (!config.cvDraft) {
       throw new BadRequestException('CV ещё не сгенерирован — нечего утверждать');
     }
+    // Приёмка 40 (К-22): импортированный черновик утверждается, только если
+    // КАЖДЫЙ его элемент опирается на цитату из принесённого документа.
+    assertEveryElementHasEvidence(config.cvDraft, config.cvDraftEvidence);
     return this.prisma.jobSearchConfig.update({
       where: { id: config.id },
       include: { criteria: { orderBy: { orderIndex: 'asc' } } }, // см. generateCvDraft
@@ -271,11 +303,12 @@ export class JobSearchService {
     }
 
     let rawText: string;
+    let fetchIntake: SourceIntake;
     try {
       // Свой потолок (аудит 2026-09-02): у страниц вакансий условия
       // часто в самом хвосте, а дефолт fetchUrlText (8000) резал текст
       // раньше, чем срабатывал наш MAX_VACANCY_TEXT_CHARS.
-      rawText = await fetchUrlText(sourceUrl, MAX_VACANCY_TEXT_CHARS);
+      ({ text: rawText, intake: fetchIntake } = await fetchUrlText(sourceUrl, MAX_VACANCY_TEXT_CHARS));
     } catch (err) {
       if (err instanceof UnsafeUrlError || err instanceof UrlFetchError) {
         throw new BadRequestException(err.message);
@@ -290,22 +323,61 @@ export class JobSearchService {
       throw new BadRequestException('Некорректный URL вакансии');
     }
 
+    // Пункт [stored-text-cut] 2026-09-06: длина ДО обрезки сохраняется
+    // вместе с текстом — иначе честная записка «вошли N из M» считала
+    // бы M по уже обрезанному и сообщала «вошло всё».
+    const { text } = takeSource(rawText, MAX_VACANCY_TEXT_CHARS);
     return this.prisma.jobVacancy.create({
       data: {
         configId: config.id,
         sourceUrl,
         siteHost,
-        rawText: rawText.slice(0, MAX_VACANCY_TEXT_CHARS),
+        rawText: text,
+        // Аудит 2026-09-03: вакансия, добавленная ссылкой, оставалась без
+        // contentHash — и дедупликация К-15 при следующем приёме (та же
+        // вакансия, вставленная текстом или присланная пересылкой) её не
+        // видела: сравнение шло по хешу, а у этой стороны его не было.
+        // Совпадение по заголовку тоже не спасало — здесь заголовок не
+        // заполняется. Итог: «одна вакансия на двух площадках» работала
+        // или нет в зависимости от того, каким путём попала первая.
+        contentHash: contentHashOf(text),
+        rawTextTotalChars: fetchIntake.total,
       },
     });
   }
 
+  /** Пункт [state-not-sent] 2026-09-06 — список отдаёт СОСТОЯНИЕ вакансии,
+   * а не только её текстовые поля.
+   *
+   * ЧТО БЫЛО. `select` перечислял десять полей и застыл на том наборе,
+   * который существовал до пункта [job-domain-v2]: `watchEnabled`,
+   * `favorite`, `responseStatus`, `duplicateOfId`, `intakeSource`,
+   * `employerDossierId` в него не попали. Экран вакансий их объявляет
+   * (`interface Vacancy`), рендерит по ним подписи кнопок — и получал
+   * `undefined`. Кнопка слежения ВСЕГДА говорила «Следить за
+   * изменениями», в том числе когда слежение уже включено, и нажатие
+   * на неё его ВЫКЛЮЧАЛО: подпись обещала обратное тому, что делала.
+   * «В избранное» никогда не превращалась в «Убрать из избранного»,
+   * выбранный статус отклика всегда выглядел как «отклика не было»
+   * (включая статусы, принесённые выгрузкой с площадки), а кнопка
+   * «Это не дубликат» не появлялась никогда — отменить склейку дублей
+   * было нельзя.
+   *
+   * Та же форма, что весь этот ряд сверок: ПРОБЕЛ ВЫГЛЯДИТ КАК
+   * ОПРЕДЕЛЁННОСТЬ. Отсутствие поля неотличимо от «выключено», потому
+   * что и то и другое — falsy.
+   *
+   * Набор полей держит тест (audit-2026-09-06-state-not-sent.spec.ts):
+   * он читает `interface Vacancy` экрана и требует, чтобы каждое
+   * объявленное там поле было в этом `select`. Иначе список отстанет
+   * снова — ровно так он и отстал. */
   async listVacancies(userId: string, projectId: string) {
     const config = await this.getConfig(userId, projectId);
     return this.prisma.jobVacancy.findMany({
       where: { configId: config.id },
       orderBy: { createdAt: 'desc' },
-      // rawText в списке не отдаётся — большой и не нужен для таблицы.
+      // rawText в списке не отдаётся — большой и не нужен для таблицы;
+      // экран его и не объявляет.
       select: {
         id: true,
         sourceUrl: true,
@@ -317,6 +389,15 @@ export class JobSearchService {
         matchNotes: true,
         matchedAt: true,
         createdAt: true,
+        intakeSource: true,
+        favorite: true,
+        watchEnabled: true,
+        duplicateOfId: true,
+        responseStatus: true,
+        employerDossierId: true,
+        removedFromSourceAt: true,
+        lastRefetchedAt: true,
+        rawTextTotalChars: true,
       },
     });
   }
@@ -380,6 +461,8 @@ export class JobSearchService {
     const knownIds = new Set(config.criteria.map((c: { id: string }) => c.id));
     const breakdown = parsed.matchBreakdown.filter((b) => knownIds.has(b.criterionId));
 
+    await this.mirrorIntoTermsSheet(vacancyId, breakdown);
+
     return this.prisma.jobVacancy.update({
       where: { id: vacancyId },
       data: {
@@ -391,6 +474,38 @@ export class JobSearchService {
         matchedAt: new Date(),
       },
     });
+  }
+
+  /** Зеркало matchBreakdown → черновики позиций EMPLOYER (покрытие
+   * требований соискателя текстом вакансии) в открытом листе. Best-effort. */
+  private async mirrorIntoTermsSheet(vacancyId: string, breakdown: RawMatch['matchBreakdown']) {
+    if (!this.sheets || breakdown.length === 0) return;
+    try {
+      const sheet = await this.prisma.termsSheet.findUnique({ where: { vacancyId }, select: { id: true } });
+      if (!sheet) return;
+      const clauses = await this.prisma.termsClause.findMany({
+        where: { sheetId: sheet.id, side: TermsSide.CANDIDATE, kind: TermsClauseKind.REQUIREMENT, sourceCriterionId: { not: null }, rejectedAt: null },
+        select: { id: true, sourceCriterionId: true },
+      });
+      const byCriterion = new Map(clauses.map((c) => [c.sourceCriterionId as string, c.id]));
+      for (const b of breakdown) {
+        const clauseId = byCriterion.get(b.criterionId);
+        if (!clauseId || !b.note?.trim()) continue;
+        await this.prisma.clausePosition.create({
+          data: {
+            clauseId,
+            bySide: TermsSide.EMPLOYER,
+            coverage: b.coverage as ClauseCoverage,
+            note: b.note.slice(0, 600),
+            evidenceKind: EvidenceKind.VACANCY_TEXT,
+            evidenceRef: vacancyId, // опора — сама вакансия; note модели — пересказ, не цитата, поэтому evidenceQuote не пишется
+            confirmedAt: null,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Зеркало сверки в лист условий не записано: ${(err as Error).message}`);
+    }
   }
 
   /** Статистика — ДЕТЕРМИНИРОВАННЫЕ агрегаты по собранным вакансиям
@@ -409,7 +524,8 @@ export class JobSearchService {
     let fullRequiredCoverage = 0;
 
     for (const v of vacancies) {
-      bySite[v.siteHost] = (bySite[v.siteHost] ?? 0) + 1;
+      const siteKey = v.siteHost ?? 'без ссылки'; // [job-domain-v2]: вставленный текст / пересылка / копия оффера
+      bySite[siteKey] = (bySite[siteKey] ?? 0) + 1;
       if (v.matchedAt) {
         matched += 1;
         byLocationMatch[v.locationMatch ?? 'UNKNOWN'] += 1;

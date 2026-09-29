@@ -13,13 +13,30 @@
 
 import { useState } from 'react';
 import { grantConsent, hasConsent, listConsents } from '../lib/features';
+import { LOCATION_PURPOSES, locationConsentText } from '../lib/location-purposes';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 const CONSENT_VERSION = 'v1';
-const PURPOSES = ['onboarding-city-hint', 'weather-forecast', 'venue-search'];
+
+// Пункт [consent-purpose] 2026-09-05. Здесь стоял ОДИН список из трёх
+// применений и один текст на все случаи. Проблема была не в списке —
+// он верен, — а в том, что этой же записью согласия открывались ещё
+// два места, где координаты сохраняются навсегда: сервер не смотрел в
+// `purposes` вовсе. Теперь применения — вход компонента, а текст
+// считается из них.
+const DEFAULT_PURPOSES: string[] = [
+  LOCATION_PURPOSES.ONBOARDING_CITY,
+  LOCATION_PURPOSES.WEATHER,
+  LOCATION_PURPOSES.VENUE_SEARCH,
+];
 
 interface LocationConsentPromptProps {
   source: string; // откуда запрошено — для аудита (§3.36 "слово тоже оружие", прозрачность)
+  /** Применения, на которые спрашивают согласие. Не подмешиваются к
+   * умолчанию, а ЗАМЕНЯЮТ его: экран, которому нужна геометка на
+   * доказательстве, не должен заодно выпрашивать погоду. */
+  purposes?: readonly string[];
   onGranted: () => void;
   onCancel: () => void;
 }
@@ -27,17 +44,22 @@ interface LocationConsentPromptProps {
 /** Компонент-гейт: показывает объяснение всех трёх применений
  * геолокации и просит согласие один раз. Используется ПЕРЕД первым
  * вызовом navigator.geolocation в каждом из трёх мест. */
-export function LocationConsentPrompt({ source, onGranted, onCancel }: LocationConsentPromptProps) {
+export function LocationConsentPrompt({ source, purposes, onGranted, onCancel }: LocationConsentPromptProps) {
   const [granting, setGranting] = useState(false);
+  const asked = purposes && purposes.length > 0 ? [...purposes] : DEFAULT_PURPOSES;
 
   async function handleGrant() {
     setGranting(true);
     try {
-      await grantConsent({ consentType: 'LOCATION', version: CONSENT_VERSION, source, purposes: PURPOSES });
+      await grantConsent({ consentType: 'LOCATION', version: CONSENT_VERSION, source, purposes: asked });
       haptic('success');
       onGranted();
-    } catch {
-      haptic('error');
+    } catch (err) {
+      // Пункт [one-buzz-was-the-whole-answer] 2026-09-24. Здесь
+      // стояла одна вибрация. Экран согласия — худшее место для
+      // такого молчания: человек нажал «согласен», запрос упал, и
+      // он уходит, не зная, записано согласие или нет.
+      reportFailure(err, 'Не удалось записать согласие на геолокацию');
     } finally {
       setGranting(false);
     }
@@ -46,11 +68,7 @@ export function LocationConsentPrompt({ source, onGranted, onCancel }: LocationC
   return (
     <div className="location-consent-prompt">
       <p className="steelman-case__label">Доступ к геолокации</p>
-      <p className="conversations-section__hint">
-        Один раз разрешить использование геолокации для: подсказки страны/города при первом входе, прогноза погоды
-        для запланированных встреч, поиска заведений рядом. Координаты никогда не сохраняются — только разовое
-        использование для каждого запроса. Разрешение можно отозвать в любой момент в настройках.
-      </p>
+      <p className="conversations-section__hint">{locationConsentText(asked)}</p>
       <div className="conversations-section__add-actions">
         <button type="button" onClick={handleGrant} disabled={granting}>
           {granting ? 'Разрешаем…' : 'Разрешить'}
@@ -67,10 +85,14 @@ export function LocationConsentPrompt({ source, onGranted, onCancel }: LocationC
  * компонентами перед вызовом navigator.geolocation напрямую, без
  * лишней хук-абстракции (каждый компонент сам хранит своё локальное
  * состояние "жду согласия, потом продолжу"). */
-export async function checkLocationConsent(): Promise<boolean> {
+export async function checkLocationConsent(purpose?: string): Promise<boolean> {
   try {
     const consents = await listConsents();
-    return hasConsent(consents, 'LOCATION');
+    if (purpose === undefined) return hasConsent(consents, 'LOCATION');
+    // Пункт [consent-purpose] 2026-09-05: клиентская проверка обязана
+    // повторять серверную. Если она мягче, экран не покажет вопрос, а
+    // сервер откажет — человек получит отказ вместо вопроса.
+    return consents.some((c) => c.consentType === 'LOCATION' && c.granted && Array.isArray(c.purposes) && c.purposes.includes(purpose));
   } catch {
     return false;
   }

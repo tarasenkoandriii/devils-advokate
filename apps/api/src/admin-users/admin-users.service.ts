@@ -5,9 +5,40 @@
 // реализация — bool-флаг, не готовая RBAC/степени ограничения (см.
 // комментарий над isRestricted в schema.prisma).
 
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+
+/** Пункт [decision-basis] 2026-09-04 — причина ограничения обязательна.
+ *
+ * Продукт требует основание везде: позиция без цитаты не создаётся, факт
+ * без источника не сохраняется, слияние отчитывается о потерянном. И при
+ * этом РЕШЕНИЕ О ЧЕЛОВЕКЕ — отнять девять действий или вход целиком —
+ * принималось с `note?: string` и уходило в базу как `null`. Журнал
+ * фиксировал, ЧТО сделано; «почему» могло остаться пустым.
+ *
+ * Это не формальность: причина — единственное, что отличает решение от
+ * произвола, и единственное, что можно показать самому человеку.
+ *
+ * ПОРОГ ЧЕСТНО МАЛЕНЬКИЙ, и это результат прогона. Первая версия
+ * требовала десять символов — и уронила существующий тест с причиной
+ * «спам». Причина была права, а порог нет: «спам» — настоящее основание,
+ * а не отписка. Тест не может проверить КАЧЕСТВО причины (тот же урок
+ * [guard-audit]: не притворяться, что проверяешь непроверяемое) — он
+ * проверяет НАЛИЧИЕ: три буквы отсекают точку, прочерк и «ок», и не
+ * отсекают ни одного настоящего слова. */
+export const MIN_MODERATION_REASON_LETTERS = 3;
+
+function requireReason(note: string | undefined, what: string): string {
+  const reason = (note ?? '').trim();
+  const letters = (reason.match(/\p{L}/gu) ?? []).length;
+  if (letters < MIN_MODERATION_REASON_LETTERS) {
+    throw new BadRequestException(
+      `Укажите причину: на что опирается решение. Она попадёт в журнал и будет показана самому человеку — без неё ${what} не ставится.`,
+    );
+  }
+  return reason.slice(0, 1000);
+}
 
 export interface AdminUserRow {
   id: string;
@@ -134,7 +165,7 @@ export class AdminUsersService {
     const updated = await this.prisma.user.update({
       where: { id: targetUserId },
       data: restricted
-        ? { isRestricted: true, restrictedAt: new Date(), restrictedNote: note ?? null }
+        ? { isRestricted: true, restrictedAt: new Date(), restrictedNote: requireReason(note, 'ограничение') }
         : { isRestricted: false, restrictedAt: null, restrictedNote: null },
     });
 
@@ -184,7 +215,7 @@ export class AdminUsersService {
     const updated = await this.prisma.user.update({
       where: { id: targetUserId },
       data: blocked
-        ? { isBlocked: true, blockedAt: new Date(), blockedNote: note ?? null }
+        ? { isBlocked: true, blockedAt: new Date(), blockedNote: requireReason(note, 'блокировка') }
         : { isBlocked: false, blockedAt: null, blockedNote: null },
     });
 

@@ -6,6 +6,9 @@ function createFakePrisma() {
   const applications: any[] = [];
   const approvedVenues: any[] = [];
   const bookingConfirmations: any[] = [];
+  // Аудит 2026-09-03 (сверка доступа): ссылка на встречу из тела запроса
+  // теперь проверяется на владение.
+  const scheduledConversations: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
@@ -16,6 +19,11 @@ function createFakePrisma() {
     _getApplications() { return applications; },
     _getApprovedVenues() { return approvedVenues; },
     _getBookingConfirmations() { return bookingConfirmations; },
+    _seedScheduledConversation(c: any) { scheduledConversations.push(c); },
+    scheduledConversation: {
+      findFirst: async ({ where }: any) =>
+        scheduledConversations.find((c) => c.id === where.id && c.ownerId === where.project?.ownerId) ?? null,
+    },
 
     user: {
       findUnique: async ({ where }: any) => users.get(where.id) ?? null,
@@ -60,6 +68,16 @@ function createFakePrisma() {
         return c;
       },
       findMany: async ({ where }: any) => bookingConfirmations.filter((c) => c.approvedVenueId === where.approvedVenueId),
+      // Пункт [self-reported-money] 2026-09-05: одна отметка на человека
+      // в день — фейк умеет findFirst с теми же условиями, иначе
+      // проверка ограничения проверяла бы поведение фейка.
+      findFirst: async ({ where }: any) =>
+        bookingConfirmations.find(
+          (c) =>
+            c.approvedVenueId === where.approvedVenueId &&
+            (where.confirmedByUserId === undefined || c.confirmedByUserId === where.confirmedByUserId) &&
+            (!where.createdAt?.gte || c.createdAt >= where.createdAt.gte),
+        ) ?? null,
     },
   };
 }
@@ -86,10 +104,15 @@ async function assertThrowsAsync(fn: () => Promise<unknown>, expectedType: any, 
 }
 
 const USER_ID = 'user-1';
+// Пункт [self-reported-money] 2026-09-05: второй обычный человек — для
+// проверки, что ограничение «одна отметка в день» бьёт по повтору
+// ОДНОГО, а не по тому, что в заведение сходили двое.
+const OTHER_USER_ID = 'user-2';
 const MODERATOR_ID = 'moderator-1';
 
 function seedUsers(prisma: ReturnType<typeof createFakePrisma>) {
   prisma._seedUser({ id: USER_ID });
+  prisma._seedUser({ id: OTHER_USER_ID });
   prisma._seedUser({ id: MODERATOR_ID, isVenueModerator: true });
 }
 
@@ -264,6 +287,48 @@ async function run() {
     assertEqual(updated.isPriorityPartner, true, 'флаг включён');
   });
 
+  // ── Пункт [operator-money-untraced] 2026-09-24 ──
+  //
+  // Одобрение и отклонение заявки аудировались с самого начала (два
+  // теста выше). Два других решения оператора по тому же заведению —
+  // СУММА реферальной платы и ПОДЪЁМ над органической выдачей — следа
+  // не оставляли. Из пяти операторских действий по заведениям без
+  // аудита были ровно те, что про деньги и про место в выдаче.
+  test('КЛЮЧЕВОЙ ТЕСТ [operator-money-untraced]: согласование платы пишется в журнал, со старым и новым значением', async () => {
+    const prisma = createFakePrisma();
+    seedUsers(prisma);
+    prisma._seedApprovedVenue({ name: 'x', referralFeeAmount: 3 });
+    const [venue] = prisma._getApprovedVenues();
+    const recorded: any[] = [];
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async (r: any) => { recorded.push(r); return r; } } as any);
+
+    await svc.setReferralFee(MODERATOR_ID, venue.id, 7.5);
+
+    assertEqual(recorded.length, 1, 'запись ровно одна');
+    assertEqual(recorded[0].action, 'approved_venue.referral_fee_set', 'действие названо');
+    assertEqual(recorded[0].actorId, MODERATOR_ID, 'назван тот, кто решил');
+    // Старое значение обязательно: «поставили 7.5» и «подняли с 3 до
+    // 7.5» — разные сведения, и спор бывает ровно о втором.
+    assertEqual(recorded[0].before.referralFeeAmount, 3, 'старое значение названо');
+    assertEqual(recorded[0].after.referralFeeAmount, 7.5, 'новое значение названо');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [operator-money-untraced]: подъём над органической выдачей пишется в журнал', async () => {
+    const prisma = createFakePrisma();
+    seedUsers(prisma);
+    prisma._seedApprovedVenue({ name: 'x' });
+    const [venue] = prisma._getApprovedVenues();
+    const recorded: any[] = [];
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async (r: any) => { recorded.push(r); return r; } } as any);
+
+    await svc.setPriorityPartner(MODERATOR_ID, venue.id, true);
+
+    assertEqual(recorded.length, 1, 'запись ровно одна');
+    assertEqual(recorded[0].action, 'approved_venue.priority_partner_set', 'действие названо');
+    assertEqual(recorded[0].before.isPriorityPartner, false, 'прежнее состояние названо');
+    assertEqual(recorded[0].after.isPriorityPartner, true, 'новое состояние названо');
+  });
+
   test('confirmBooking() бросает NotFoundException для несуществующего заведения', async () => {
     const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
     await assertThrowsAsync(() => svc.confirmBooking(USER_ID, 'nonexistent'), NotFoundException, 'confirmBooking() на несуществующее заведение');
@@ -280,6 +345,24 @@ async function run() {
     // Ставка поменялась ПОСЛЕ подтверждения — старая запись не должна измениться.
     prisma._getApprovedVenues()[0].referralFeeAmount = 100;
     assertEqual(prisma._getBookingConfirmations()[0].referralFeeOwed, 5, 'уже созданная запись не пересчиталась задним числом вслед за новой ставкой');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ: чужую встречу нельзя привязать к своему подтверждению брони', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedApprovedVenue({ id: 'venue-1', name: 'Кафе', referralFeeAmount: null });
+    prisma._seedScheduledConversation({ id: 'sched-mine', ownerId: USER_ID });
+    prisma._seedScheduledConversation({ id: 'sched-alien', ownerId: 'other-user' });
+    const svc = new VenueApplicationService(prisma as any, {} as any, { record: async () => ({}) } as any);
+
+    const ok = await svc.confirmBooking(USER_ID, 'venue-1', 'sched-mine');
+    assertEqual(ok.scheduledConversationId, 'sched-mine', 'своя встреча привязывается');
+
+    await assertThrowsAsync(
+      () => svc.confirmBooking(USER_ID, 'venue-1', 'sched-alien'),
+      NotFoundException,
+      'чужая встреча в своём подтверждении',
+    );
+    assertEqual(prisma._getBookingConfirmations().length, 1, 'вторая строка не создана');
   });
 
   test('confirmBooking() честно сохраняет referralFeeOwed=null, если комиссия не согласована', async () => {
@@ -305,12 +388,19 @@ async function run() {
     prisma._seedApprovedVenue({ id: 'venue-1', name: 'Кафе', referralFeeAmount: 5 });
     const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
+    // Пункт [self-reported-money] 2026-09-05: здесь один и тот же
+    // человек отмечался дважды, и проверка требовала, чтобы обе отметки
+    // легли в сумму. То есть тест ЗАКРЕПЛЯЛ находку: счётчик, которым
+    // один человек может двигать деньги чужого заведения. Отметки теперь
+    // от РАЗНЫХ людей — это и есть случай, ради которого сумма считается.
     await svc.confirmBooking(USER_ID, 'venue-1');
-    await svc.confirmBooking(USER_ID, 'venue-1');
+    await svc.confirmBooking(OTHER_USER_ID, 'venue-1');
 
     const summary = await svc.getCommissionSummary(MODERATOR_ID, 'venue-1');
-    assertEqual(summary.totalBookingsConfirmed, 2, 'обе брони учтены');
-    assertEqual(summary.totalFeesOwed, 10, 'сумма к оплате = 5 + 5');
+    assertEqual(summary.totalBookingsConfirmed, 2, 'обе отметки учтены');
+    assertEqual(summary.totalFeesOwed, 10, 'расчётная сумма = 5 + 5');
+    assertEqual(summary.distinctReporters, 2, 'отметились двое разных людей');
+    assertEqual(summary.basis, 'self-reported', 'происхождение чисел названо');
   });
 
   for (const [name, fn] of scenarios) {

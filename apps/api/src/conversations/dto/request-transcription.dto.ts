@@ -1,4 +1,9 @@
-export interface RequestTranscriptionDto {
+import { IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class RequestTranscriptionDto {
   // Пункт [blob-upload] 2026-08-31: поле стало ОПЦИОНАЛЬНЫМ.
   //
   // Раньше оно было единственным источником файла: клиент сначала
@@ -14,17 +19,18 @@ export interface RequestTranscriptionDto {
   // audioBlobPathname. Оба сразу — ошибка, а не «возьмём какой-нибудь»:
   // молчаливый выбор источника означал бы, что пользователь думает,
   // будто расшифровывается один файл, а расшифровывается другой.
-  audioUrl?: string;
-  languageCode?: string;
+  @IsOptional() @IsString() @MaxLength(2000) audioUrl?: string;
+  // BCP-47 в том виде, в каком его шлёт клиент: 'ru', 'uk', 'en-US'.
+  @IsOptional() @IsString() @Matches(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$/) languageCode?: string;
   /** Пункт [stt-multi] 2026-09-02: провайдер, которому уже отданы байты
    *  (ответ шага загрузки). Ссылка загрузки одного провайдера другому
    *  бесполезна — с этим полем задача уходит туда же, куда файл, и
    *  фоллбек не пытается отдать соседу чужой URL. */
-  sttProvider?: 'soniox' | 'assemblyai' | 'elevenlabs';
+  @IsOptional() @IsIn(['soniox', 'assemblyai', 'elevenlabs']) sttProvider?: 'soniox' | 'assemblyai' | 'elevenlabs';
   /** Пункт [multimodal] §9.1 — паралингвистический проход включается
    * ОТДЕЛЬНЫМ явным выбором на разговор, не по умолчанию: это
    * дополнительная передача аудио дополнительному провайдеру.
    * Требует файла в blob (прямая загрузка) — потоковый путь файла не
    * оставляет, комментировать подачу не по чему. */
-  enableParalinguistics?: boolean;
+  @IsOptional() @IsBoolean() enableParalinguistics?: boolean;
 }

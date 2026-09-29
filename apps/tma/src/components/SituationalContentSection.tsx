@@ -16,6 +16,7 @@ import {
 } from '../lib/features';
 import { SituationalAnecdote, SituationalQuote } from '../lib/types';
 import { SpeakButton } from './SpeakButton';
+import { ModelParaphrase } from './ModelParaphrase';
 
 interface SituationalContentSectionProps {
   projectId: string;
@@ -97,9 +98,11 @@ export function SituationalContentSection({ projectId }: SituationalContentSecti
 
       {quotes.length > 0 && (
         <div className="situational-content-section__item">
-          <span className="steelman-case__label">🔵 Цитата</span>
-          <span>{quotes[0].quoteText}</span>
-          <span className="situational-content-section__source">— {quotes[0].sourceReference}</span>
+          {/* Пункт [quotation-marks] 2026-09-05: метка была «🔵 Цитата»,
+              а 🔵 в этом продукте означает ПУБЛИЧНЫЙ ФАКТ — то есть
+              установленное. Под ней стоял парафраз, которого продукт сам
+              же просил у модели вместо цитаты. */}
+          <ModelParaphrase text={quotes[0].quoteText} source={quotes[0].sourceReference} />
           <SpeakButton text={quotes[0].quoteText} />
         </div>
       )}
@@ -111,10 +114,10 @@ export function SituationalContentSection({ projectId }: SituationalContentSecti
         </div>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <div className="conversations-section__add-actions">
         <button type="button" onClick={handleShowQuote} disabled={generatingQuote}>
-          {generatingQuote ? 'Подбираем…' : 'Показать релевантную цитату'}
+          {generatingQuote ? 'Подбираем…' : 'Подобрать уместный фрагмент'}
         </button>
         <button type="button" onClick={handleShowAnecdote} disabled={generatingAnecdote}>
           {generatingAnecdote ? 'Придумываем…' : 'Показать анекдот'}

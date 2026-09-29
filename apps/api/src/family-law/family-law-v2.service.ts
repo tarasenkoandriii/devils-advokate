@@ -7,8 +7,9 @@
 // той самий сервіс, що DtpV2Service, не паралельна копія.
 
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { FAMILY_ROLE_LABEL, labelFor } from '../common/document-labels';
 import { PrismaService } from '../prisma/prisma.service';
-import { sumMoney } from '../common/money';
+import { budgetByCurrency, moneyWithCurrency, normalizeCurrency } from '../common/money';
 import { CriteriaComparisonService, CrossConsultationCheckResult, NOT_DISCUSSED_PLACEHOLDER } from '../criteria-comparison/criteria-comparison.service';
 import { FamilyLawPartyRole, FamilyLawStatusSource, FamilyLawBudgetCategory, FamilyLawBudgetDirection } from '@prisma/client';
 import { assertOwnedFamilyLawProject } from './family-law-access';
@@ -28,12 +29,12 @@ export class FamilyLawV2Service {
     await this.assertOwnedConfig(userId, configId);
 
     if (!Object.values(FamilyLawPartyRole).includes(role)) {
-      throw new BadRequestException(`Unknown role: ${role}`);
+      throw new BadRequestException(`Неизвестная роль участника: ${role}`);
     }
     if (role === FamilyLawPartyRole.SELF) {
       const existing = await this.prisma.familyLawParty.findFirst({ where: { configId, role: FamilyLawPartyRole.SELF } });
       if (existing) {
-        throw new BadRequestException('У цього конфігу вже є сторона з role=SELF');
+        throw new BadRequestException('У этого конфига уже есть сторона с role=SELF');
       }
     }
 
@@ -41,7 +42,7 @@ export class FamilyLawV2Service {
       return await this.prisma.familyLawParty.create({ data: { configId, role, displayName } });
     } catch (err: any) {
       if (err?.code === 'P2010' || err?.code === 'P2002') {
-        throw new BadRequestException('У цього конфігу вже є сторона з role=SELF');
+        throw new BadRequestException('У этого конфига уже есть сторона с role=SELF');
       }
       throw err;
     }
@@ -108,7 +109,7 @@ export class FamilyLawV2Service {
   ) {
     await this.assertOwnedConfig(userId, configId);
     if (!Object.values(FamilyLawStatusSource).includes(source as any)) {
-      throw new BadRequestException(`Unknown source: ${source}`);
+      throw new BadRequestException(`Неизвестный источник: ${source}`);
     }
     if (!statusText.trim()) {
       throw new BadRequestException('statusText не может быть пустым');
@@ -145,10 +146,10 @@ export class FamilyLawV2Service {
   ) {
     await this.assertOwnedConfig(userId, configId);
     if (!Object.values(FamilyLawBudgetCategory).includes(category as any)) {
-      throw new BadRequestException(`Unknown category: ${category}`);
+      throw new BadRequestException(`Неизвестная категория: ${category}`);
     }
     if (!Object.values(FamilyLawBudgetDirection).includes(direction as any)) {
-      throw new BadRequestException(`Unknown direction: ${direction}`);
+      throw new BadRequestException(`Неизвестное направление: ${direction}`);
     }
     if (amount < 0) {
       throw new BadRequestException('amount не может быть отрицательным');
@@ -166,7 +167,8 @@ export class FamilyLawV2Service {
       }
     }
     return this.prisma.familyLawBudgetLineItem.create({
-      data: { configId, category: category as any, direction: direction as any, amount, currency, description, partyId, consultationId },
+      // Пункт [budget-invented-a-currency] — см. `dtp-v2.service.ts`.
+      data: { configId, category: category as any, direction: direction as any, amount, currency: normalizeCurrency(currency), description, partyId, consultationId },
     });
   }
 
@@ -182,20 +184,12 @@ export class FamilyLawV2Service {
       }),
     ]);
 
-    const byCurrencyMap = new Map<string, { totalExpense: number; totalCoverage: number }>();
-    for (const item of lineItems) {
-      const key = item.currency ?? 'UNSPECIFIED';
-      const bucket = byCurrencyMap.get(key) ?? { totalExpense: 0, totalCoverage: 0 };
-      if (item.direction === 'EXPENSE') bucket.totalExpense = sumMoney([bucket.totalExpense, item.amount]);
-      else bucket.totalCoverage = sumMoney([bucket.totalCoverage, item.amount]);
-      byCurrencyMap.set(key, bucket);
-    }
-    const byCurrency = [...byCurrencyMap.entries()].map(([currency, v]) => ({
-      currency,
-      totalExpense: v.totalExpense,
-      totalCoverage: v.totalCoverage,
-      netBudget: sumMoney([v.totalExpense, -v.totalCoverage]),
-    }));
+    // Пункт [budget-invented-a-currency] 2026-09-24: группировка была
+    // своя в каждом из трёх доменов и одинаково неверная — строка без
+    // валюты уходила в корзину со словом-заглушкой вместо валюты
+    // проекта, регистр не приводился, а сравнение с целью считалось на
+    // экране. Теперь всё это одно общее правило в `common/money.ts`.
+    const byCurrency = budgetByCurrency(lineItems, config.currency, config.targetBudget);
 
     return {
       lineItems,
@@ -213,23 +207,31 @@ export class FamilyLawV2Service {
     const [parties, assets, statusDeterminations, budget] = await Promise.all([
       this.prisma.familyLawParty.findMany({ where: { configId } }),
       this.prisma.familyLawAsset.findMany({ where: { configId } }),
-      this.prisma.familyLawStatusDetermination.findMany({ where: { configId }, orderBy: { determinedAt: 'desc' }, take: 1 }),
+      this.prisma.familyLawStatusDetermination.findMany({ where: { configId }, orderBy: [{ determinedAt: 'desc' }, { id: 'desc' }], take: 1 }),
       this.getBudget(userId, configId),
     ]);
 
+    // Пункт [draft-spoke-machine] 2026-09-24 — см. тот же разбор в
+    // `dtp-v2.service.ts`. Здесь цена выше: в документе финансовые
+    // данные обеих сторон, и предупреждение об осторожности человек
+    // должен прочитать на своём языке.
     const disclaimer =
-      'Це чернетка-компіляція фактів, зафіксованих користувачем у продукті — НЕ юридично завершений документ, ' +
-      'вимагає перегляду ліцензованим юристом перед використанням чи підписанням. ' +
-      'Реєстр активів нижче містить фінансові дані обох сторін — поводьтесь із цим документом з підвищеною обережністю.';
+      'Это черновик-компиляция фактов, записанных вами в продукте, — НЕ юридически завершённый документ, ' +
+      'он требует проверки лицензированным юристом перед использованием или подписанием. ' +
+      'Реестр активов ниже содержит финансовые данные обеих сторон — обращайтесь с этим документом с повышенной осторожностью.';
 
     const latestStatus = statusDeterminations[0];
     const lines: string[] = [
-      `Сторони: ${parties.map((p: any) => `${p.role}${p.displayName ? ` (${p.displayName})` : ''}`).join(', ') || 'не зазначено'}`,
+      `Стороны: ${parties.map((p: any) => `${labelFor(FAMILY_ROLE_LABEL, p.role)}${p.displayName ? ` (${p.displayName})` : ''}`).join(', ') || 'не указаны'}`,
       latestStatus
-        ? `Статус процесу: ${latestStatus.statusText} (${latestStatus.isOfficial ? 'офіційно підтверджено' : 'попередньо, не підтверджено документом'})`
-        : 'Статус процесу: не зафіксовано',
-      `Активи: ${assets.map((a: any) => `${a.assetType}${a.estimatedValue ? ` (~${a.estimatedValue} ${a.currency ?? ''})` : ''}`).join(', ') || 'не зафіксовано'}`,
-      `Бюджет: ${budget.byCurrency.map((b: any) => `${b.netBudget} ${b.currency}`).join(', ') || 'не зафіксовано'}`,
+        ? `Статус процесса: ${latestStatus.statusText} (${latestStatus.isOfficial ? 'официально подтверждено' : 'предварительно, документом не подтверждено'})`
+        : 'Статус процесса: не зафиксирован',
+      // `assetType` — свободная строка, которую вводит сам человек
+      // (не перечисление), поэтому подписи для неё нет и не нужно:
+      // подставлять словарь к пользовательскому тексту значило бы
+      // переписывать его слова.
+      `Активы: ${assets.map((a: any) => `${a.assetType}${a.estimatedValue ? ` (~${a.estimatedValue} ${a.currency ?? ''})` : ''}`).join(', ') || 'не зафиксированы'}`,
+      `Бюджет: ${budget.byCurrency.map((b: any) => moneyWithCurrency(b.netBudget, b.currency)).join(', ') || 'не зафиксирован'}`,
     ];
 
     return { text: [disclaimer, '', ...lines].join('\n'), generatedAt: new Date().toISOString(), disclaimer };

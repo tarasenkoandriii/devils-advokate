@@ -23,10 +23,16 @@
 
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EXPORT_EXCLUSIONS, EXPORTED_USER_PROFILE_FIELDS, USER_EXPORT_EXCLUSIONS, USER_PROFILE_EXCLUSIONS } from './export-scope';
+import { pagedList, takeWithProbe } from '../common/page';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { createHash } from 'node:crypto';
 import { ExternalArtifactsCleanupService } from '../common/external-artifacts/external-artifacts-cleanup.service';
 import { AIJobStatus, Prisma } from '@prisma/client';
+import { describeDecision } from './decision-labels';
+import { ACCOUNT_NOT_REMOVED_HERE } from './deletion-report';
+import { ownScopeIds, DECISIONS_OUT_OF_SCOPE } from './decision-scope';
+import { thirdPartyLosses, THIRD_PARTY_LOSSES_NOTE } from './deletion-impact';
 
 // 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
 // сам создаёт переменную под именем BLOB_READ_WRITE_TOKEN (без
@@ -66,8 +72,14 @@ export class PrivacyCenterService {
    * - у STT-провайдеров после чтения результата транскрипт удаляется
    *   нами сразу (Пункт [stt-multi], аудит 2026-09-02); что остаётся —
    *   пустая запись задачи со статусом и метаданные по их политике;
-   * - записи AuditLog (юридически обязаны сохраняться, ПД в них нет —
-   *   before/after фильтруются при записи);
+   * - записи журнала аудита. Пункт [audit-trail] 2026-09-04: здесь
+   *   стояло «ПД в них нет — before/after фильтруются при записи».
+   *   Никакой такой фильтрации не существовало: `record()` кладёт
+   *   before/after как есть, и в них попадали заметки модератора о
+   *   человеке. Свободный текст теперь вычищается ЗДЕСЬ, при удалении
+   *   (шаг 5); идентификаторы (`actorId`, `resourceId`) остаются
+   *   намеренно — без них журнал перестаёт быть тем, чем человек может
+   *   оспорить принятое о нём решение;
    * - команды/группы без владельца остаются (без членов). */
   async deleteAccount(userId: string, confirmation: string) {
     if (confirmation !== 'DELETE') {
@@ -87,6 +99,9 @@ export class PrivacyCenterService {
     // 2) аудит до удаления — без telegramId в открытом виде
     const telegramIdHash = createHash('sha256').update(user.telegramId).digest('hex').slice(0, 16);
     const counts = await this.countUserData(userId);
+    // Пункт [cascade-took-a-stranger] 2026-09-26: считаем ДО каскада —
+    // после него считать нечего.
+    const tookFromOthers = await thirdPartyLosses(this.prisma, userId);
     await this.auditLog.record({
       actorId: null,
       action: 'user.deleted',
@@ -111,9 +126,23 @@ export class PrivacyCenterService {
     //    SetNull/Cascade (проверено по схеме).
     const aiTraces = await this.scrubAiTraces(userId);
 
+    // 5) свободный текст в журнале аудита (Пункт [audit-trail]
+    //    2026-09-04). Порядок — последним и вне транзакции намеренно:
+    //    запись `user.deleted` шага 2 уже сделана, каскад уже прошёл, и
+    //    сбой чистки не должен отменить само удаление. Если чистка не
+    //    удалась, число в отчёте будет нулевым — это видно, в отличие от
+    //    прежнего состояния, когда текст оставался и об этом ничего не
+    //    говорилось.
+    const auditScrub = await this.auditLog.scrubFreeTextForDeletedUser(userId);
+
     return {
       deleted: true,
-      removed: { ...counts, aiInferences: aiTraces.inferencesDeleted, aiJobsCancelled: aiTraces.jobsCancelled },
+      removed: {
+        ...counts,
+        aiInferences: aiTraces.inferencesDeleted,
+        aiJobsCancelled: aiTraces.jobsCancelled,
+        auditEntriesScrubbed: auditScrub.auditEntriesScrubbed,
+      },
       externalArtifacts: {
         evidenceBlobs: evidenceCount,
         deleted: blobsDeleted,
@@ -121,13 +150,11 @@ export class PrivacyCenterService {
         conversationAudioBlobs: artifacts.conversationAudioBlobs,
         sttJobsDiscarded: artifacts.sttJobsDiscarded,
       },
-      notRemovedHere: [
-        'Метаданные задач у STT-провайдеров (Soniox, AssemblyAI): текст транскриптов мы удаляем сразу после получения, задачи в полёте — при удалении аккаунта; остаются пустые записи задач по политике провайдера.',
-        'Обезличенные записи AI-вызовов (тип задачи, статус, длительность) — для телеметрии; тексты запросов и ответов удалены.',
-        'Фоновые AI-задачи, уже отправленные провайдеру (Gemini), у нас отменены и результат не сохраняется; у провайдера они завершаются по его политике.',
-        'Журнал аудита — хранится без персональных данных.',
-        'Команды рекрутеров и инвест-группы — остаются без вашего членства.',
-      ],
+      notRemovedHere: [...ACCOUNT_NOT_REMOVED_HERE],
+      // Что забрало у других — тем же списком, что человек видел до
+      // решения. Молчание здесь читалось бы как «ни у кого ничего».
+      tookFromOthers,
+      tookFromOthersNote: THIRD_PARTY_LOSSES_NOTE,
     };
   }
 
@@ -140,20 +167,45 @@ export class PrivacyCenterService {
     const jobIds = jobs.map((j) => j.id);
     if (jobIds.length === 0) return { inferencesDeleted: 0, jobsCancelled: 0 };
 
-    const inferences = await this.prisma.aIInference.deleteMany({ where: { aiJobId: { in: jobIds } } });
-    const cancelled = await this.prisma.aIJob.updateMany({
-      where: { id: { in: jobIds }, status: { in: [AIJobStatus.QUEUED, AIJobStatus.RUNNING] } },
-      data: { status: AIJobStatus.CANCELLED, completedAt: new Date(), partialResult: 'аккаунт удалён — задача отменена' },
-    });
-    await this.prisma.aIJob.updateMany({
-      where: { id: { in: jobIds } },
-      data: { pendingRequest: Prisma.DbNull },
-    });
-    await this.prisma.aIJob.updateMany({
-      where: { id: { in: jobIds }, status: { not: AIJobStatus.CANCELLED } },
-      data: { partialResult: null },
-    });
-    return { inferencesDeleted: inferences.count, jobsCancelled: cancelled.count };
+    // Сверка «половины операции» 2026-09-04: четыре шага шли подряд, и
+    // сбой между ними оставлял часть следов — например, инференсы уже
+    // удалены, а `pendingRequest` (ТЕКСТ запроса пользователя целиком)
+    // ещё на месте. Здесь это хуже обычной половины: пользователь к
+    // этому моменту уже удалён каскадом (шаг 3), он не может ни
+    // повторить удаление, ни увидеть, что оно не доделано. Поэтому одна
+    // операция — либо все следы стёрты, либо ни одного и это видно.
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const inferences = await tx.aIInference.deleteMany({ where: { aiJobId: { in: jobIds } } });
+        const cancelled = await tx.aIJob.updateMany({
+          where: { id: { in: jobIds }, status: { in: [AIJobStatus.QUEUED, AIJobStatus.RUNNING] } },
+          data: { status: AIJobStatus.CANCELLED, completedAt: new Date(), partialResult: 'аккаунт удалён — задача отменена' },
+        });
+        await tx.aIJob.updateMany({
+          where: { id: { in: jobIds } },
+          data: { pendingRequest: Prisma.DbNull },
+        });
+        await tx.aIJob.updateMany({
+          where: { id: { in: jobIds }, status: { not: AIJobStatus.CANCELLED } },
+          data: { partialResult: null },
+        });
+        return { inferencesDeleted: inferences.count, jobsCancelled: cancelled.count };
+      });
+    } catch (err) {
+      // Аккаунта уже нет — пожаловаться некому. Запись в аудит с перечнем
+      // джоб делает остаток ВИДИМЫМ оператору: молчаливо оставленные
+      // тексты человека — худший исход именно здесь. Автоматического
+      // повтора нет сознательно (нужна очередь и своя сторожевая); чего
+      // нет, о том сказано в TODO.md, а не изображено работающим.
+      await this.auditLog.record({
+        actorId: null,
+        action: 'user.deleted.ai_scrub_failed',
+        resource: 'AIJob',
+        resourceId: userId,
+        after: { jobIds, reason: err instanceof Error ? err.message : String(err) },
+      });
+      throw err;
+    }
   }
 
   private async countUserData(userId: string) {
@@ -224,9 +276,93 @@ export class PrivacyCenterService {
    * список того, что НЕ входит и почему. Полнота проверяется тестом по
    * ключам ответа: новая коллекция без записи здесь — падение теста, а
    * не тихая неполнота. */
+  /** Решения, принятые О ЧЕЛОВЕКЕ, — единственное место этого запроса.
+   *
+   * Пункт [right-with-no-door] 2026-09-25. Раздел существовал только
+   * внутри выгрузки, то есть прочитать решения о себе человек мог, лишь
+   * скачав JSON-файл — в приложении внутри Telegram, на телефоне. При
+   * этом продукт сам говорит ему, что запись о решении «единственное
+   * свидетельство того, что решение принималось, и то, чем его можно
+   * оспорить». Право было названо, двери к нему не было.
+   *
+   * Заметка модератора не отбирается ПОИМЁННЫМ select и здесь: это его
+   * рабочая формулировка, а не факт о человеке. Пробный потолок
+   * (`takeWithProbe` + `pagedList`) — чтобы обрезанный список не
+   * выглядел полным ни в файле, ни на экране. */
+  /** Что удаление аккаунта заберёт у ДРУГИХ людей.
+   *
+   * Пункт [cascade-took-a-stranger] 2026-09-26. Один метод на два пути —
+   * предупреждение до решения и отчёт после, — чтобы числа в них не
+   * разошлись (урок пункта [screen-said-what-server-unsaid]). */
+  thirdPartyLosses(userId: string) {
+    return thirdPartyLosses(this.prisma, userId);
+  }
+
+  async readDecisions(userId: string) {
+    // Пункт [door-opened-onto-a-corner] 2026-09-25: область журнала
+    // описана реестром, а не выражением здесь. Прежняя версия отбирала
+    // строки по `User` и `Project` — и дотягивалась до девяти
+    // расшифрованных действий из тридцати четырёх. Остальные,
+    // среди которых рассмотренная заявка, отозванное согласие и
+    // отозванный оффер, на экран не попадали, а пустой раздел при этом
+    // УТВЕРЖДАЛ, что решений не принималось.
+    const [accountWhere, projectWhere, belongingsWhere] = await Promise.all([
+      ownScopeIds(this.prisma, userId, 'account'),
+      ownScopeIds(this.prisma, userId, 'project'),
+      ownScopeIds(this.prisma, userId, 'belongings'),
+    ]);
+
+    // `select` и `orderBy` выписаны в каждом запросе, а не вынесены в
+    // переменную: сверка [tie-is-random] сработала на первой версии, и
+    // сработала справедливо — переменная прячет порядок от того, кто
+    // читает запрос, а у среза с потолком порядок и есть единственная
+    // гарантия, что «последние 200» — это одни и те же 200.
+    //
+    // Группа с пустым списком видов ДОЛЖНА давать пустой результат, а не
+    // весь журнал: `OR: []` в Prisma не сужает ничего, поэтому запрос не
+    // делается вовсе.
+    const read = async (where: Array<{ resource: string; resourceId: { in: string[] } }>) =>
+      where.length === 0
+        ? []
+        : this.prisma.auditLogEntry.findMany({
+            where: { OR: where },
+            select: { action: true, resource: true, resourceId: true, createdAt: true },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: takeWithProbe(),
+          });
+
+    const [accountRows, projectRows, belongingsRows] = await Promise.all([
+      read(accountWhere),
+      read(projectWhere),
+      read(belongingsWhere),
+    ]);
+
+    return {
+      accountDecisions: pagedList(accountRows),
+      projectDecisions: pagedList(projectRows),
+      belongingsDecisions: pagedList(belongingsRows),
+    };
+  }
+
   async exportData(userId: string) {
-    const [projects, people, consents, intakeSessions, candidateProfiles, mediaReviewQueues, safeShareActions] =
-      await Promise.all([
+    const [
+      projects,
+      people,
+      consents,
+      intakeSessions,
+      candidateProfiles,
+      mediaReviewQueues,
+      safeShareActions,
+      // Пункт [export-user-scope] 2026-09-06 — связи САМОГО аккаунта.
+      // Реестр закрывал связи проекта и на том останавливался; из
+      // шестнадцати связей User в выгрузке были семь.
+      profile,
+      libraryEntries,
+      venueApplications,
+      venueBookingConfirmations,
+      sentCandidateShares,
+      voicePrint,
+    ] = await Promise.all([
         this.prisma.project.findMany({
           where: { ownerId: userId },
           include: {
@@ -257,6 +393,24 @@ export class PrivacyCenterService {
             outcomeScenarios: true,
             protocols: true,
             closingMessages: true,
+            // Сверка экспорта 2026-09-04: из 42 связей проекта в выгрузку
+            // попадали 19, и `notIncluded` про остальные 23 не говорил
+            // ничего — человек получал файл, который выглядит полным.
+            // Добавлено всё, что является содержанием его работы; что
+            // осознанно не идёт и почему — в `export-scope.ts`, и это
+            // теперь проверяется тестом против схемы.
+            missingInformationChecks: true,
+            archetypePerspectives: true,
+            situationalQuotes: true,
+            situationalAnecdotes: true,
+            schedulerAdvice: true,
+            breakingQuestionSets: true,
+            termsSheets: true,
+            clientBriefs: true,
+            clientReports: true,
+            employerDossiers: true,
+            agencyEngagements: true,
+            candidatePipelineStatuses: true,
           },
         }),
         this.prisma.person.findMany({
@@ -268,10 +422,53 @@ export class PrivacyCenterService {
         this.prisma.candidateProfile.findMany({ where: { ownerUserId: userId } }),
         this.prisma.mediaReviewQueue.findMany({ where: { userId }, include: { items: true } }),
         this.prisma.safeShareAction.findMany({ where: { userId } }),
+        // Собственные ответы человека: город, страна, язык, религия,
+        // режим приватности, настройки. Поля перечислены поимённо в
+        // export-scope.ts — новое поле анкеты обязано попадать сюда
+        // сознательно, а не само собой.
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          select: Object.fromEntries(EXPORTED_USER_PROFILE_FIELDS.map((f) => [f, true])) as never,
+        }),
+        this.prisma.libraryEntry.findMany({ where: { submittedByUserId: userId } }),
+        this.prisma.venueApplication.findMany({ where: { submittedByUserId: userId } }),
+        this.prisma.venueBookingConfirmation.findMany({ where: { confirmedByUserId: userId } }),
+        // Журнал собственных передач: кому человек отдавал свои данные.
+        // БЕЗ токенов — токен это действующий ключ к его же данным, и
+        // класть его в файл, который человек может кому-то переслать,
+        // значило бы раздать доступ вместе с выгрузкой.
+        this.prisma.candidateShare.findMany({
+          where: { sharedByUserId: userId },
+          select: {
+            id: true, createdAt: true, expiresAt: true, acceptedAt: true,
+            acceptedIntoMode: true, revokedAt: true, visibleClauseIds: true,
+            consentSource: true, consentTextVersion: true, sourceSheetId: true,
+          },
+        }),
+        // Голосовой отпечаток: сам вектор НЕ отдаётся — см. причину в
+        // notIncluded. Отдаётся то, что человеку осмысленно знать:
+        // отпечаток существует, когда посчитан, какой размерности.
+        this.prisma.voiceEmbedding.findUnique({
+          where: { userId },
+          select: { createdAt: true, updatedAt: true, dimension: true },
+        }),
       ]);
+
+    // Пункт [right-with-no-door] 2026-09-25: тот же метод, что отдаёт
+    // решения ЭКРАНУ. Раньше запрос жил только здесь, и человек мог
+    // прочитать решения о себе единственным способом — скачав JSON на
+    // телефон. Два вызова одного метода вместо двух копий запроса:
+    // разойтись им теперь негде (урок пункта
+    // [screen-said-what-server-unsaid]).
+    const {
+      accountDecisions: decisionsPage,
+      projectDecisions: projectDecisionsPage,
+      belongingsDecisions: belongingsPage,
+    } = await this.readDecisions(userId);
 
     return {
       exportedAt: new Date().toISOString(),
+      profile,
       projects,
       people,
       consents,
@@ -279,11 +476,79 @@ export class PrivacyCenterService {
       candidateProfiles,
       mediaReviewQueues,
       safeShareActions,
+      // Пункт [decisions-spoke-machine] 2026-09-25: к машинному имени
+      // действия добавлена фраза на языке человека и то, КЕМ решение
+      // принято. Само имя оставлено: по нему человек и поддержка
+      // говорят об одной и той же записи.
+      accountDecisions: decisionsPage.items.map(describeDecision),
+      projectDecisions: projectDecisionsPage.items.map(describeDecision),
+      // Пункт [door-opened-onto-a-corner] 2026-09-25: решения о том, что
+      // человеку принадлежит, — рассмотренная заявка, отозванное
+      // согласие на передачу его данных, отозванный оффер. Прежняя
+      // область журнала кончалась на аккаунте и проектах, и этих
+      // решений не было ни в файле, ни на экране.
+      belongingsDecisions: belongingsPage.items.map(describeDecision),
+      libraryEntries,
+      venueApplications,
+      venueBookingConfirmations,
+      sentCandidateShares,
+      voicePrint: voicePrint
+        ? { ...voicePrint, note: 'Голосовой отпечаток посчитан и хранится. Сам вектор в файл не входит — почему, сказано ниже; удалить отпечаток можно в настройках приватности.' }
+        : null,
       notIncluded: [
         'Аудиофайлы — не хранятся (транзит до расшифровки, затем удаляются).',
         'Обезличенные записи AI-вызовов (тип задачи, статус, длительность) — технической телеметрии без вашего текста.',
-        'Журнал аудита — служебный, без персональных данных.',
+        // Пункт [audit-trail] 2026-09-04. Здесь стояло: «Журнал аудита —
+        // служебный, без персональных данных». Неверно дважды: журнал
+        // хранит решения, принятые именно об этом аккаунте, и это данные
+        // о человеке, а не служебные. Теперь такие решения выгружаются
+        // разделом `accountDecisions`, а не включённой остаётся ровно
+        // одна часть — и она названа.
+        'Свободные заметки модератора при решениях о вашем аккаунте: сами решения выгружены в разделе «accountDecisions», но рабочая формулировка оператора — его оценка, а не факт о вас, и в выгрузку не входит.',
+        // Пункт [ceiling-hid-inside-a-total] 2026-09-24. Строка
+        // появляется ТОЛЬКО когда решений действительно больше потолка:
+        // подпись, стоящая всегда, не отвечает на вопрос «мне отдали
+        // всё?» — ровно за это её и критикует шапка `common/page.ts`.
+        // Выгрузка — единственное место, где полнота и есть смысл
+        // файла, и молчаливый потолок здесь хуже, чем где-либо.
+        // Пункт [decisions-spoke-machine] 2026-09-25: та же строка для
+        // решений о проектах — и тоже только когда их действительно
+        // больше потолка.
+        ...(projectDecisionsPage.hasMore
+          ? [
+              `Решения о ваших проектах старше последних ${projectDecisionsPage.limit}: в разделе «projectDecisions» отдаются ${projectDecisionsPage.limit} самых недавних, и их больше. Запросите остальные через поддержку — файл не обрезается молча.`,
+            ]
+          : []),
+        ...(decisionsPage.hasMore
+          ? [
+              `Решения о вашем аккаунте старше последних ${decisionsPage.limit}: в разделе «accountDecisions» отдаются ${decisionsPage.limit} самых недавних, и их больше. Запросите остальные через поддержку — файл не обрезается молча.`,
+            ]
+          : []),
+        ...(belongingsPage.hasMore
+          ? [
+              `Решения о ваших записях старше последних ${belongingsPage.limit}: в разделе «belongingsDecisions» отдаются ${belongingsPage.limit} самых недавних, и их больше. Запросите остальные через поддержку — файл не обрезается молча.`,
+            ]
+          : []),
+        // Пункт [door-opened-onto-a-corner] 2026-09-25: что в область
+        // решений НЕ входит — названо поимённо, а не умолчано. Строка
+        // стоит всегда, потому что отвечает не «сколько показано», а
+        // «где граница»: она не зависит от объёма данных.
+        `Не входят в разделы решений: ${DECISIONS_OUT_OF_SCOPE.map((s) => `${s.resource} — ${s.why}`).join('; ')}.`,
+        'Записи журнала о ваших собственных действиях (что вы сделали в продукте) — они дублируют содержимое разделов выше и не добавляют к нему ничего.',
         'Данные других участников команд и групп — не ваши.',
+        // Сверка экспорта 2026-09-04: раньше список кончался четырьмя
+        // строками выше, а за ними молча оставались 23 вида данных.
+        // Теперь каждое исключение названо и объяснено — реестр в
+        // export-scope.ts, тест не даёт ему отстать от схемы.
+        ...Object.values(EXPORT_EXCLUSIONS),
+        // Пункт [export-user-scope] 2026-09-06 — исключения уровня
+        // аккаунта. Раньше их не было вовсе: список говорил только о
+        // связях проекта, и девять связей самого аккаунта — включая
+        // голосовой отпечаток — не были ни выгружены, ни названы.
+        'Сам вектор голосового отпечатка — 192 числа, по которым вас можно узнать по голосу. Вам они ничего не скажут, а в файле, который вы кому-то перешлёте, это действующий биометрический идентификатор. Факт, дата и размерность отпечатка в выгрузке есть, удаление — в настройках приватности.',
+        'Ключи ваших ссылок-самошерингов — сами передачи в выгрузке есть (когда, кому, что было видно, отозвано ли), но ключ это действующий доступ к вашим данным, и в файл он не кладётся.',
+        ...Object.values(USER_EXPORT_EXCLUSIONS),
+        ...Object.values(USER_PROFILE_EXCLUSIONS),
       ],
     };
   }

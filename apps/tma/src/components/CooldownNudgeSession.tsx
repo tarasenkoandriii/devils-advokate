@@ -143,7 +143,7 @@ export function CooldownNudgeSession({ projectId }: CooldownNudgeSessionProps) {
       )}
       {captureState === 'error' && (
         <>
-          <p className="generation-error">{captureError}</p>
+          <p role="alert" className="generation-error">{captureError}</p>
           <button type="button" onClick={handleStart}>
             Попробовать снова
           </button>

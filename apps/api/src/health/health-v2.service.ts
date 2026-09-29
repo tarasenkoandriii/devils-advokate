@@ -10,7 +10,7 @@
 
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { sumMoney } from '../common/money';
+import { budgetByCurrency, normalizeCurrency } from '../common/money';
 import { HealthBudgetCategory, HealthBudgetDirection } from '@prisma/client';
 import { assertOwnedHealthProject } from './health-access';
 
@@ -31,10 +31,10 @@ export class HealthV2Service {
     await this.assertOwnedConfig(userId, configId);
 
     if (!Object.values(HealthBudgetCategory).includes(category as any)) {
-      throw new BadRequestException(`Unknown category: ${category}`);
+      throw new BadRequestException(`Неизвестная категория: ${category}`);
     }
     if (!Object.values(HealthBudgetDirection).includes(direction as any)) {
-      throw new BadRequestException(`Unknown direction: ${direction}`);
+      throw new BadRequestException(`Неизвестное направление: ${direction}`);
     }
     if (amount < 0) {
       throw new BadRequestException('amount не может быть отрицательным');
@@ -50,7 +50,8 @@ export class HealthV2Service {
     }
 
     return this.prisma.healthBudgetLineItem.create({
-      data: { configId, category: category as any, direction: direction as any, amount, currency, description, consultationId },
+      // Пункт [budget-invented-a-currency] — см. `dtp-v2.service.ts`.
+      data: { configId, category: category as any, direction: direction as any, amount, currency: normalizeCurrency(currency), description, consultationId },
     });
   }
 
@@ -68,20 +69,12 @@ export class HealthV2Service {
       }),
     ]);
 
-    const byCurrencyMap = new Map<string, { totalExpense: number; totalCoverage: number }>();
-    for (const item of lineItems) {
-      const key = item.currency ?? 'UNSPECIFIED';
-      const bucket = byCurrencyMap.get(key) ?? { totalExpense: 0, totalCoverage: 0 };
-      if (item.direction === 'EXPENSE') bucket.totalExpense = sumMoney([bucket.totalExpense, item.amount]);
-      else bucket.totalCoverage = sumMoney([bucket.totalCoverage, item.amount]);
-      byCurrencyMap.set(key, bucket);
-    }
-    const byCurrency = [...byCurrencyMap.entries()].map(([currency, v]) => ({
-      currency,
-      totalExpense: v.totalExpense,
-      totalCoverage: v.totalCoverage,
-      netBudget: sumMoney([v.totalExpense, -v.totalCoverage]),
-    }));
+    // Пункт [budget-invented-a-currency] 2026-09-24: группировка была
+    // своя в каждом из трёх доменов и одинаково неверная — строка без
+    // валюты уходила в корзину со словом-заглушкой вместо валюты
+    // проекта, регистр не приводился, а сравнение с целью считалось на
+    // экране. Теперь всё это одно общее правило в `common/money.ts`.
+    const byCurrency = budgetByCurrency(lineItems, config.currency, config.targetBudget);
 
     return {
       lineItems,

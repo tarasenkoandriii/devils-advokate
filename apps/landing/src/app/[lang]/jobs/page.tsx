@@ -1,6 +1,8 @@
 // Пункт [job-landing] 2026-09-01 — страница /{lang}/jobs
 // (devils-advocate-job-landing-tz.md): две аудитории (кандидат ~70% /
-// агентство ~30%), секция «Честные границы» как дифференциатор,
+// агентство ~30%) плюс третья — работодатель, нанимающий сам (Пункт
+// [job-domain-v2] §8.5, `employer_landing`, честная граница «не отбирает
+// за вас»), секция «Честные границы» как дифференциатор,
 // приватность, FAQ с JSON-LD FAQPage. Отличие от ТЗ, зафиксированное
 // аудитом: v1 БЕЗ скриншотов продукта — реальных экранов TMA в момент
 // реализации нет, а мокапы с выдуманными данными запрещены самим ТЗ
@@ -123,6 +125,7 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
           <AudienceTabs
             candidatesLabel={dict.hero.tabCandidates}
             agenciesLabel={dict.hero.tabAgencies}
+            employersLabel={dict.hero.tabEmployers}
             navLabel={dict.hero.tabsLabel}
           />
 
@@ -192,6 +195,31 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
         </div>
       </section>
 
+      {/* ── Работодатель, нанимающий сам (Пункт [job-domain-v2] §8.5) ── */}
+      <section className="section jobs-audience jobs-audience--employers" id="employers">
+        <div className="container">
+          <h2>{dict.employers.title}</h2>
+          <div className="jobs-points">
+            {dict.employers.points.map((point) => (
+              <div key={point.title} className="jobs-points__item">
+                <h3 className="jobs-points__title">{point.title}</h3>
+                <p className="jobs-points__desc">{point.description}</p>
+              </div>
+            ))}
+          </div>
+          <div className="jobs-final-buttons">
+            <StartInTelegram start="employer_landing" ariaLabel={`${dict.employers.cta} — ${dict.hero.tabEmployers}`}>
+              {dict.employers.cta}
+            </StartInTelegram>
+            {CONTACT_EMAIL && (
+              <a href={`mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(dict.employers.title)}`} className="button button--ghost">
+                {dict.agencies.contactCta}
+              </a>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* ── Честные границы — дифференциатор, не мелкий шрифт (ТЗ §2 п.4) ── */}
       <section className="section jobs-boundaries">
         <div className="container">
@@ -245,6 +273,9 @@ export default function JobsLandingPage({ params }: { params: { lang: Locale } }
             </StartInTelegram>
             <StartInTelegram start="recruiting_landing" ariaLabel={`${dict.finalCta.agencies} — ${dict.hero.tabAgencies}`}>
               {dict.finalCta.agencies}
+            </StartInTelegram>
+            <StartInTelegram start="employer_landing" ariaLabel={`${dict.finalCta.employers} — ${dict.hero.tabEmployers}`}>
+              {dict.finalCta.employers}
             </StartInTelegram>
           </div>
         </div>

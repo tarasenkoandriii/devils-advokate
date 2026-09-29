@@ -240,9 +240,36 @@ const jobSearch: DomainManifest = {
   extras: [],
 };
 
+// ── Найм в компанию ──
+// Пункт [job-domain-v2] §7–§8.3: работодатель — компания, нанимающая себе.
+// Конфиг создаётся пустым вместе с проектом (бриф разбирается до
+// онбординга), поэтому generic-онбординг сюда не заходит: экран
+// EmployerHiringWorkspace сам ведёт от «укажите компанию» к брифу, листу
+// вакансии, кандидатам, офферу и агентствам.
+const employerHiring: DomainManifest = {
+  id: 'employer-hiring', title: 'Найм в компанию', icon: '🏢',
+  tagline: 'Компания нанимает себе: бриф → лист условий → текст вакансии → собеседования → оффер. Не отбирает за вас',
+  routes: {
+    ...standardRoutes('employer-hiring'),
+    checklist: () => '/employer-hiring/onboarding-checklist',
+  },
+  configFields: [
+    { name: 'jobTitle', label: 'Должность', type: 'text', required: true },
+    { name: 'extendedDescription', label: 'Описание', type: 'textarea' },
+    { name: 'salaryRange', label: 'Оплата / вилка', type: 'text' },
+    { name: 'employmentLoad', label: 'Занятость', type: 'select', options: opt(['FULL_TIME', 'PART_TIME']) },
+    { name: 'workArrangement', label: 'Формат', type: 'select', options: opt(['OFFICE', 'REMOTE', 'HYBRID']) },
+    { name: 'officeLocation', label: 'Локация', type: 'text' },
+    { name: 'employmentFormat', label: 'Оформление', type: 'text' },
+  ],
+  hasCriteria: false,
+  entities: [],
+  extras: [],
+};
+
 export const DOMAIN_MANIFESTS: Record<DomainId, DomainManifest> = {
   dtp, 'family-law': familyLaw, health, investment, 'major-purchase': majorPurchase, 'interview-pool': interviewPool,
-  'job-search': jobSearch,
+  'job-search': jobSearch, 'employer-hiring': employerHiring,
 };
 
 export const DOMAIN_LIST: DomainManifest[] = Object.values(DOMAIN_MANIFESTS);

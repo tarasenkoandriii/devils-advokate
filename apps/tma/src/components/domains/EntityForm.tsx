@@ -3,6 +3,7 @@
 // ТЗ §0 — универсальная форма по FieldSpec[]. Один компонент на все
 // сущности/сессии/действия шести доменов.
 import { useState } from 'react';
+import { endOfLocalDay, toDateInputValue } from '../../lib/date-only';
 import { FieldSpec } from '../../lib/domains/types';
 import { haptic } from '../../lib/telegram';
 import { VoiceTextInput } from './VoiceTextInput';
@@ -22,7 +23,13 @@ export function coerceValues(fields: FieldSpec[], raw: Record<string, unknown>):
     if (v === '' || v === undefined || v === null) { delete out[f.name]; continue; }
     if (f.type === 'number' || f.type === 'money') out[f.name] = Number(v);
     else if (f.type === 'bool') out[f.name] = Boolean(v);
-    else if (f.type === 'datetime' || f.type === 'date') out[f.name] = new Date(String(v)).toISOString();
+    // Пункт [date-only] 2026-09-04: `date` и `datetime` разбираются
+    // по-РАЗНОМУ. `2026-09-10` — полночь UTC (и день уезжает западнее
+    // Гринвича), `2026-09-10T14:30` — местное время (и это верно).
+    // Поэтому дата без времени собирается как конец местного дня, а
+    // дата со временем остаётся как была.
+    else if (f.type === 'datetime') out[f.name] = new Date(String(v)).toISOString();
+    else if (f.type === 'date') out[f.name] = endOfLocalDay(String(v));
   }
   return out;
 }
@@ -81,7 +88,7 @@ export function EntityForm({ fields, submitLabel, initial, onSubmit, onCancel }:
           )}
           {f.type === 'bool' && <input type="checkbox" checked={Boolean(values[f.name])} onChange={(e) => set(f.name, e.target.checked)} />}
           {(f.type === 'number' || f.type === 'money') && <input type="number" inputMode="decimal" value={String(values[f.name] ?? '')} onChange={(e) => set(f.name, e.target.value)} />}
-          {f.type === 'date' && <input type="date" value={String(values[f.name] ?? '').slice(0, 10)} onChange={(e) => set(f.name, e.target.value)} />}
+          {f.type === 'date' && <input type="date" value={toDateInputValue(String(values[f.name] ?? '')) || String(values[f.name] ?? '').slice(0, 10)} onChange={(e) => set(f.name, e.target.value)} />}
           {f.type === 'datetime' && <input type="datetime-local" value={String(values[f.name] ?? '').slice(0, 16)} onChange={(e) => set(f.name, e.target.value)} />}
           {(f.type === 'text' || f.type === 'url') && <input type={f.type === 'url' ? 'url' : 'text'} value={String(values[f.name] ?? '')} onChange={(e) => set(f.name, e.target.value)} />}
           {f.type === 'file-base64' && (
@@ -105,7 +112,7 @@ export function EntityForm({ fields, submitLabel, initial, onSubmit, onCancel }:
           );
         }}>📍 Подставить координаты устройства</button>
       )}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <div className="entity-form__actions">
         <button type="button" className="primary" disabled={busy} onClick={submit}>{busy ? '…' : submitLabel}</button>
         {onCancel && <button type="button" className="secondary" disabled={busy} onClick={onCancel}>Отмена</button>}

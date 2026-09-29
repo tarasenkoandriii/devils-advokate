@@ -9,7 +9,13 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Сверка «половины операции» 2026-09-04: находка и её основание
+    // пишутся одной транзакцией, поэтому фейк её поддерживает. Он
+    // выполняет колбэк на себе же — отката у in-memory фейка нет, и
+    // притворяться, что есть, было бы хуже отсутствия: тест держит
+    // ФАКТ вызова в транзакции (см. atomicity-spec), а не её семантику.
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedConversation(c: any) {
       const conv = { id: nextId(), ...c };
       conversations.set(conv.id, conv);
@@ -55,6 +61,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 function createFakeSecrets(apiKey = 'test-fact-check-key') {

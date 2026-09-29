@@ -35,7 +35,17 @@ function createFakePrisma() {
       },
       update: async ({ where, data }: any) => {
         const idx = notes.findIndex((n) => n.id === where.id);
-        notes[idx] = { ...notes[idx], ...data };
+        // Пункт [outside-input] 2026-09-04: сервис перестал писать тело
+        // запроса целиком и перечисляет поля поимённо — значит, в data
+        // теперь приходят и `undefined`. У Prisma `undefined` означает
+        // «не трогать поле»; мок обязан вести себя так же, иначе
+        // частичное обновление в тесте затирало бы соседние поля, чего в
+        // настоящей базе не происходит.
+        const applied: any = {};
+        for (const [key, value] of Object.entries(data)) {
+          if (value !== undefined) applied[key] = value;
+        }
+        notes[idx] = { ...notes[idx], ...applied };
         return notes[idx];
       },
       delete: async ({ where }: any) => {
@@ -132,6 +142,52 @@ async function run() {
 
     const updated = await svc.update(USER_ID, note.id, { content: 'Новый текст' });
     assertEqual(updated.content, 'Новый текст', 'content обновлён');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [outside-input]: присланное сверх ожидаемого не попадает в БД', async () => {
+    // Тип входа — ИНТЕРФЕЙС, то есть ValidationPipe для него бессилен в
+    // принципе (у интерфейса нет метатипа в рантайме), а сам pipe в
+    // проекте работает без `whitelist` и лишние поля не отбрасывает.
+    // Раньше сервис писал тело целиком (`data: input`), поэтому в нём
+    // можно было прислать `projectId` ЧУЖОГО проекта — и заметка
+    // уезжала туда: проверка владения подтверждает право на старую
+    // заметку, а не на новое место.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedProject({ id: 'чужой-проект', ownerId: 'другой-человек' });
+    const svc = new ProtectedNoteService(prisma as any);
+    const note = await svc.create(USER_ID, PROJECT_ID, { type: 'ACE_IN_THE_HOLE' as any, content: 'Мой козырь' });
+
+    await svc.update(USER_ID, note.id, {
+      content: 'Обновлённый козырь',
+      projectId: 'чужой-проект',
+      type: 'FALLBACK_PLAN',
+    } as any);
+
+    const [stored] = prisma._getNotes();
+    assertEqual(stored.content, 'Обновлённый козырь', 'ожидаемое поле обновлено');
+    assertEqual(stored.projectId, PROJECT_ID, 'заметка осталась в своём проекте');
+    assertEqual(stored.type, 'ACE_IN_THE_HOLE', 'тип заметки не подменён из тела запроса');
+  });
+
+  test('[outside-input]: частичное обновление не затирает соседние поля', async () => {
+    // Обратная сторона перечисления полей поимённо: в data теперь
+    // приходят `undefined`, и они обязаны означать «не трогать».
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    const svc = new ProtectedNoteService(prisma as any);
+    const note = await svc.create(USER_ID, PROJECT_ID, {
+      type: 'FALLBACK_PLAN' as any,
+      content: 'План Б',
+      triggerCondition: 'если откажут в рассрочке',
+      planOrder: 1,
+    });
+
+    await svc.update(USER_ID, note.id, { content: 'План Б, уточнённый' });
+
+    const [stored] = prisma._getNotes();
+    assertEqual(stored.triggerCondition, 'если откажут в рассрочке', 'условие срабатывания сохранено');
+    assertEqual(stored.planOrder, 1, 'порядок плана сохранён');
   });
 
   test('update() бросает NotFoundException для чужой заметки', async () => {

@@ -51,13 +51,13 @@ export class AdminSessionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AdminAuthenticatedRequest>();
 
     if (!isOriginAllowed(request.method ?? 'GET', request.headers.origin as string | undefined, process.env.CORS_ORIGIN)) {
-      throw new ForbiddenException('Cross-origin request rejected (CSRF protection)');
+      throw new ForbiddenException('Запрос отклонён: пришёл с чужого домена (защита от CSRF)');
     }
 
     const cookies = parseCookieHeader(request.headers.cookie);
     const token = cookies[ADMIN_SESSION_COOKIE_NAME];
     if (!token) {
-      throw new UnauthorizedException('Admin session cookie is required');
+      throw new UnauthorizedException('Нужен вход в админку');
     }
 
     // include user: ПОВТОРНЫЙ АУДИТ 2026-08-30 — guard проверял только
@@ -71,13 +71,13 @@ export class AdminSessionGuard implements CanActivate {
       include: { user: { select: { isBlocked: true } } },
     });
     if (!session) {
-      throw new UnauthorizedException('Invalid admin session');
+      throw new UnauthorizedException('Сессия админки недействительна — войдите заново');
     }
     if (session.expiresAt <= new Date()) {
-      throw new UnauthorizedException('Admin session expired');
+      throw new UnauthorizedException('Сессия админки истекла — войдите заново');
     }
     if (session.user?.isBlocked) {
-      throw new UnauthorizedException('Account is blocked');
+      throw new UnauthorizedException('Доступ к аккаунту закрыт решением модерации. Решение можно оспорить — напишите в поддержку; запись о нём сохраняется.');
     }
 
     request.userId = session.userId;

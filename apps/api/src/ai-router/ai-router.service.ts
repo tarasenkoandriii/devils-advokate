@@ -11,7 +11,7 @@
 // не сделано на этом проходе: реальный интеграционный прогон против
 // настоящих API-ключей (сеть отключена в среде разработки).
 
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus, ForbiddenException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
@@ -30,6 +30,7 @@ import {
   ProviderHttpError,
 } from './ai-provider-client';
 import { MediaUriResolverService } from './media-uri-resolver.service';
+import { MAX_USER_PROMPT_CHARS, assertWithinLimit } from './prompt-limits';
 import {
   DEFAULT_AI_RESPONSE_LANGUAGE,
   normalizeLanguageCode,
@@ -44,6 +45,10 @@ import {
   ConsentType,
   ScanTargetType,
 } from '@prisma/client';
+import { spendLimit } from '../common/spend-limits';
+import { FROZEN_JOB_REASON } from '../project-freeze/frozen-background';
+import { failureText, type FailureKind, type FailureText } from './failure-reason';
+import { checkJsonMode } from './json-mode';
 
 export interface AIRouterRequest {
   /** Кто инициирует вызов — обязателен для проверки ConsentRecord.
@@ -139,7 +144,12 @@ export interface PendingRequestPayload {
 
 export type AsyncJobOutcome =
   | { kind: 'completed'; jobId: string; aiInferenceId: string }
-  | { kind: 'failed'; jobId: string; reason: string }
+  // Пункт [failure-spoke-to-the-operator] 2026-09-25: вид провала едет
+  // рядом с текстом. Обработчику завершения раньше приходилось узнавать
+  // вид ПО ПОДСТРОКЕ в человеческом тексте — то есть текст сообщения был
+  // негласным контрактом, и его правка молча ломала поведение (тот же
+  // разбор, что в [error-language]).
+  | { kind: 'failed'; jobId: string; reason: string; failureKind?: FailureKind }
   | { kind: 'waiting'; jobId: string };
 
 type ModelVersionWithProvider = {
@@ -150,6 +160,21 @@ type ModelVersionWithProvider = {
     provider: { name: string; apiEndpoint: string | null; credentialRef: string | null };
   };
 };
+
+/** Длина запроса к модели — по строке или по текстовым блокам мультимодального
+ * запроса (медиа считается ссылкой, её объём ограничен своими проверками). */
+function assertPromptWithinLimit(userPrompt: string | ContentBlock[]): void {
+  const text =
+    typeof userPrompt === 'string'
+      ? userPrompt
+      : userPrompt.map((b) => (b.type === 'text' ? b.text : '')).join('');
+  assertWithinLimit(text, MAX_USER_PROMPT_CHARS, 'Запрос к модели');
+}
+
+/** Пункт [background-jobs] 2026-09-04 — потолок порции сторожевой.
+ * Того же порядка, что SUBMIT_BATCH/POLL_BATCH в ai-jobs.controller.ts:
+ * закрытие джобы дешёвое, но тянет за собой сообщение в Telegram. */
+const REAP_BATCH = 50;
 
 @Injectable()
 export class AIRouterService {
@@ -302,6 +327,16 @@ export class AIRouterService {
    * метод, а не копию: копия проверки в каждой точке — способ
    * разъехаться, уже дважды стоивший дыр (см. ConsentService). */
   private async prepareJob(request: AIRouterRequest, lane: AILane, allowReuse = false) {
+    // Аудит границ ввода 2026-09-03: единственный общий потолок длины
+    // запроса. Часть сервисов резала вход сама, часть отдавала текст
+    // клиента как есть — то есть правило существовало, но не было общим,
+    // и живые циклы (клиент вызывает их каждые 15–45 секунд и сам задаёт
+    // содержимое окна) могли слать сколько угодно. Проверка здесь, до
+    // согласия и до скана: платит за длину владелец, а не тот, кто её
+    // прислал. Подробности и почему нельзя молча обрезать — в
+    // prompt-limits.ts.
+    assertPromptWithinLimit(request.userPrompt);
+
     // Согласие на внешний AI — для любых вызовов.
     await this.consent.requireConsent(request.userId, ConsentType.EXTERNAL_AI, request.projectId);
 
@@ -755,6 +790,24 @@ export class AIRouterService {
       jsonMode: request.jsonMode,
     };
 
+    // Пункт [json-mode-was-asked-and-dropped] 2026-09-26. Спрашивается
+    // ЗДЕСЬ, а не по коду вызывающего: главный промпт приходит из базы
+    // (`activePrompt?.template`), и статически он неизвестен. Здесь же
+    // известен и выбранный провайдер — то есть это единственное место,
+    // где видна вся правда о формате ответа.
+    const jsonModeCheck = request.jsonMode
+      ? checkJsonMode(provider.name, request.systemPrompt, request.userPrompt)
+      : null;
+    if (jsonModeCheck?.gap) {
+      // WARN, а не отказ: 63 сервиса из 64 просят формат словами и
+      // работают, и валить задачу из-за пробела в настройке значило бы
+      // сломать то, что сейчас работает. Но и промолчать нельзя —
+      // молчание здесь и есть сам дефект.
+      this.logger.warn(
+        `Задача ${request.taskType}: запрошен jsonMode, но ${jsonModeCheck.gap}`,
+      );
+    }
+
     const result = await client.complete(params, {
       apiKey,
       apiEndpoint: provider.apiEndpoint,
@@ -767,7 +820,12 @@ export class AIRouterService {
         where: { id: jobId },
         data: { schemaValidation: SchemaValidationResult.FAIL, partialResult: result.text },
       });
-      throw new Error(`Output failed validateOutput() check on attempt ${attempt}`);
+      // Каким каналом был задан формат — первое, что нужно оператору при
+      // провале валидации, и единственное, чего в этом сообщении не было.
+      throw new Error(
+        `Output failed validateOutput() check on attempt ${attempt}` +
+          (jsonModeCheck ? ` (${jsonModeCheck.note})` : ' (jsonMode не запрашивался)'),
+      );
     }
 
     const inference = await this.prisma.aIInference.create({
@@ -832,6 +890,58 @@ export class AIRouterService {
     return rows.map((r) => r.id);
   }
 
+  /** Пункт [freeze-stopped-only-the-hands] 2026-09-25 — заморозка на
+   * момент ОТПРАВКИ, а не на момент постановки в очередь. Возвращает
+   * причину человеческим текстом или `null`, если отправлять можно.
+   * Задача без проекта (разборы уровня человека) заморозке не
+   * подвержена: замораживают проект, а не человека. */
+  private async projectFrozenSinceEnqueue(payload: PendingRequestPayload): Promise<string | null> {
+    if (!payload.projectId) return null;
+    const project = await this.prisma.project.findUnique({
+      where: { id: payload.projectId },
+      select: { frozenAt: true },
+    });
+    return project?.frozenAt ? FROZEN_JOB_REASON : null;
+  }
+
+  /** Пункт [revoked-then-sent] 2026-09-06 — согласие на момент ОТПРАВКИ,
+   * а не на момент постановки в очередь.
+   *
+   * Возвращает причину отказа человеческим текстом (она попадёт в
+   * `partialResult` и дойдёт до обработчика завершения) или `null`, если
+   * отправлять по-прежнему можно.
+   *
+   * Проверяются те же две вещи и в том же порядке, что в `prepareJob()`:
+   * общее согласие на внешний AI и — только для запросов с аудио
+   * пользователя — тройка проверок на выход аудио наружу. Повторять
+   * здесь нужно ОБЕ: человек мог отозвать любое из них, и запрет на
+   * аудио не эквивалентен запрету на AI вообще. */
+  private async consentGoneSinceEnqueue(payload: PendingRequestPayload): Promise<string | null> {
+    const hasAi = await this.consent.hasActiveConsent(
+      payload.userId,
+      ConsentType.EXTERNAL_AI,
+      payload.projectId,
+    );
+    if (!hasAi) {
+      return 'запрос отменён: согласие на внешний AI отозвано после постановки задачи в очередь — к провайдеру ничего не отправлялось';
+    }
+
+    const hasBlobMedia =
+      Array.isArray(payload.userPrompt) &&
+      payload.userPrompt.some((b) => b.type === 'media' && b.ref.source === 'blob');
+    if (hasBlobMedia) {
+      try {
+        await this.consent.assertAudioMayLeaveDevice(payload.userId, payload.projectId);
+      } catch (err) {
+        if (err instanceof ForbiddenException) {
+          return `запрос с аудио отменён: разрешение на передачу аудио отозвано после постановки задачи в очередь — файл провайдеру не отправлялся (${err.message})`;
+        }
+        throw err;
+      }
+    }
+    return null;
+  }
+
   /** QUEUED → постановка задачи провайдеру → RUNNING+externalInteractionId.
    *
    * Окно между POST /interactions и записью externalInteractionId
@@ -850,6 +960,44 @@ export class AIRouterService {
         include: { modelVersion: { include: { model: { include: { provider: true } } } } },
       });
       const payload = job.pendingRequest as unknown as PendingRequestPayload | null;
+
+      // ── Пункт [revoked-then-sent] 2026-09-06 ──
+      //
+      // Согласие проверялось ОДИН раз — в `prepareJob()`, при постановке
+      // в очередь. Отправка провайдеру происходит ЗДЕСЬ, и между ними
+      // проходит время: lease очереди — пятнадцать минут, а неудачная
+      // постановка возвращает джобу в QUEUED (`failOrRequeue`), то есть
+      // окно продлевается каждой попыткой.
+      //
+      // Всё это время человек мог нажать «отозвать согласие» — и экран
+      // отзыва обещает ему БЕЗУСЛОВНО: «новых запросов от вашего имени
+      // больше не будет». Запрос ниже — именно новый запрос от его
+      // имени, и он уходил.
+      //
+      // ПРОВЕРКА ИМЕННО ЗДЕСЬ, А НЕ ТОЛЬКО ПРИ ОТЗЫВЕ. Отзыв снимает
+      // джобы из очереди (см. `ConsentService.revoke`), но между
+      // выборкой воркером и этой строкой есть окно, которое отменой не
+      // закрыть — джоба уже забрана. Закрыть его можно только здесь, у
+      // самого вызова: последнее место, где ещё ничего не отправлено.
+      //
+      // И ЭТО НЕ РЕТРАЙ. Отозванное согласие не станет активным от
+      // повторной попытки — джоба падает СРАЗУ и окончательно, минуя
+      // `failOrRequeue`, иначе воркер продолжал бы возвращаться к ней до
+      // исчерпания попыток.
+      // Пункт [freeze-stopped-only-the-hands] 2026-09-25: заморозка
+      // проверяется ЗДЕСЬ ЖЕ и по той же причине, что согласие, — это
+      // последнее место, где ещё ничего не отправлено. Проект могли
+      // заморозить после постановки задачи в очередь, и тогда деньги
+      // ушли бы на проект, который оператор уже остановил.
+      const frozen = payload ? await this.projectFrozenSinceEnqueue(payload) : null;
+      const revoked = frozen ?? (payload ? await this.consentGoneSinceEnqueue(payload) : null);
+      if (revoked) {
+        failed++;
+        const outcome = await this.failJob(jobId, revoked);
+        await this.notifyCompletion(job.taskType, outcome);
+        continue;
+      }
+
       try {
         if (!payload) throw new Error('pendingRequest is empty for a claimed job');
         const provider = job.modelVersion.model.provider;
@@ -868,6 +1016,19 @@ export class AIRouterService {
         // подписанный URL живёт в теле запроса к провайдеру и нигде
         // больше (§9.2).
         const resolvedPrompt = await this.resolvePromptMedia(payload.userPrompt);
+
+        // Пункт [json-mode-was-asked-and-dropped] 2026-09-26 — то же,
+        // что на синхронном пути, и по той же причине: промпт известен
+        // только здесь. Проверяется РАЗРЕШЁННЫЙ промпт — тот самый
+        // текст, который уйдёт провайдеру.
+        if (payload.jsonMode) {
+          const check = checkJsonMode(provider.name, payload.systemPrompt, resolvedPrompt);
+          if (check.gap) {
+            this.logger.warn(
+              `Задача ${job.taskType ?? 'unknown'} (джоба ${jobId}): запрошен jsonMode, но ${check.gap}`,
+            );
+          }
+        }
 
         const { externalId } = await client.submitBackground(
           {
@@ -900,7 +1061,7 @@ export class AIRouterService {
         // источник причины). Транзиентные (429/5xx/сеть) — рекью.
         const outcome =
           err instanceof GeminiApiError && !err.isRetryable
-            ? await this.failJob(jobId, `провайдер отверг запрос (HTTP ${err.httpStatus}, не ретраится): ${err.body.slice(0, 1500)}`)
+            ? await this.failJob(jobId, failureText('provider-rejected', `запрос отвергнут (HTTP ${err.httpStatus}): ${err.body.slice(0, 1500)}`), 'provider-rejected')
             : await this.failOrRequeue(jobId, payload, `постановка задачи провайдеру не удалась: ${err}`);
         await this.notifyCompletion(job.taskType, outcome);
       }
@@ -990,7 +1151,35 @@ export class AIRouterService {
                 where: { id: jobId },
                 data: { schemaValidation: SchemaValidationResult.FAIL, partialResult: text },
               });
-              const outcome = await this.failOrRequeue(jobId, payload, 'выход не прошёл валидацию схемы');
+              // Пункт [failure-spoke-to-the-operator] 2026-09-25: человеку
+              // — что делать, оператору — что произошло.
+              //
+              // Пункт [json-mode-was-asked-and-dropped] 2026-09-26: чем
+              // именно был задан формат ответа — и есть диагноз этого
+              // провала. Раньше в логе стояло «выход не прошёл валидацию
+              // схемы», из чего не следовало ничего.
+              //
+              // Разрешённый промпт здесь не нужен: разрешение меняет
+              // только медиа-блоки, а упоминание формата живёт в
+              // текстовых, и они те же.
+              const jsonModeCheck = payload?.jsonMode
+                ? checkJsonMode(provider.name, payload.systemPrompt, payload.userPrompt)
+                : null;
+              // Формат не запрошен НИ ОДНИМ каналом — причина известна
+              // точно, и она не в материалах человека. Другой текст ему,
+              // а не совет искать другой фрагмент.
+              const kind: FailureKind = jsonModeCheck?.gap
+                ? 'schema-invalid-no-format'
+                : 'schema-invalid';
+              const outcome = await this.failOrRequeue(
+                jobId,
+                payload,
+                failureText(
+                  kind,
+                  `выход не прошёл валидацию схемы (${jsonModeCheck?.note ?? 'jsonMode не запрашивался'})`,
+                ),
+                kind,
+              );
               if (outcome.kind === 'failed') failed++;
               await this.notifyCompletion(job.taskType, outcome);
               break;
@@ -1042,7 +1231,8 @@ export class AIRouterService {
             // постановка упрётся в тот же лимит (§9.3).
             const outcome = await this.failJob(
               jobId,
-              'исчерпан суточный лимит медиа-анализа провайдера (budget_exceeded) — попробуйте завтра либо перейдите на платный тариф',
+              failureText('provider-budget', 'budget_exceeded у провайдера — суточный лимит ключа исчерпан; платный тариф снимает'),
+              'provider-budget',
             );
             failed++;
             await this.notifyCompletion(job.taskType, outcome);
@@ -1051,7 +1241,8 @@ export class AIRouterService {
           case 'incomplete': {
             const outcome = await this.failJob(
               jobId,
-              'ответ упёрся в max_output_tokens (incomplete) — чинится промптом/длительностью, не ретраем',
+              failureText('provider-incomplete', 'ответ упёрся в max_output_tokens (incomplete) — чинится промптом/длительностью, не ретраем'),
+              'provider-incomplete',
             );
             failed++;
             await this.notifyCompletion(job.taskType, outcome);
@@ -1060,14 +1251,15 @@ export class AIRouterService {
           case 'requires_action': {
             const outcome = await this.failJob(
               jobId,
-              'провайдер запросил tool-действие (requires_action), которых мы не передаём — контракт разошёлся',
+              failureText('provider-contract', 'провайдер запросил requires_action, которых мы не передаём — контракт разошёлся'),
+              'provider-contract',
             );
             failed++;
             await this.notifyCompletion(job.taskType, outcome);
             break;
           }
           default: {
-            const outcome = await this.failJob(jobId, `неизвестный статус провайдера: ${String(result.status)}`);
+            const outcome = await this.failJob(jobId, failureText('provider-unknown-status', `неизвестный статус провайдера: ${String(result.status)}`), 'provider-unknown-status');
             failed++;
             await this.notifyCompletion(job.taskType, outcome);
           }
@@ -1082,7 +1274,10 @@ export class AIRouterService {
           // воспроизведено в первом живом прогоне. Падаем сразу, с телом.
           const outcome = await this.failJob(
             jobId,
-            `провайдер отверг опрос задачи (HTTP ${err.httpStatus}, не ретраится): ${err.body.slice(0, 1500)}`,
+            // Сырое тело ответа провайдера — диагностика, её место в
+            // логе; человеку оно ничего не объясняет и может нести
+            // внутренние подробности.
+            failureText('provider-rejected', `опрос задачи отвергнут (HTTP ${err.httpStatus}): ${err.body.slice(0, 1500)}`),
           );
           failed++;
           await this.notifyCompletion(job.taskType, outcome);
@@ -1111,7 +1306,8 @@ export class AIRouterService {
   private async failOrRequeue(
     jobId: string,
     payload: PendingRequestPayload | null,
-    reason: string,
+    reason: string | FailureText,
+    failureKind?: FailureKind,
   ): Promise<AsyncJobOutcome> {
     const job = await this.prisma.aIJob.findUniqueOrThrow({ where: { id: jobId } });
     const maxRetries = payload?.maxRetries ?? 2;
@@ -1125,15 +1321,33 @@ export class AIRouterService {
           leaseExpiresAt: new Date(Date.now() + QUEUED_LEASE_MS),
           // Причина рекью — в partialResult: без неё джоба между
           // попытками выглядит в SQL как «висит без причины».
-          partialResult: `ретрай новой постановкой: ${reason.slice(0, 1500)}`,
+          // Пункт [failure-spoke-to-the-operator] 2026-09-25: между
+          // попытками задача человеку не показывается (она ещё в
+          // работе), поэтому здесь уместна операторская подробность —
+          // она и нужна тому, кто смотрит в SQL.
+          partialResult: `ретрай новой постановкой: ${(typeof reason === 'string' ? reason : reason.operator).slice(0, 1500)}`,
         },
       });
       return { kind: 'waiting', jobId };
     }
-    return this.failJob(jobId, reason);
+    return this.failJob(jobId, reason, failureKind);
   }
 
-  private async failJob(jobId: string, reason: string): Promise<AsyncJobOutcome> {
+  /** Пункт [failure-spoke-to-the-operator] 2026-09-25: в `partialResult`
+   * уходит текст ДЛЯ ЧЕЛОВЕКА — его читает экран. Операторская
+   * подробность пишется в лог рядом с идентификатором задачи и наружу
+   * не выходит. Раньше здесь была одна строка на обоих, написанная для
+   * оператора. */
+  private async failJob(jobId: string, text: FailureText | string, failureKind?: FailureKind): Promise<AsyncJobOutcome> {
+    const pair: FailureText = typeof text === 'string' ? { person: text, operator: text } : text;
+    if (pair.operator !== pair.person) {
+      this.logger.warn(`AI-задача ${jobId} провалена: ${pair.operator}`);
+    }
+    const outcome = await this.failJobWithText(jobId, pair.person);
+    return outcome.kind === 'failed' && failureKind ? { ...outcome, failureKind } : outcome;
+  }
+
+  private async failJobWithText(jobId: string, reason: string): Promise<AsyncJobOutcome> {
     await this.prisma.aIJob.update({
       where: { id: jobId },
       data: {
@@ -1150,23 +1364,42 @@ export class AIRouterService {
   /** Сторожевая (§4.5): протухший lease → FAILED, отдельными
    * сообщениями для QUEUED (воркер не поставил задачу) и RUNNING
    * (провайдер не ответил за EXTERNAL_INTERACTION_MAX_WAIT_MS). */
-  async reapExpired(): Promise<{ reaped: number }> {
+  async reapExpired(): Promise<{ reaped: number; reapFailed: number }> {
+    // Пункт [background-jobs] 2026-09-04 — потолок порции и устойчивость
+    // к одной упавшей строке. Выборка была неограниченной, а
+    // notifyCompletion() ходит наружу (сообщение в Telegram): один отказ
+    // выбрасывал исключение из всего тика, и джобы, стоявшие в списке
+    // после сбойной, оставались непомеченными — не «сторожевая не
+    // справилась», а «сторожевая как будто ничего не нашла». Порядок по
+    // сроку истечения: первым разбирается то, что зависло дольше.
     const expired = await this.prisma.aIJob.findMany({
       where: {
         status: { in: [AIJobStatus.QUEUED, AIJobStatus.RUNNING] },
         leaseExpiresAt: { lt: new Date() },
       },
       select: { id: true, status: true, taskType: true },
+      orderBy: [{ leaseExpiresAt: 'asc' }, { id: 'asc' }],
+      take: REAP_BATCH,
     });
+    let reaped = 0;
+    let reapFailed = 0;
     for (const job of expired) {
       const reason =
         job.status === AIJobStatus.QUEUED
-          ? 'воркер не поставил задачу провайдеру до истечения lease — проверьте pg_cron-джобы ai_jobs'
-          : 'провайдер не завершил задачу за отведённый потолок ожидания (EXTERNAL_INTERACTION_MAX_WAIT_MS); задача могла остаться у провайдера';
-      const outcome = await this.failJob(job.id, reason);
-      await this.notifyCompletion(job.taskType, outcome);
+          ? failureText('worker-never-sent', 'воркер не поставил задачу провайдеру до истечения lease — проверьте pg_cron-джобы ai_jobs')
+          : failureText('provider-timeout', 'провайдер не завершил задачу за EXTERNAL_INTERACTION_MAX_WAIT_MS; задача могла остаться у провайдера');
+      try {
+        const outcome = await this.failJob(job.id, reason, reason.operator.startsWith('worker-never-sent') ? 'worker-never-sent' : 'provider-timeout');
+        await this.notifyCompletion(job.taskType, outcome);
+        reaped++;
+      } catch (err) {
+        reapFailed++;
+        this.logger.warn(
+          `Сторожевая AI-джоб: ${job.id} не удалось закрыть — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
-    return { reaped: expired.length };
+    return { reaped, reapFailed };
   }
 
   /** Пункт [progress-diagnose] 2026-09-01 — инспекция джобы БЕЗ записи:
@@ -1247,8 +1480,9 @@ export class AIRouterService {
     inputHash: string,
     modelVersionId: string,
   ): Promise<AIRouterResult | null> {
-    const rawMinutes = Number(process.env.AI_IDEMPOTENCY_WINDOW_MINUTES ?? '10');
-    const minutes = Number.isFinite(rawMinutes) && rawMinutes >= 0 ? rawMinutes : 10;
+    // Пункт [ceilings-nobody-was-told-about] 2026-09-24: разбор значения
+    // — общий (`common/spend-limits.ts`), проверка на валидность там же.
+    const minutes = spendLimit('AI_IDEMPOTENCY_WINDOW_MINUTES');
     if (minutes === 0) return null;
 
     const since = new Date(Date.now() - minutes * 60 * 1000);
@@ -1272,8 +1506,10 @@ export class AIRouterService {
   }
 
   private async assertUnderDailyAiLimit(userId: string): Promise<void> {
-    const raw = Number(process.env.AI_CALLS_PER_USER_PER_DAY ?? '300');
-    const limit = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 300;
+    // Пункт [ceilings-nobody-was-told-about] 2026-09-24: чтение и
+    // умолчание — из реестра `common/spend-limits.ts`, чтобы число не
+    // жило в двух местах и попадало в документацию само.
+    const limit = spendLimit('AI_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return; // явное отключение
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const count = await this.prisma.aIJob.count({
@@ -1295,8 +1531,7 @@ export class AIRouterService {
    * review, paralinguistics…), отдельного столбца «медиа» у AIJob нет, и
    * заводить его ради счётчика — лишняя миграция. */
   private async assertUnderDailyMediaLimit(userId: string, taskType: string): Promise<void> {
-    const raw = Number(process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY ?? '20');
-    const limit = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 20;
+    const limit = spendLimit('AI_MEDIA_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return;
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const count = await this.prisma.aIJob.count({

@@ -86,3 +86,103 @@ export async function loadVoiceEmbeddingExtractor(modelUrl: string): Promise<Voi
 export function embeddingToArray(embedding: Float32Array): number[] {
   return Array.from(embedding);
 }
+
+// ── Пункт [voiceprint-promised-what-it-could-not-do] 2026-09-26 ──
+//
+// НАЙДЕНО. Порядок действий в регистрации отпечатка был такой:
+// спросить у человека БИОМЕТРИЧЕСКОЕ СОГЛАСИЕ → включить микрофон →
+// записать пять секунд его голоса → декодировать → и только теперь
+// попробовать загрузить модуль извлечения → «не удалось загрузить
+// модуль».
+//
+// А загрузиться он не может ни в одной сборке: `sherpa-onnx-wasm` не
+// числится в зависимостях ни одного пакета монорепо (объявлен только
+// тип-заглушка), а каталога `apps/tma/public` с файлом модели не
+// существует вовсе. То есть продукт просил самое чувствительное
+// согласие, какое у него есть, и брал образец голоса — под возможность,
+// которой у него нет, и сообщал об этом ПОСЛЕ записи.
+//
+// Запись на сервер не уходила — её нечем было превратить в вектор. А
+// вот СОГЛАСИЕ уходило: `ConsentRecord` с типом `VOICE_BIOMETRIC`
+// создавался до всякой проверки и остаётся в базе.
+//
+// ПОЧЕМУ ЭТО НЕ «просто добавить зависимость». Код извлечения написан
+// по ПРЕДПОЛАГАЕМОМУ API WASM-сборки — это честно сказано в шапке этого
+// файла. Добавить пакет и файл модели, не проверив API живьём, значит
+// заменить «не работает и об этом сказано» на «может работать неверно и
+// об этом не сказано». Пока проверки не было, правильный ответ —
+// говорить правду и ничего не собирать.
+
+export interface VoiceEmbeddingAvailability {
+  available: boolean;
+  /** Чего именно не хватает — словами, которые видит человек. */
+  why: string;
+}
+
+let cachedAvailability: VoiceEmbeddingAvailability | null = null;
+
+/** Может ли продукт вообще посчитать отпечаток — ДО того, как у человека
+ * что-нибудь спросили.
+ *
+ * Проверяется то, чего не хватает по факту: модуль и файл модели.
+ * `fetchModel` и `importModule` — параметры, чтобы проверка могла
+ * подставить оба исхода: правило «сначала узнать, потом просить»
+ * обязано проверяться поведением, а не чтением исходника. */
+export async function voiceEmbeddingAvailability(
+  modelUrl: string,
+  importModule: () => Promise<unknown> = () => import(/* webpackIgnore: true */ 'sherpa-onnx-wasm').catch(() => null),
+  fetchModel: (url: string) => Promise<{ ok: boolean }> = (url) => fetch(url, { method: 'HEAD' }),
+): Promise<VoiceEmbeddingAvailability> {
+  if (cachedAvailability) return cachedAvailability;
+  let result: VoiceEmbeddingAvailability;
+  const moduleLoaded = await importModule().catch(() => null);
+  if (!moduleLoaded) {
+    result = { available: false, why: 'модуль извлечения голосового отпечатка не входит в эту сборку приложения' };
+  } else {
+    const model = await fetchModel(modelUrl).catch(() => ({ ok: false }));
+    result = model.ok
+      ? { available: true, why: '' }
+      : { available: false, why: `файла модели нет по адресу ${modelUrl}` };
+  }
+  cachedAvailability = result;
+  return result;
+}
+
+/** Только для проверок: сбросить запомненный ответ. */
+export function resetVoiceEmbeddingAvailability(): void {
+  cachedAvailability = null;
+}
+
+/** Что делать при нажатии «записать образец».
+ *
+ * Порядок здесь и есть суть пункта: сначала узнать, может ли продукт
+ * посчитать отпечаток, и только потом спрашивать согласие и включать
+ * микрофон. Одна функция — чтобы порядок проверялся вызовом, а не
+ * чтением кода экрана. */
+export async function enrollmentStep(deps: {
+  availability: () => Promise<VoiceEmbeddingAvailability>;
+  hasBiometricConsent: () => Promise<boolean>;
+}): Promise<{ step: 'unavailable'; why: string } | { step: 'need-consent' } | { step: 'record' }> {
+  const availability = await deps.availability();
+  if (!availability.available) return { step: 'unavailable', why: availability.why };
+  return (await deps.hasBiometricConsent()) ? { step: 'record' } : { step: 'need-consent' };
+}
+
+/** Что показать при открытии раздела.
+ *
+ * Возможность проверяется ПЕРВОЙ: пока считать отпечаток нечем, у
+ * продукта нет причин ни спрашивать статус регистрации, ни тем более
+ * что-либо просить у человека. Отдельной функцией — чтобы порядок
+ * проверялся вызовом, а не чтением кода экрана. */
+export async function expandStep(deps: {
+  availability: () => Promise<VoiceEmbeddingAvailability>;
+  status: () => Promise<{ enrolled: boolean }>;
+}): Promise<{ state: 'unavailable'; why: string } | { state: 'enrolled' } | { state: 'idle' }> {
+  const availability = await deps.availability();
+  if (!availability.available) return { state: 'unavailable', why: availability.why };
+  try {
+    return (await deps.status()).enrolled ? { state: 'enrolled' } : { state: 'idle' };
+  } catch {
+    return { state: 'idle' };
+  }
+}

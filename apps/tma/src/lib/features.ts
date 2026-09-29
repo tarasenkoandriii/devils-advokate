@@ -35,8 +35,13 @@ import {
   SparringMessage,
   SparringSession,
   SparringVoiceReplyJob,
-  PublicArgumentSubmission,
+  OwnerPublicSubmission,
   LibraryEntry,
+  MyLibrarySubmission,
+  PrecedentSearchOutcome,
+  WithBasisNote,
+  MotiveAnalysisResult,
+  OutcomeScenariosResult,
   FactScope,
   FactSourceType,
   PersonFact,
@@ -106,7 +111,6 @@ import {
   SuggestRolesResult,
   TargetedArgument,
   StakeholderMapEntry,
-  BehaviorPrecedent,
   PrecedentSearchResult,
   OutcomeScenario,
   PhotoVerification,
@@ -163,6 +167,23 @@ export function listProjects(): Promise<ProjectListResponse> {
 
 export function getProjectDetail(projectId: string): Promise<ProjectDetail> {
   return apiGet<ProjectDetail>(`/projects/${projectId}`);
+}
+
+// Пункт [delete-project] 2026-09-04. `DELETE /projects/:id` существовал,
+// был закрыт проверкой владения и возвращал честный список того, что
+// переживает удаление, — а вызвать его было НЕОТКУДА: ни одного клиента,
+// ни одной кнопки. Человек, желавший удалить один проект, мог только
+// удалить весь аккаунт. При этом экран приватности прямо сообщал:
+// «Удаление отдельного проекта — на его странице». Указание на кнопку,
+// которой нет, хуже отсутствия кнопки: оно закрывает вопрос.
+export interface ProjectDeletionResult {
+  deleted: true;
+  /** Что переживает удаление проекта — с причиной, человеческим текстом. */
+  notRemovedHere: string[];
+}
+
+export function deleteProject(projectId: string): Promise<ProjectDeletionResult> {
+  return apiDelete<ProjectDeletionResult>(`/projects/${projectId}`);
 }
 
 export function generateArguments(projectId: string, engineId?: string): Promise<Argument[]> {
@@ -297,8 +318,44 @@ export function deletePersonData(personId: string): Promise<{ deleted: boolean }
 export interface AccountDeletionResult {
   deleted: true;
   removed: Record<string, number>;
-  externalArtifacts: { evidenceBlobs: number; deleted: number; failed: number };
+  /** Пункт [screen-said-what-server-unsaid] 2026-09-25: сервер отдаёт пять
+   * полей, а тип объявлял три — два числа про транзитное аудио и про
+   * отозванные задачи распознавания молча терялись по дороге. Это те
+   * самые следы у ВНЕШНИХ сторон, ради которых раздел и написан. */
+  externalArtifacts: {
+    evidenceBlobs: number;
+    deleted: number;
+    failed: number;
+    conversationAudioBlobs: number;
+    sttJobsDiscarded: number;
+  };
   notRemovedHere: string[];
+  /** Что удаление забрало у других — тем же списком, что человек видел
+   * до решения. Пункт [cascade-took-a-stranger] 2026-09-26. */
+  tookFromOthers: ThirdPartyLoss[];
+  tookFromOthersNote: string;
+}
+
+/** Что останется после удаления — ДО решения, тем же списком, что придёт
+ * в ответе. Пункт [screen-said-what-server-unsaid] 2026-09-25: экран
+ * держал свою копию этого текста и разошёлся с сервером. */
+/** Что удаление заберёт У ДРУГИХ людей.
+ * Пункт [cascade-took-a-stranger] 2026-09-26. */
+export interface ThirdPartyLoss {
+  key: string;
+  count: number;
+  text: string;
+  why: string;
+}
+
+export interface AccountDeletionPreview {
+  notRemovedHere: string[];
+  takesFromOthers: ThirdPartyLoss[];
+  takesFromOthersNote: string;
+}
+
+export function accountDeletionPreview(): Promise<AccountDeletionPreview> {
+  return apiGet<AccountDeletionPreview>('/privacy/account/deletion-preview');
 }
 
 /** Аудит БД 2026-08-30 §2.4 — удаление аккаунта (GDPR art. 17). Backend
@@ -307,12 +364,68 @@ export function deleteAccount(): Promise<AccountDeletionResult> {
   return apiDelete<AccountDeletionResult>('/privacy/account', { confirmation: 'DELETE' });
 }
 
+/** Решение, принятое о человеке, — как его описал сервер.
+ * Пункт [right-with-no-door] 2026-09-25. */
+export interface DescribedDecision {
+  /** Машинное имя действия. Показывается человеку ВСЕГДА: по нему он и
+   * поддержка говорят об одной и той же записи. */
+  action: string;
+  /** Что произошло, словами. У нерасшифрованного действия — честная
+   * оговорка вместо выдуманной подписи. */
+  what: string;
+  /** Кем решение принято; `null` — когда действие не расшифровано. */
+  by: string | null;
+  resource: string;
+  resourceId: string;
+  /** Момент в ISO. Календарный день называет КЛИЕНТ, в часовом поясе
+   * человека (пункт [server-said-which-day]). */
+  at: string;
+}
+
+export interface DecisionGroup {
+  items: DescribedDecision[];
+  hasMore: boolean;
+  limit: number;
+}
+
+export interface DecisionsAboutYou {
+  accountDecisions: DecisionGroup;
+  projectDecisions: DecisionGroup;
+  /** Пункт [door-opened-onto-a-corner] 2026-09-25: решения о том, что
+   * человеку принадлежит, — рассмотренная заявка, отозванное согласие
+   * на передачу его данных, отозванный оффер. */
+  belongingsDecisions: DecisionGroup;
+  /** Где проходит граница области: что в разделы решений НЕ входит и
+   * почему. Едет вместе с данными, а не живёт отдельной подписью. */
+  outOfScope: Array<{ resource: string; why: string }>;
+}
+
+/** Пункт [right-with-no-door] 2026-09-25: раньше это читалось только из
+ * скачанного JSON. */
+export function getDecisionsAboutYou(): Promise<DecisionsAboutYou> {
+  return apiGet<DecisionsAboutYou>('/privacy/decisions');
+}
+
 export function exportPrivacyData(): Promise<unknown> {
   return apiGet('/privacy/export');
 }
 
-export function revokeConsent(type: ConsentType): Promise<{ revoked: boolean }> {
-  return apiDelete<{ revoked: boolean }>(`/consent/${type}`);
+// Пункт [consent-revocation] 2026-09-04: отзыв возвращает отчёт, а не
+// голое `{ revoked: true }`. `alsoDone` — что сделано СВЕРХ пометки
+// (закрыты публичные ссылки, удалён голосовой отпечаток); `doesNotUndo` —
+// что отзыв НЕ отменяет, и это есть ВСЕГДА, даже когда отзывать было
+// нечего: «только на будущее» — законный ответ, но он должен быть
+// произнесён, иначе человек прочитает молчание как «всё стёрли».
+export interface ConsentRevocationReport {
+  consentType: ConsentType;
+  revoked: boolean;
+  recordsRevoked: number;
+  alsoDone: string[];
+  doesNotUndo: string;
+}
+
+export function revokeConsent(type: ConsentType): Promise<ConsentRevocationReport> {
+  return apiDelete<ConsentRevocationReport>(`/consent/${type}`);
 }
 
 export function safeSharePreflight(
@@ -515,12 +628,21 @@ export function updateCommitment(
 
 // Пункт 15 (backend) — Turning Point Detection (§3.50 ТЗ).
 
-export function detectTurningPoints(conversationId: string): Promise<TurningPoint[]> {
-  return apiPost<TurningPoint[]>(`/conversations/${conversationId}/turning-points/detect`);
+// Сверка длинных разговоров 2026-09-04: длинный разговор разбирается
+// частями, и `notice` говорит человеку, что разбор был частями и чего
+// такой разбор не увидит. Приходит и из detect(), и из list(): иначе
+// подпись исчезала бы при первом обновлении экрана.
+export interface TurningPointsResult {
+  points: TurningPoint[];
+  notice: string | null;
 }
 
-export function listTurningPoints(conversationId: string): Promise<TurningPoint[]> {
-  return apiGet<TurningPoint[]>(`/conversations/${conversationId}/turning-points`);
+export function detectTurningPoints(conversationId: string): Promise<TurningPointsResult> {
+  return apiPost<TurningPointsResult>(`/conversations/${conversationId}/turning-points/detect`);
+}
+
+export function listTurningPoints(conversationId: string): Promise<TurningPointsResult> {
+  return apiGet<TurningPointsResult>(`/conversations/${conversationId}/turning-points`);
 }
 
 // Пункт 16 (backend) — Missing Information (§3.51 ТЗ).
@@ -541,12 +663,20 @@ export function getEvidenceGap(projectId: string): Promise<EvidenceGapReport> {
 
 // Пункт 18 (backend) — Do Not Say (§3.53 ТЗ).
 
-export function detectDoNotSay(conversationId: string): Promise<DoNotSayItem[]> {
-  return apiPost<DoNotSayItem[]>(`/conversations/${conversationId}/do-not-say/detect`);
+// Сверка длинных разговоров 2026-09-04: длинный разговор разбирается
+// частями, `notice` говорит человеку об этом и о том, чего такой разбор
+// не увидит. Приходит и из detect(), и из list().
+export interface DoNotSayResult {
+  points: DoNotSayItem[];
+  notice: string | null;
 }
 
-export function listDoNotSay(conversationId: string): Promise<DoNotSayItem[]> {
-  return apiGet<DoNotSayItem[]>(`/conversations/${conversationId}/do-not-say`);
+export function detectDoNotSay(conversationId: string): Promise<DoNotSayResult> {
+  return apiPost<DoNotSayResult>(`/conversations/${conversationId}/do-not-say/detect`);
+}
+
+export function listDoNotSay(conversationId: string): Promise<DoNotSayResult> {
+  return apiGet<DoNotSayResult>(`/conversations/${conversationId}/do-not-say`);
 }
 
 // Пункт 19 (backend) — Best Next Move (§3.54 ТЗ).
@@ -661,12 +791,17 @@ export function deleteProtectedNote(noteId: string): Promise<unknown> {
 
 // Пункт 36 (backend) — Manipulation Detector (§3.28 ТЗ, MVP v3).
 
-export function detectManipulationPatterns(conversationId: string): Promise<ManipulationPoint[]> {
-  return apiPost<ManipulationPoint[]>(`/conversations/${conversationId}/manipulation-patterns/detect`);
+export interface ManipulationResult {
+  points: ManipulationPoint[];
+  notice: string | null;
 }
 
-export function listManipulationPatterns(conversationId: string): Promise<ManipulationPoint[]> {
-  return apiGet<ManipulationPoint[]>(`/conversations/${conversationId}/manipulation-patterns`);
+export function detectManipulationPatterns(conversationId: string): Promise<ManipulationResult> {
+  return apiPost<ManipulationResult>(`/conversations/${conversationId}/manipulation-patterns/detect`);
+}
+
+export function listManipulationPatterns(conversationId: string): Promise<ManipulationResult> {
+  return apiGet<ManipulationResult>(`/conversations/${conversationId}/manipulation-patterns`);
 }
 
 // Пункт 37 (backend) — Discrepancy Analysis (§3.16 ТЗ, MVP v3).
@@ -691,8 +826,8 @@ export function generateArchetypePerspective(
   customArchetypeDescription?: string,
   targetPersonId?: string,
   focusOnOwnPositionWeaknesses?: boolean,
-): Promise<ArchetypePerspective> {
-  return apiPost<ArchetypePerspective>(`/projects/${projectId}/archetype-perspectives`, {
+): Promise<ArchetypePerspective & WithBasisNote> {
+  return apiPost<ArchetypePerspective & WithBasisNote>(`/projects/${projectId}/archetype-perspectives`, {
     archetypeType,
     customArchetypeDescription,
     targetPersonId,
@@ -799,8 +934,8 @@ export function listStakeholderMap(projectId: string): Promise<StakeholderMapEnt
 
 // Пункт 45 (backend) — Precedent Search (§3.9 ТЗ, только личные записи).
 
-export function findPrecedents(personId: string, situationDescription: string): Promise<BehaviorPrecedent[]> {
-  return apiPost<BehaviorPrecedent[]>(`/people/${personId}/precedents`, { situationDescription });
+export function findPrecedents(personId: string, situationDescription: string): Promise<PrecedentSearchOutcome> {
+  return apiPost<PrecedentSearchOutcome>(`/people/${personId}/precedents`, { situationDescription });
 }
 
 export function listPrecedents(personId: string): Promise<PrecedentSearchResult> {
@@ -812,8 +947,8 @@ export function listPrecedents(personId: string): Promise<PrecedentSearchResult>
 export function generateOutcomeScenarios(
   projectId: string,
   userScenarioDescriptions: string[] = [],
-): Promise<OutcomeScenario[]> {
-  return apiPost<OutcomeScenario[]>(`/projects/${projectId}/outcome-scenarios`, { userScenarioDescriptions });
+): Promise<OutcomeScenariosResult> {
+  return apiPost<OutcomeScenariosResult>(`/projects/${projectId}/outcome-scenarios`, { userScenarioDescriptions });
 }
 
 export function listOutcomeScenarios(projectId: string): Promise<OutcomeScenario[]> {
@@ -829,7 +964,16 @@ export function confirmOutcomeScenario(projectId: string, scenarioId: string, co
 
 // Пункт 48 (backend) — Photo Verification (§4.4 ТЗ).
 
-export async function uploadPhotoForVerification(personFactId: string, file: File): Promise<PhotoVerification[]> {
+/** Пункт [delete-says-done] 2026-09-06: ответ несёт не только записи
+ * проверки, но и исход удаления ПУБЛИЧНОЙ КОПИИ фото. Экран обещает
+ * человеку безусловно — «ссылка удаляется сразу после завершения
+ * поиска», — а удаление было best-effort и молчало о неудаче. */
+export interface PhotoVerificationUploadResult {
+  verifications: PhotoVerification[];
+  publicCopy: { removed: boolean; note: string | null };
+}
+
+export async function uploadPhotoForVerification(personFactId: string, file: File): Promise<PhotoVerificationUploadResult> {
   const { getAuthHeaders } = await import('./telegram');
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
@@ -845,7 +989,7 @@ export async function uploadPhotoForVerification(personFactId: string, file: Fil
     body: file,
   });
 
-  return handle<PhotoVerification[]>(response);
+  return handle<PhotoVerificationUploadResult>(response);
 }
 
 export function listPhotoVerifications(personFactId: string): Promise<PhotoVerification[]> {
@@ -909,8 +1053,17 @@ export function getSuccessStats(): Promise<SuccessStats> {
 }
 
 // Пункт 85 (backend) — след категории накала во времени (§3.34 ТЗ).
-export function logEscalationCategory(projectId: string, sessionId: string, category: string): Promise<void> {
-  return apiPost(`/projects/${projectId}/escalation-category-events`, { sessionId, category });
+// Пункт [project-log-v2] — personId необязателен: его выбирает
+// пользователь на экране сопровождения, и без него событие остаётся
+// метрикой, но в лог проекта (§3.39) не попадает — там записи всегда
+// называют человека.
+export function logEscalationCategory(
+  projectId: string,
+  sessionId: string,
+  category: string,
+  personId?: string | null,
+): Promise<void> {
+  return apiPost(`/projects/${projectId}/escalation-category-events`, { sessionId, category, personId: personId ?? null });
 }
 
 // Пункт 55 (backend) — Sparring / Red Team (§3.1 ТЗ).
@@ -921,8 +1074,8 @@ export function startSparringSession(
   archetypeType?: ArchetypeType,
   customArchetypeDescription?: string,
   scheduledConversationId?: string,
-): Promise<SparringSession> {
-  return apiPost<SparringSession>(`/projects/${projectId}/sparring-sessions`, {
+): Promise<SparringSession & WithBasisNote> {
+  return apiPost<SparringSession & WithBasisNote>(`/projects/${projectId}/sparring-sessions`, {
     targetPersonId,
     archetypeType,
     customArchetypeDescription,
@@ -991,16 +1144,22 @@ export function disablePublicSharing(projectId: string): Promise<{ publicShareTo
   return apiPost<{ publicShareToken: string | null }>(`/projects/${projectId}/public-discussion/disable`, {});
 }
 
-export function listPublicSubmissionsForModeration(projectId: string): Promise<PublicArgumentSubmission[]> {
-  return apiGet<PublicArgumentSubmission[]>(`/projects/${projectId}/public-discussion/submissions`);
+export function listPublicSubmissionsForModeration(
+  projectId: string,
+): Promise<{ items: OwnerPublicSubmission[]; hasMore: boolean; limit: number }> {
+  // Сверка чтений без потолка 2026-09-04: сервер отдаёт список с потолком
+  // и флагом «есть ещё» — экран обязан показать, что список неполный.
+  return apiGet<{ items: OwnerPublicSubmission[]; hasMore: boolean; limit: number }>(
+    `/projects/${projectId}/public-discussion/submissions`,
+  );
 }
 
 export function moderatePublicSubmission(
   projectId: string,
   submissionId: string,
   decision: 'ACCEPT' | 'REJECT',
-): Promise<PublicArgumentSubmission> {
-  return apiPatch<PublicArgumentSubmission>(
+): Promise<OwnerPublicSubmission> {
+  return apiPatch<OwnerPublicSubmission>(
     `/projects/${projectId}/public-discussion/submissions/${submissionId}/moderate`,
     { decision },
   );
@@ -1015,6 +1174,14 @@ export function submitProjectToLibrary(
   category: string,
 ): Promise<LibraryEntry> {
   return apiPost<LibraryEntry>(`/projects/${projectId}/submit-to-library`, { title, category });
+}
+
+/** Пункт [own-submission] 2026-09-04 — судьба отправленного в
+ * библиотеку. До этого захода `submittedByUserId` записывался при
+ * создании и не читался нигде: человек отдавал свой набор аргументов и
+ * не мог узнать о нём больше ничего. */
+export function listMyLibrarySubmissions(): Promise<MyLibrarySubmission[]> {
+  return apiGet<MyLibrarySubmission[]>('/library-submissions/mine');
 }
 
 // Модерация библиотеки (moderation-queue / :id/moderate) с Пункта
@@ -1042,14 +1209,32 @@ export function createPersonFact(personId: string, input: CreatePersonFactInput)
   return apiPost<PersonFact>(`/people/${personId}/facts`, input);
 }
 
+/** Пункт [no-correction] 2026-09-05 — «я перепроверил, это по-прежнему
+ * так». До этого захода `lastVerifiedAt` не записывался НИГДЕ: продукт
+ * звал перепроверить факт и не давал способа сказать, что перепроверил. */
+export function confirmPersonFact(personId: string, factId: string): Promise<PersonFact> {
+  return apiPatch<PersonFact>(`/people/${personId}/facts/${factId}/confirm`, {});
+}
+
+/** «Это неверно» и «больше не актуально». Оба состояния схема знала с
+ * самого начала, три сервиса на них ветвились — и выставить их не мог
+ * никто. */
+export function setPersonFactStatus(personId: string, factId: string, status: 'DISPUTED' | 'EXPIRED'): Promise<PersonFact> {
+  return apiPatch<PersonFact>(`/people/${personId}/facts/${factId}/status`, { status });
+}
+
+export function deletePersonFact(personId: string, factId: string): Promise<{ deleted: true }> {
+  return apiDelete<{ deleted: true }>(`/people/${personId}/facts/${factId}`);
+}
+
 export function listPersonFacts(personId: string): Promise<PersonFact[]> {
   return apiGet<PersonFact[]>(`/people/${personId}/facts`);
 }
 
 // Пункт 59 (backend) — Motive Analysis (§3.18 ТЗ, публичный поиск не реализован).
 
-export function analyzeMotives(projectId: string, personId: string): Promise<MotiveHypothesis[]> {
-  return apiPost<MotiveHypothesis[]>(`/projects/${projectId}/people/${personId}/motive-hypotheses`, {});
+export function analyzeMotives(projectId: string, personId: string): Promise<MotiveAnalysisResult> {
+  return apiPost<MotiveAnalysisResult>(`/projects/${projectId}/people/${personId}/motive-hypotheses`, {});
 }
 
 export function listMotiveHypotheses(projectId: string, personId: string): Promise<MotiveHypothesis[]> {
@@ -1172,6 +1357,17 @@ export function submitVenueApplication(input: SubmitVenueApplicationInput): Prom
   return apiPost<VenueApplication>('/venue-applications', input);
 }
 
+/** Пункт [own-submission] 2026-09-04 — свои заявки и их судьба.
+ *
+ * Маршрут `venue-applications/mine` существовал на сервере С САМОГО
+ * НАЧАЛА и не вызывался НИКЕМ: ни обёртки в клиенте, ни экрана. Готовый
+ * бэкенд с нулевым UI — та же форма, что уже находили в Пунктах 27 и 28,
+ * и с тем же следствием: право, о котором человек не может узнать, для
+ * него не существует. */
+export function listMyVenueApplications(): Promise<VenueApplication[]> {
+  return apiGet<VenueApplication[]>('/venue-applications/mine');
+}
+
 // Модерация заявок заведений — та же история, что у библиотеки выше:
 // с Пункта [admin-panel] за AdminSessionGuard, из TMA недостижима.
 // Страница /venues/moderate и обёртки удалены аудитом; UI — apps/admin.
@@ -1254,6 +1450,12 @@ export function listClosingMessages(projectId: string): Promise<ClosingMessage[]
 
 export function getProjectLog(projectId: string): Promise<ProjectLogEntry[]> {
   return apiGet<ProjectLogEntry[]>(`/projects/${projectId}/log`);
+}
+
+// Пункт [project-log-v2] (§3.39 ТЗ, «появление/снятие флагов») — снять
+// или вернуть флаг может только человек, отдельным явным действием.
+export function setProjectLogFlagDisputed(projectId: string, signalId: string, disputed: boolean): Promise<unknown> {
+  return apiPatch(`/projects/${projectId}/log/flags/${signalId}`, { disputed });
 }
 
 // Пункт 76 (backend) — Weather Forecast (§3.21 ТЗ).
@@ -1373,8 +1575,12 @@ export function checkArgumentTrackingStatus(
 
 // Пункт 86 (backend) — Probing Detector (§3.37 ТЗ).
 
-export function analyzeProbing(projectId: string, transcriptWindow: string): Promise<ProbingTopic[]> {
-  return apiPost<ProbingTopic[]>(`/projects/${projectId}/probing-topics`, { transcriptWindow });
+export function analyzeProbing(
+  projectId: string,
+  transcriptWindow: string,
+  personId?: string | null,
+): Promise<ProbingTopic[]> {
+  return apiPost<ProbingTopic[]>(`/projects/${projectId}/probing-topics`, { transcriptWindow, personId: personId ?? null });
 }
 
 // Пункт 87 (backend) — Voice Embedding (голосовой отпечаток).

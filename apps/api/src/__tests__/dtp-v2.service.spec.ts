@@ -273,7 +273,45 @@ describe('DtpV2Service', () => {
 
     const draft = await service.getSettlementProtocolDraft('u1', config.id);
 
-    expect(draft.text).toContain('НЕ юридично завершений документ');
+    expect(draft.text).toContain('НЕ юридически завершённый документ');
+  });
+
+  // Пункт [draft-spoke-machine] 2026-09-24: черновик — это документ,
+  // который человек печатает и несёт юристу. Роль участника попадала в
+  // него машинной константой: «Учасники: OTHER_PARTY (Иван Петров)».
+  it('getSettlementProtocolDraft не подставляет машинные константы ролей в текст документа', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id });
+    prisma._seedParticipant({ configId: config.id, role: 'SELF', displayName: 'Пётр Сидоров' });
+    prisma._seedParticipant({ configId: config.id, role: 'OTHER_PARTY', displayName: 'Иван Петров' });
+    const service = makeService(prisma);
+
+    const draft = await service.getSettlementProtocolDraft('u1', config.id);
+
+    expect(draft.text).not.toMatch(/OTHER_PARTY|THIRD_PARTY|\bSELF\b/);
+    expect(draft.text).toContain('вторая сторона (Иван Петров)');
+    // Имя человека — его слова, оно остаётся дословно.
+    expect(draft.text).toContain('Пётр Сидоров');
+  });
+
+  // Роль, для которой подписи ещё нет (перечисление расширили, словарь
+  // отстал), НЕ теряется: документ с непереведённым словом лучше
+  // документа, потерявшего строку.
+  it('getSettlementProtocolDraft сохраняет неизвестную роль, а не выбрасывает участника', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id });
+    prisma._seedParticipant({ configId: config.id, role: 'WITNESS', displayName: 'Анна Ким' });
+    const service = makeService(prisma);
+
+    const draft = await service.getSettlementProtocolDraft('u1', config.id);
+
+    // Имя не должно пропасть — но и сама роль обязана остаться КАК ЕСТЬ.
+    // Первая редакция этой проверки смотрела только на имя, и потому
+    // пропускала подмену неизвестного значения на прочерк: документ
+    // терял сведения молча, а проверка продолжала проходить.
+    expect(draft.text).toContain('WITNESS (Анна Ким)');
   });
 
   it('acceptance-тест: crossConsultationCheck делегує в спільний CriteriaComparisonService, не має власного AI-виклику', async () => {

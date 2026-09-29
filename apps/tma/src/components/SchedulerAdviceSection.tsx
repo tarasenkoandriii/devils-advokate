@@ -7,6 +7,7 @@
 // не внутри отдельной карточки встречи.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { generateSchedulerAdvice, listSchedulerAdvice } from '../lib/features';
 import { ApiRequestError } from '../lib/api';
 import { SchedulerAdvice } from '../lib/types';
@@ -18,14 +19,18 @@ interface SchedulerAdviceSectionProps {
 
 export function SchedulerAdviceSection({ projectId }: SchedulerAdviceSectionProps) {
   const [advice, setAdvice] = useState<SchedulerAdvice[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     listSchedulerAdvice(projectId)
-      .then(setAdvice)
-      .catch(() => setAdvice([]))
+      .then((v) => { setAdvice(v); setNotLoaded(false); })
+      .catch(() => { setAdvice([]); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -52,6 +57,7 @@ export function SchedulerAdviceSection({ projectId }: SchedulerAdviceSectionProp
 
   return (
     <section className="scheduler-advice-section">
+      {notLoaded && <NotLoadedNotice what="советы по планированию" />}
       <h3>Советы по планированию</h3>
       <p className="conversations-section__hint">
         На основе личных фактов о людях (строго со слов) и связей между ними — с кем встречаться отдельно, нужна ли
@@ -66,7 +72,7 @@ export function SchedulerAdviceSection({ projectId }: SchedulerAdviceSectionProp
         </ul>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <button type="button" onClick={handleGenerate} disabled={generating}>
         {generating ? 'Составляем…' : 'Составить советы'}
       </button>

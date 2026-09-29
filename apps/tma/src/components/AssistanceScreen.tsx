@@ -35,6 +35,7 @@ import { connectLiveTranscription, LiveTranscriptionHandle, TranscriptUpdate } f
 import { computeRmsDb, categorizeEscalation, VolumeWindow, EscalationCategory } from '../lib/acoustic-monitor';
 import { loadVoiceEmbeddingExtractor, embeddingToArray } from '../lib/voice-embedding';
 import { checkThirdPartyAudioConsent, ThirdPartyAudioConsentPrompt } from './ThirdPartyAudioConsentPrompt';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   mintTranscriptionToken,
   analyzeLiveManipulation,
@@ -43,11 +44,14 @@ import {
   checkArgumentTrackingStatus,
   logEscalationCategory,
   analyzeProbing,
+  listPeople,
   getVoiceEnrollmentStatus,
   verifyVoiceEmbedding,
 } from '../lib/features';
-import { LiveManipulationFlag, BreakingQuestionSet, LiveArgumentTrackingStatus, ProbingTopic } from '../lib/types';
+import { LiveManipulationFlag, BreakingQuestionSet, LiveArgumentTrackingStatus, ProbingTopic, ProjectPersonLink } from '../lib/types';
+import { confidenceWording } from '../lib/confidence';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 interface AssistanceScreenProps {
   projectId: string;
@@ -56,6 +60,9 @@ interface AssistanceScreenProps {
 const SAMPLE_INTERVAL_MS = 500;
 const MANIPULATION_CYCLE_MS = 30_000; // до 30 секунд — тот же согласованный цикл, что Live Hints
 const PROBING_CYCLE_MS = 30_000; // "симметрично детектору уловок" — buкально ТЗ, тот же цикл
+/** Пункт [voice-attribution] 2026-09-05: одна неудача сверки — не
+ * повод пугать; устойчивый отказ — повод сказать. */
+const VOICE_CHECK_FAILURES_BEFORE_NOTICE = 3;
 const TRANSCRIPT_WINDOW_MS = 10 * 60 * 1000;
 const VOICE_MODEL_URL = '/models/speaker-embedding.onnx';
 // "Частота проверки повышается во время эскалации" — buкально ТЗ.
@@ -94,7 +101,18 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
   const [breakingQuestions, setBreakingQuestions] = useState<BreakingQuestionSet | null>(null);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
   const [trackedArguments, setTrackedArguments] = useState<LiveArgumentTrackingStatus[]>([]);
+  const [argumentTrackingFailed, setArgumentTrackingFailed] = useState(false);
+  const [peopleNotLoaded, setPeopleNotLoaded] = useState(false);
   const [probingWarnings, setProbingWarnings] = useState<ProbingTopic[]>([]);
+  // Почему выключены слои, зависящие от расшифровки (если выключены).
+  const [transcriptionOff, setTranscriptionOff] = useState<string | null>(null);
+  // Пункт [project-log-v2] — с кем идёт разговор. Выбирает пользователь:
+  // диаризация знает "говорит другой голос", но не знает, чей он, а лог
+  // проекта (§3.39) обязан называть человека по имени. Без выбора всё
+  // работает как раньше, просто события накала и прощупывания в лог не
+  // попадут — об этом честно написано рядом с полем.
+  const [people, setPeople] = useState<ProjectPersonLink[]>([]);
+  const [counterpartId, setCounterpartId] = useState<string>('');
 
   const captureHandleRef = useRef<LiveAudioCaptureHandle | null>(null);
   const transcriptionHandleRef = useRef<LiveTranscriptionHandle | null>(null);
@@ -103,6 +121,10 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
   // Пункт 87 — карта "метка диаризации → это я или нет", заполняется
   // один раз на новую метку за сессию, не пересчитывается на каждую реплику.
   const speakerSelfMapRef = useRef<Map<string, boolean>>(new Map());
+  // Пункт [voice-attribution] 2026-09-05 — сверка голоса может не
+  // работать вовсе, и тогда разделение реплик молча исчезает.
+  const voiceCheckFailuresRef = useRef(0);
+  const [voiceAttributionFailed, setVoiceAttributionFailed] = useState(false);
   const voiceExtractorRef = useRef<Awaited<ReturnType<typeof loadVoiceEmbeddingExtractor>>>(null);
   const rawSamplesBufferRef = useRef<Float32Array[]>([]);
   const volumeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -118,10 +140,27 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
   // замер (раз в 500мс было бы избыточно и не нужно для метрики).
   const sessionIdRef = useRef<string | null>(null);
   const lastLoggedCategoryRef = useRef<EscalationCategory | null>(null);
+  // Тот же приём, что с categoryRef: коллбэки интервалов иначе видели бы
+  // выбор собеседника, замороженный на момент запуска.
+  const counterpartIdRef = useRef<string>('');
 
   useEffect(() => {
     categoryRef.current = category;
   }, [category]);
+
+  useEffect(() => {
+    counterpartIdRef.current = counterpartId;
+  }, [counterpartId]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    listPeople(projectId)
+      .then((v) => { setPeople(v); setPeopleNotLoaded(false); })
+      // Пункт [empty-looked-like-an-answer] 2026-09-24: единственный
+      // сбой в этом экране, оставшийся молчаливым после сверки
+      // [failure-looks-empty] — она починила три соседних.
+      .catch(() => { setPeople([]); setPeopleNotLoaded(true); });
+  }, [expanded, projectId]);
 
   useEffect(() => {
     return () => {
@@ -160,7 +199,17 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
                 speakerSelfMapRef.current.set(update.speakerLabel as string, result.isMatch);
               }
             })
-            .catch(() => {});
+            .catch(() => {
+              // Пункт [voice-attribution] 2026-09-05: здесь стоял пустой
+              // catch. Если сверка голоса не отвечает вовсе, ни одна
+              // реплика не помечается «моя» — и весь разговор, включая
+              // собственные слова человека, уходит в разбор как речь
+              // собеседника. Молча. Считаем сбои и говорим о них.
+              voiceCheckFailuresRef.current += 1;
+              if (voiceCheckFailuresRef.current >= VOICE_CHECK_FAILURES_BEFORE_NOTICE) {
+                setVoiceAttributionFailed(true);
+              }
+            });
         }
       }
     }
@@ -228,6 +277,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
     setCategory(null);
     setFlags([]);
     setProbingWarnings([]);
+    setTranscriptionOff(null);
     // Пункт 85 — новый sessionId на каждый запуск, сбрасываем "последнюю залогированную" категорию.
     sessionIdRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     lastLoggedCategoryRef.current = null;
@@ -239,6 +289,8 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
     // детектор прощупывания просто продолжает работать без фильтрации
     // "я/не я", как раньше.
     speakerSelfMapRef.current = new Map();
+    voiceCheckFailuresRef.current = 0;
+    setVoiceAttributionFailed(false);
     rawSamplesBufferRef.current = [];
     getVoiceEnrollmentStatus()
       .then((status) => {
@@ -247,14 +299,29 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
           voiceExtractorRef.current = extractor;
         });
       })
-      .catch(() => {});
+      .catch(() => {
+        // Пункт [voice-attribution] 2026-09-05: второй пустой catch на
+        // том же экране, и последствие такое же. Если не загрузился
+        // статус эталона или сама модель, разделения говорящих не будет
+        // ВООБЩЕ — весь разговор уйдёт в разбор как речь собеседника, и
+        // человек об этом не узнает. Проверка, написанная для первого
+        // catch, нашла второй.
+        setVoiceAttributionFailed(true);
+      });
 
     // (3)/(4) Инициализация трекинга аргументов — до начала цикла проверки.
     try {
       const initial = await initializeArgumentTracking(projectId);
       setTrackedArguments(initial);
+      setArgumentTrackingFailed(false);
     } catch {
+      // Пункт [failure-looks-empty] 2026-09-05: ТРЕТИЙ пустой обработчик
+      // на этом экране. Блок «Аргументы» рисуется по
+      // `trackedArguments.length > 0` — при сбое он исчезал целиком, и
+      // это неотличимо от «аргументов вы не готовили». Человек в этот
+      // момент уже в разговоре и ждёт отметок «прозвучал».
       setTrackedArguments([]);
+      setArgumentTrackingFailed(true);
     }
 
     // (1) Индикатор накала — непрерывный, чисто клиентский, без backend.
@@ -279,7 +346,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
         // Пункт 85 — логируем только РЕАЛЬНЫЙ переход, не каждый замер.
         if (state.category !== lastLoggedCategoryRef.current && sessionIdRef.current) {
           lastLoggedCategoryRef.current = state.category;
-          logEscalationCategory(projectId, sessionIdRef.current, state.category).catch(() => {
+          logEscalationCategory(projectId, sessionIdRef.current, state.category, counterpartIdRef.current || null).catch(() => {
             // Тихий сбой логирования не должен ломать сам индикатор — метрика статистики не критична для текущей сессии.
           });
         }
@@ -292,9 +359,16 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
     let credentials: Awaited<ReturnType<typeof mintTranscriptionToken>>;
     try {
       credentials = await mintTranscriptionToken();
-    } catch {
+      setTranscriptionOff(null);
+    } catch (err) {
       // Индикатор накала продолжает работать даже без транскрипции —
-      // детектор уловок и трекинг аргументов просто не запускаются, не ломают всю сессию.
+      // детектор уловок и трекинг аргументов просто не запускаются, не
+      // ломают всю сессию. Аудит согласий 2026-09-03: но МОЛЧА этого
+      // делать нельзя. Отказ (нет согласия, режим MAXIMUM_PRIVACY) до
+      // этого выглядел так, будто детектора уловок в продукте просто
+      // нет — человек считал, что уловок не найдено, хотя их никто не
+      // искал. Причина называется прямо, слоями и текстом сервера.
+      setTranscriptionOff(err instanceof Error ? err.message : 'причина неизвестна');
       return;
     }
 
@@ -339,7 +413,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
       if (!transcriptWindow.trim()) return;
 
       try {
-        const newWarnings = await analyzeProbing(projectId, transcriptWindow);
+        const newWarnings = await analyzeProbing(projectId, transcriptWindow, counterpartIdRef.current || null);
         if (newWarnings.length > 0) {
           setProbingWarnings((prev) => {
             const byId = new Map(prev.map((w) => [w.id, w]));
@@ -366,8 +440,8 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
       const result = await generateBreakingQuestions(projectId, transcriptWindow);
       setBreakingQuestions(result);
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось собрать вопросы, ломающие сценарий');
     } finally {
       setGeneratingQuestions(false);
     }
@@ -402,6 +476,14 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
         уже посчитанных на устройстве метрик.
       </p>
 
+      {transcriptionOff && (
+        <p role="alert" className="generation-error section-load-error">
+          Расшифровка не запустилась, поэтому детектор уловок, трекинг аргументов и поиск настойчивых тем сейчас НЕ
+          работают — это не значит, что их нечего было бы найти. Индикатор накала считается на устройстве и работает.
+          Причина: {transcriptionOff}
+        </p>
+      )}
+
       {category && (
         <div className={`assistance-screen__indicator assistance-screen__indicator--${category.toLowerCase()}`}>
           <strong>{CATEGORY_LABEL[category as EscalationCategory]}</strong>
@@ -415,7 +497,13 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
             {flags.map((f) => (
               <li key={f.id} className="assistance-screen__flag">
                 <strong>{f.technique}</strong>
-                {f.confidence !== null && <span className="conversations-section__hint"> (уверенность {(f.confidence * 100).toFixed(0)}%)</span>}
+                {/* Пункт [unmeasured-confidence] 2026-09-05: число
+                    приходит ОТ САМОЙ МОДЕЛИ — в промпте у неё прямо
+                    спрашивают «честную оценку уверенности». Показанное
+                    без источника, оно читалось как измерение продукта. */}
+                {f.confidence !== null && (
+                  <span className="conversations-section__hint"> ({confidenceWording(f.confidence, 'model-self')})</span>
+                )}
                 <p>{f.description}</p>
               </li>
             ))}
@@ -426,18 +514,55 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
       {probingWarnings.length > 0 && (
         <div className="assistance-screen__flags assistance-screen__flags--probing">
           <p className="steelman-case__label">Настойчивый интерес к теме (🟡 догадка ИИ)</p>
+          {/* Пункт [voice-attribution] 2026-09-05: сюда попадают реплики,
+              которые продукт счёл НЕ вашими. Решает это сравнение
+              голосового отпечатка с порогом, который в проекте честно
+              назван неоткалиброванным. Молчать об этом — значит выдавать
+              разделение говорящих за факт. */}
+          <p className="conversations-section__hint">
+            Разделение говорящих — тоже догадка: голос сверяется с вашим отпечатком по порогу, который не
+            откалиброван на реальных голосах. Реплики, которые не удалось отнести ни к кому, намеренно попадают
+            сюда — лучше лишний разбор, чем потерянный сигнал, но часть ваших собственных слов может оказаться
+            здесь же.
+          </p>
+          {voiceAttributionFailed && (
+            <p className="conversations-section__hint" role="status">
+              Сверка голоса сейчас не отвечает — реплики не разделяются вовсе, и разбор идёт по всему разговору,
+              включая ваши слова.
+            </p>
+          )}
           <ul>
             {probingWarnings.map((w) => (
               <li key={w.id} className="assistance-screen__flag assistance-screen__flag--probing">
                 <strong>{w.topicDescription}</strong>
+                {/* Пункт [unmeasured-confidence] 2026-09-05: процент
+                    здесь был линейной функцией того самого числа
+                    упоминаний, что стоит рядом, — один факт, показанный
+                    дважды, и второй раз в виде измерения, которого не
+                    было. Причём утверждение о ПОВЕДЕНИИ ЧЕЛОВЕКА. */}
                 <span className="conversations-section__hint">
                   {' '}
-                  — упомянуто {w.repeatCount} раз, уверенность {(w.confidence * 100).toFixed(0)}%
+                  — упомянуто {w.repeatCount} раз (предупреждение появляется со второго);{' '}
+                  {confidenceWording(w.confidence, 'repeat-formula')}
                 </span>
               </li>
             ))}
           </ul>
         </div>
+      )}
+
+      {peopleNotLoaded && (
+        <NotLoadedNotice
+          what="список людей проекта"
+          consequence="Сопоставить говорящего с человеком в этом разговоре сейчас нельзя."
+        />
+      )}
+
+      {argumentTrackingFailed && (
+        <NotLoadedNotice
+          what="список ваших аргументов"
+          consequence="Отметок «прозвучал / не прозвучал» в этом разговоре не будет — следите за ними сами."
+        />
       )}
 
       {trackedArguments.length > 0 && (
@@ -468,6 +593,29 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
         </button>
       )}
 
+      {captureState === 'idle' && people.length > 0 && (
+        <div className="assistance-screen__counterpart">
+          <label htmlFor="assistance-counterpart">С кем разговор</label>
+          <select
+            id="assistance-counterpart"
+            value={counterpartId}
+            onChange={(e) => setCounterpartId(e.target.value)}
+          >
+            <option value="">Не указывать</option>
+            {people.map((p) => (
+              <option key={p.personId} value={p.personId}>
+                {p.person.displayName ?? 'без имени'}
+              </option>
+            ))}
+          </select>
+          <p className="conversations-section__hint">
+            Нужно только для хронологии конфликта: записи там всегда называют человека, поэтому без выбора рост и
+            спад накала и настойчивый интерес к темам в неё не попадут. На сам экран сопровождения выбор не влияет,
+            и по голосу мы никого не опознаём.
+          </p>
+        </div>
+      )}
+
       {needsAudioConsent && (
         <ThirdPartyAudioConsentPrompt source="assistance-screen" onGranted={() => { setNeedsAudioConsent(false); void handleStart(); }} onCancel={() => setNeedsAudioConsent(false)} />
       )}
@@ -487,7 +635,7 @@ export function AssistanceScreen({ projectId }: AssistanceScreenProps) {
       )}
       {captureState === 'error' && (
         <>
-          <p className="generation-error">{captureError}</p>
+          <p role="alert" className="generation-error">{captureError}</p>
           <button type="button" onClick={handleStart}>
             Попробовать снова
           </button>

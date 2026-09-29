@@ -21,6 +21,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { getDisclaimerStatus } from '../lib/features';
 import { LaunchDisclaimer } from './LaunchDisclaimer';
 import { currentStartAttribution, startParamRoute } from '../lib/start-param';
+import { isPublicRoute } from '../lib/public-routes';
 
 type GateState = 'loading' | 'blocked' | 'open' | 'error';
 
@@ -32,20 +33,50 @@ function fingerprint(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
+/** Тело проверки дисклеймера — отдельной функцией, а не телом эффекта.
+ *
+ * Причина в проверяемости, и она честная. Эффект в статическом рендере
+ * не запускается, поэтому мутация «убрать пропуск публичных страниц из
+ * эффекта» не ловилась ничем: страница всё равно рисовалась коротким
+ * замыканием ниже. А пропуск здесь не украшение — вне Telegram
+ * `getAuthHeaders()` бросает СИНХРОННО, то есть без этой строки на
+ * каждой публичной странице в эффекте возникала бы необработанная
+ * ошибка. Функцию можно вызвать в проверке напрямую.
+ *
+ * @param publicPage страница открыта без Telegram по построению
+ */
+export async function checkDisclaimer(
+  publicPage: boolean,
+  setState: (s: GateState) => void,
+  setError: (e: string) => void,
+  fetchStatus: () => Promise<{ acknowledged: boolean }> = getDisclaimerStatus,
+): Promise<void> {
+  if (publicPage) return;
+  try {
+    const status = await fetchStatus();
+    setState(status.acknowledged ? 'open' : 'blocked');
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Не удалось проверить статус приложения');
+    setState('error');
+  }
+}
+
 export function AppGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>('loading');
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const pathname = usePathname();
+  // Пункт [gate-locked-the-public-door] 2026-09-26. Решение принимается
+  // ДО любого состояния и до любого запроса: публичная страница не
+  // должна ни ждать проверки, ни зависеть от того, чем эта проверка
+  // кончилась. Вне Telegram `getAuthHeaders()` не возвращает 401, а
+  // БРОСАЕТ — шлюз уходил в `error` и рисовал «Не удалось загрузить
+  // приложение» вместо страницы, ради которой человеку прислали ссылку.
+  const publicPage = isPublicRoute(pathname ?? '/');
 
   useEffect(() => {
-    getDisclaimerStatus()
-      .then((status) => setState(status.acknowledged ? 'open' : 'blocked'))
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Не удалось проверить статус приложения');
-        setState('error');
-      });
-  }, []);
+    void checkDisclaimer(publicPage, setState, setError);
+  }, [publicPage]);
 
   // Пункт [deep-links] 2026-09-02: переход по параметру запуска.
   //
@@ -82,6 +113,11 @@ export function AppGate({ children }: { children: ReactNode }) {
     }
     router.replace(target);
   }, [state, pathname, router]);
+
+  // Публичная страница рисуется сразу и целиком. Дисклеймер ей не
+  // показывается намеренно: он — условие пользования приложением, а
+  // пришедший по ссылке им не пользуется (см. `lib/public-routes.ts`).
+  if (publicPage) return <>{children}</>;
 
   if (state === 'loading') {
     return <main className="page page--loading">Загрузка…</main>;

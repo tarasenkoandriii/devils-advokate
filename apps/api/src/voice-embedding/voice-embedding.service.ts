@@ -80,14 +80,44 @@ export class VoiceEmbeddingService {
    * сохранённым эталоном пользователя. Возвращает null, если эталона
    * ещё нет — честно, не выдумывает результат сравнения из ничего. */
   async verify(userId: string, candidateEmbedding: number[], threshold: number = DEFAULT_THRESHOLD): Promise<boolean | null> {
+    return (await this.verifyDetailed(userId, candidateEmbedding, threshold)).isMatch;
+  }
+
+  /** Пункт [voice-attribution] 2026-09-05 — ответ несёт основание, а не
+   * один вердикт.
+   *
+   * НАЙДЕНО: наружу уходило `{ isMatch }` — голое «это вы / это не вы»,
+   * полученное сравнением с порогом, который в этом же файле честно
+   * назван неоткалиброванным на реальных голосах. Дальше по этому
+   * вердикту решается, ЧЬИ слова уйдут в разбор поведения собеседника:
+   * ошибка порога отправляет туда собственные слова человека.
+   *
+   * Само сходство и порог теперь возвращаются рядом с вердиктом, и
+   * отдельным полем сказано, что порог не откалиброван. Это не делает
+   * измерение точнее — это перестаёт выдавать его за точное (тот же
+   * урок, что в пункте [unmeasured-confidence]). */
+  async verifyDetailed(
+    userId: string,
+    candidateEmbedding: number[],
+    threshold: number = DEFAULT_THRESHOLD,
+  ): Promise<{ isMatch: boolean | null; similarity: number | null; threshold: number; calibrated: false; reason?: string }> {
     const reference = await this.getReference(userId);
-    if (!reference) return null;
+    if (!reference) {
+      return { isMatch: null, similarity: null, threshold, calibrated: false, reason: 'Эталон голоса не записан' };
+    }
     if (reference.length !== candidateEmbedding.length) {
       // Размерности не совпадают (например, модель сменилась) —
       // честно "не можем сравнить", не бросаем и не гадаем.
-      return null;
+      return {
+        isMatch: null,
+        similarity: null,
+        threshold,
+        calibrated: false,
+        reason: 'Эталон записан другой моделью — сравнивать нечего с чем',
+      };
     }
-    return isMatch(reference, candidateEmbedding, threshold);
+    const similarity = cosineSimilarity(reference, candidateEmbedding);
+    return { isMatch: similarity >= threshold, similarity, threshold, calibrated: false };
   }
 
   async hasEnrollment(userId: string): Promise<boolean> {

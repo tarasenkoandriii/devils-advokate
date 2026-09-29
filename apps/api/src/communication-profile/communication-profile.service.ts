@@ -17,11 +17,16 @@
 // момент последнего refresh(), не момент отдельного разговора,
 // который дал наибольший вклад в вывод.
 
+import { personLevelFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { CommunicationTraitType, ConversationProcessingStatus, PersonCommunicationTrait } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { factsBlockWithInstruction } from '../common/fact-provenance';
+import { orderLabel } from '../common/server-time';
+import { ConsentService } from '../consent/consent.service';
+import { ConsentType } from '@prisma/client';
 
 const TASK_TYPE = 'communication-profile';
 
@@ -73,14 +78,23 @@ export class CommunicationProfileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly consent: ConsentService,
   ) {}
 
   async refresh(userId: string, personId: string) {
+    // Пункт [consent-that-could-not-be-given] 2026-09-24: предмет этого
+    // разбора — названный человек, и решение владельца (§16.0 ТЗ)
+    // требует для таких разборов ОТДЕЛЬНОГО согласия. Граница и обе её
+    // стороны — в common-реестре `consent/person-research.ts`.
+    await this.consent.requireConsent(userId, ConsentType.PERSON_RESEARCH);
     await this.findOwnedPerson(userId, personId);
 
     const [facts, conversations] = await Promise.all([
+      // Пункт [scope-not-applied] 2026-09-06 — портрет общения строится
+      // на уровне человека осознанно (см. заголовок файла), поэтому
+      // правило здесь слабее проектного.
       this.prisma.personFact.findMany({
-        where: { personId, status: 'ACTIVE' },
+        where: { personId, status: 'ACTIVE', ...personLevelFactsScopeWhere() },
       }),
       this.prisma.conversation.findMany({
         where: {
@@ -103,16 +117,18 @@ export class CommunicationProfileService {
     }
 
     const factsSummary =
-      facts.length > 0 ? facts.map((f: { content: string }) => `- ${f.content}`).join('\n') : '(фактов нет)';
+      facts.length > 0 ? factsBlockWithInstruction(facts) : '(фактов нет)';
     const conversationsSummary = conversations
-      .map((c: any) => {
+      // Пункт [server-said-which-day] 2026-09-24: порядок вместо числа
+      // по UTC — см. common/server-time.ts.
+      .map((c: any, i: number, all: any[]) => {
         const text = (c.transcript?.segments ?? []).map((s: any) => s.text).join(' ');
-        return text ? `(${c.occurredAt.toISOString().slice(0, 10)}) ${text}` : null;
+        return text ? `(разговор ${orderLabel(i, all.length, true)}) ${text}` : null;
       })
       .filter(Boolean)
       .join('\n\n');
 
-    const userPrompt = `Известные факты о человеке:\n${factsSummary}\n\nЕго реплики из прошлых разговоров:\n${conversationsSummary || '(реплик пока нет)'}`;
+    const userPrompt = `Факты о человеке, каждый с указанием происхождения:\n${factsSummary}\n\nЕго реплики из прошлых разговоров:\n${conversationsSummary || '(реплик пока нет)'}`;
 
     const activePrompt = await this.prisma.promptVersion.findFirst({
       where: { promptId: TASK_TYPE, status: 'ACTIVE' },

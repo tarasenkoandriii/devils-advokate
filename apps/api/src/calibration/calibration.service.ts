@@ -24,6 +24,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScenarioConfidence } from '@prisma/client';
+import { bucketCalibration, MIN_BUCKET_SAMPLE_SIZE } from './bucket-calibration';
 
 const MIN_SAMPLE_SIZE = 30; // ТЗ §4.3, буквально зафиксировано как стартовое значение
 const CONFIDENCE_ANCHORS: Record<string, number> = { LOW: 0.25, MEDIUM: 0.5, HIGH: 0.75 };
@@ -35,23 +36,73 @@ export class CalibrationService {
   // Вызывается плановым заданием (pg_cron, тот же паттерн, что уже
   // используется в проекте — не по HTTP-запросу, ТЗ §5.3: "без POST —
   // пересчёт полностью автоматический").
-  async recomputeCalibration() {
-    const confirmed = await this.prisma.outcomeScenario.findMany({
+  /** Пункт [background-jobs] 2026-09-04 — счёт по корзинам ОДНИМ запросом
+   * к БД вместо чтения всех подтверждённых сценариев в память.
+   *
+   * Было: `findMany` без потолка по всей таблице — все подтверждённые
+   * исходы ВСЕХ пользователей продукта уезжали в память планового
+   * задания ради четырёх средних. На старте это десятки строк, дальше
+   * растёт линейно вместе с продуктом и никогда не уменьшается; тик,
+   * который однажды не поместится в память, не сообщит об этом никому —
+   * калибровка просто перестанет обновляться. Ровно тот же класс, что
+   * разбирался в [page-limits], только у задачи без экрана.
+   *
+   * groupBy даёт ту же арифметику: доля подтверждённых в корзине и
+   * Brier score считаются из счётчиков, а не из перечисления строк. */
+  private async bucketCounts(): Promise<Map<string, { total: number; confirmed: number }>> {
+    // groupBy у Prisma типизируется через возвращаемое значение, поэтому
+    // приведение стоит на самом вызове, а не на результате — иначе TS
+    // выводит тип аргумента из ожидаемого ответа и ругается на аргумент.
+    const groupBy = this.prisma.outcomeScenario.groupBy as unknown as (args: unknown) => Promise<
+      Array<{ confidence: string; outcomeConfirmed: boolean | null; _count: { _all: number } }>
+    >;
+    const grouped = await groupBy({
+      by: ['confidence', 'outcomeConfirmed'],
       where: { outcomeConfirmed: { not: null } },
-      select: { confidence: true, outcomeConfirmed: true },
+      _count: { _all: true },
     });
+
+    const buckets = new Map<string, { total: number; confirmed: number }>();
+    for (const g of grouped) {
+      const entry = buckets.get(g.confidence) ?? { total: 0, confirmed: 0 };
+      entry.total += g._count._all;
+      if (g.outcomeConfirmed === true) entry.confirmed += g._count._all;
+      buckets.set(g.confidence, entry);
+    }
+    return buckets;
+  }
+
+  async recomputeCalibration() {
+    const buckets = await this.bucketCounts();
+    let datasetSampleSize = 0;
+    for (const counts of buckets.values()) datasetSampleSize += counts.total;
 
     // Эмпирическая точность по корзине — записывается обратно во ВСЕ
     // сценарии этой корзины (и уже подтверждённые, и ещё нет) как
     // лучшая текущая оценка вероятности для новых сценариев такой же
     // категории уверенности.
+    //
+    // Пункт [uncalibrated-number] 2026-09-06: но только если выборка
+    // САМОЙ КОРЗИНЫ дошла до порога. Ниже порога пишется NULL — это
+    // ровно то, что означает NULL по schema.prisma («ещё не
+    // откалибровано»), и это снимает число, записанное прежней
+    // версией пересчёта по одному-двум исходам. Обоснование порога и
+    // почему он отдельный от gatePassed — в bucket-calibration.ts.
     for (const bucket of Object.keys(CONFIDENCE_ANCHORS) as ScenarioConfidence[]) {
-      const inBucket = confirmed.filter((s: any) => s.confidence === bucket);
-      if (inBucket.length === 0) continue;
-      const empiricalAccuracy = inBucket.filter((s: any) => s.outcomeConfirmed === true).length / inBucket.length;
+      const calibration = bucketCalibration(buckets.get(bucket), datasetSampleSize, MIN_SAMPLE_SIZE);
+      // Снятие числа адресуется только тем строкам, где число есть:
+      // иначе плановое задание каждую ночь переписывало бы NULL'ом
+      // всю таблицу сценариев продукта — ровно тот класс, что
+      // разбирался в [background-jobs], только записью вместо чтения.
+      // Запись самого числа адресуется всей корзине: там значение
+      // меняется на новое, а не «остаётся как было».
+      const where =
+        calibration.calibratedProbability === null
+          ? { confidence: bucket, calibratedProbability: { not: null } }
+          : { confidence: bucket };
       await this.prisma.outcomeScenario.updateMany({
-        where: { confidence: bucket },
-        data: { calibratedProbability: empiricalAccuracy },
+        where,
+        data: { calibratedProbability: calibration.calibratedProbability },
       });
     }
 
@@ -72,24 +123,45 @@ export class CalibrationService {
   }
 
   async getStatus() {
-    const confirmed = await this.prisma.outcomeScenario.findMany({
-      where: { outcomeConfirmed: { not: null } },
-      select: { confidence: true, outcomeConfirmed: true },
-    });
+    // Пункт [background-jobs] 2026-09-04 — здесь была вторая копия того
+    // же неограниченного чтения (getStatus зовётся и из планового
+    // задания, и с операторского экрана). Brier score раскладывается на
+    // счётчики без потери точности: внутри корзины якорь один и тот же,
+    // поэтому сумма квадратов ошибок — это два слагаемых на корзину,
+    // взвешенных числом подтверждённых и неподтверждённых исходов.
+    const buckets = await this.bucketCounts();
 
-    const sampleSize = confirmed.length;
-    const gatePassed = sampleSize >= MIN_SAMPLE_SIZE;
-
-    let brierScore: number | null = null;
-    if (sampleSize > 0) {
-      const sumSquaredError = confirmed.reduce((sum: number, s: any) => {
-        const anchor = CONFIDENCE_ANCHORS[s.confidence] ?? 0.5;
-        const actual = s.outcomeConfirmed ? 1 : 0;
-        return sum + (anchor - actual) ** 2;
-      }, 0);
-      brierScore = sumSquaredError / sampleSize;
+    let sampleSize = 0;
+    let sumSquaredError = 0;
+    for (const [confidence, counts] of buckets) {
+      const anchor = CONFIDENCE_ANCHORS[confidence] ?? 0.5;
+      const notConfirmed = counts.total - counts.confirmed;
+      sampleSize += counts.total;
+      sumSquaredError += counts.confirmed * (anchor - 1) ** 2 + notConfirmed * anchor ** 2;
     }
 
-    return { sampleSize, brierScore, threshold: MIN_SAMPLE_SIZE, gatePassed };
+    const gatePassed = sampleSize >= MIN_SAMPLE_SIZE;
+    const brierScore = sampleSize > 0 ? sumSquaredError / sampleSize : null;
+
+    // Пункт [uncalibrated-number] 2026-09-06 — разбивка по корзинам
+    // рядом со сводным числом. Без неё экран показывал одну общую
+    // выборку, и «30 подтверждённых исходов» читалось как «все три
+    // корзины измерены», хотя тридцать могли лежать в одной. Корзины
+    // перечислены ВСЕ, включая пустые: отсутствующая корзина обязана
+    // попасть в ответ строкой — иначе повторится то же молчание, что
+    // разбиралось в сверке плановых заданий.
+    const bucketRows = (Object.keys(CONFIDENCE_ANCHORS) as ScenarioConfidence[]).map((confidence) => ({
+      confidence,
+      ...bucketCalibration(buckets.get(confidence), sampleSize, MIN_SAMPLE_SIZE),
+    }));
+
+    return {
+      sampleSize,
+      brierScore,
+      threshold: MIN_SAMPLE_SIZE,
+      gatePassed,
+      bucketThreshold: MIN_BUCKET_SAMPLE_SIZE,
+      buckets: bucketRows,
+    };
   }
 }

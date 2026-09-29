@@ -10,8 +10,22 @@ import { JsonPanel } from './JsonPanel';
 import { AgendaView, RelevanceSnapshotView, ReportContentView } from './interview-pool/InterviewPoolViews';
 import { haptic } from '../../lib/telegram';
 import { AiErrorNotice } from './AiErrorNotice';
+import { CandidateSheetLauncher } from './hiring/CandidateSheetLauncher';
+import { candidateConsentApi } from '../../lib/hiring/api';
+import { EmployerCandidateTools } from './hiring/TeamPanels';
 
 const P = (projectId: string) => `/interview-pool/projects/${projectId}`;
+
+// Стадии воронки — ровно четыре значения схемы. «Принят»/«отказ» здесь
+// нет намеренно (ТЗ §2.3): финальное решение о найме продукт не хранит
+// структурой, чтобы не мочь его «посоветовать».
+const STAGE_ORDER = ['SCHEDULED', 'INTERVIEWED', 'AWAITING_FOLLOWUP', 'UNDER_REVIEW'] as const;
+const STAGE_LABEL: Record<string, string> = {
+  SCHEDULED: 'Назначено',
+  INTERVIEWED: 'Собеседование прошло',
+  AWAITING_FOLLOWUP: 'Ждём материалы',
+  UNDER_REVIEW: 'На рассмотрении',
+};
 
 function useJson<T>(route: string | null, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
@@ -109,7 +123,7 @@ export function ShareLinkView({ link, expiresAt, onClose }: { link: string; expi
   );
 }
 
-export function CandidatesPanel({ projectId, config }: { projectId: string; config: any }) {
+export function CandidatesPanel({ projectId, config, employer = false }: { projectId: string; config: any; employer?: boolean }) {
   const { data: statuses, error, refresh } = useJson<any[]>(`${P(projectId)}/candidates`);
   const [mode, setMode] = useState<'none' | 'new' | 'existing'>('none');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -131,6 +145,16 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
     try { setAgenda((a) => ({ ...a, [candidateProfileId]: undefined })); const d = await domainApi.getJson(`${P(projectId)}/candidates/${candidateProfileId}/agenda`); setAgenda((a) => ({ ...a, [candidateProfileId]: d })); }
     catch (e) { setErr(e ?? new Error('Повестка недоступна')); }
   }
+  async function revokeConsent(candidateProfileId: string) {
+    if (!window.confirm('Кандидат сам попросил удалить свои данные? Отзыв не отменяется: чтобы вернуться к работе с ним, согласие придётся получить заново.')) return;
+    try {
+      const r = await candidateConsentApi.revoke(candidateProfileId, { candidateAskedToRevoke: true });
+      haptic('success');
+      window.alert(r.message);
+      refresh();
+    } catch (e) { setErr(e ?? new Error('Не удалось записать отзыв')); }
+  }
+
   async function share(candidateProfileId: string) {
     if (!window.confirm('Подтверждаете, что кандидат дал согласие на передачу профиля в команду?')) return;
     try {
@@ -156,16 +180,53 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
           return (
             <li key={s.id} className="domain-entities__item">
               <button type="button" className="domain-entities__title" onClick={() => setOpenId(openId === s.id ? null : s.id)}>
-                {cp.displayName ?? s.candidateProfileId} <span className="domain-badge">{s.currentStage ?? s.status ?? '—'}</span>
+                {/* Аудит 2026-09-03: бейдж читал поля currentStage/status,
+                    которых в ответе нет вовсе — стадия у записи называется
+                    stage, и в списке всегда стоял прочерк. */}
+                {cp.displayName ?? s.candidateProfileId} <span className="domain-badge">{STAGE_LABEL[s.stage as string] ?? s.stage ?? '—'}</span>
               </button>
               {openId === s.id && (
                 <div className="domain-entities__body">
                   {cp.contactInfo && <p>{cp.contactInfo}</p>}
-                  <div className="entity-form__actions">
-                    <button type="button" className="secondary" onClick={() => loadAgenda(cp.id)}>Повестка собеседования</button>
-                    <button type="button" className="secondary" onClick={() => share(cp.id)}>Поделиться с командой</button>
-                  </div>
+                  {/* А-6 (аудит 2026-09-03): отзыв согласия, полученный вне
+                      продукта. Кандидат остаётся в списке с отметкой — исчезнув
+                      без следа, он выглядел бы как сбой, а не как исполненная
+                      просьба; но отчёты и разборы по нему больше не идут. */}
+                  {cp.consentRevokedAt ? (
+                    <p className="dtp-status dtp-status--warn">
+                      Кандидат отозвал согласие {new Date(cp.consentRevokedAt).toLocaleDateString('ru-RU')} — отчёты и разборы по нему не формируются и не доставляются.
+                    </p>
+                  ) : (
+                    <div className="entity-form__actions">
+                      <button type="button" className="secondary" onClick={() => loadAgenda(cp.id)}>Повестка собеседования</button>
+                      <button type="button" className="secondary" onClick={() => share(cp.id)}>Поделиться с командой</button>
+                      <button type="button" className="secondary" onClick={() => revokeConsent(cp.id)}>Кандидат отозвал согласие</button>
+                    </div>
+                  )}
                   {agenda[cp.id] && <AgendaView questions={agenda[cp.id]} />}
+                  {/* Пункт [job-domain-v2]: лист кандидата — наследует пункты листа вакансии, позиции с опорой */}
+                  <CandidateSheetLauncher pipelineStatusId={s.id} />
+                  {/* Аудит 2026-09-03: стадия воронки не менялась ниоткуда —
+                      INTERVIEWED и UNDER_REVIEW не выставлял ни один путь, и в
+                      сводном отчёте две колонки из четырёх были вечными нулями.
+                      Ставит человек: ни одной подсказки модели здесь нет, и
+                      «принят»/«отказ» в списке нет намеренно — решение о найме
+                      фиксируется вне продукта. */}
+                  <h4>Стадия</h4>
+                  <div className="entity-form__actions">
+                    {STAGE_ORDER.map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        className={s.stage === st ? 'primary' : 'secondary'}
+                        onClick={async () => { await domainApi.patchJson(`/interview-pool/pipeline-statuses/${s.id}/stage`, { stage: st }); refresh(); }}
+                      >
+                        {STAGE_LABEL[st]}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="dtp-hint">Стадия — ваша отметка о ходе процесса. «Ждём материалы» продукт может поставить сам, когда появились запросы к кандидату; остальные ставите вы.</p>
+
                   <h4>Этапы</h4>
                   <EntityForm
                     fields={[
@@ -183,6 +244,7 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
           );
         })}
       </ul>
+      {employer && statuses && statuses.length > 0 && <EmployerCandidateTools projectId={projectId} statuses={statuses} onChanged={refresh} />}
       {mode === 'none' && (
         <div className="entity-form__actions">
           <button type="button" className="primary" onClick={() => setMode('new')}>+ Новый кандидат</button>
@@ -190,7 +252,24 @@ export function CandidatesPanel({ projectId, config }: { projectId: string; conf
         </div>
       )}
       {mode === 'new' && <EntityForm fields={[{ name: 'displayName', label: 'Имя', type: 'text', required: true }, { name: 'contactInfo', label: 'Контакт', type: 'text' }, { name: 'resumeText', label: 'Резюме (текст)', type: 'textarea' }]} submitLabel="Создать и добавить" onSubmit={createAndAdd} onCancel={() => setMode('none')} />}
-      {mode === 'existing' && <ExistingCandidatePicker onSubmit={addExisting} onCancel={() => setMode('none')} />}
+      {mode === 'existing' && (
+        <ExistingCandidatePicker
+          onSubmit={async (v) => {
+            // А-10 (аудит 2026-09-03): кандидат, которого уже рассматривают в
+            // другом проекте, добавляется только с новым подтверждением его
+            // согласия — маршрут был, кнопки не было.
+            try {
+              await addExisting(v);
+            } catch (e) {
+              const forbidden = (e as { httpStatus?: number })?.httpStatus === 403;
+              if (!forbidden) throw e;
+              if (!window.confirm('Этот кандидат уже участвует в другом проекте (другая вакансия или заказчик). Он подтвердил согласие рассматриваться и здесь?')) return;
+              await addExisting({ ...v, candidateConsentReconfirmed: true });
+            }
+          }}
+          onCancel={() => setMode('none')}
+        />
+      )}
     </div>
   );
 }
@@ -254,7 +333,9 @@ export function RelevancePanel({ projectId, config }: { projectId: string; confi
   );
 }
 
-export function TeamPanel({ config }: { config: any }) {
+// Пункт [job-domain-v2]: teamType — команда компании (EMPLOYER) ведёт проекты
+// работодателя, команда агентства (AGENCY) — пулы; на бэкенде это разные роли.
+export function TeamPanel({ config, teamType = 'AGENCY' }: { config: any; teamType?: 'AGENCY' | 'EMPLOYER' }) {
   const [team, setTeam] = useState<any>(null);
   const [invite, setInvite] = useState<{ link: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -265,11 +346,21 @@ export function TeamPanel({ config }: { config: any }) {
       <p className="card-section__empty">Команда рекрутеров: общий пул кандидатов и переиспользование истории собеседований. Профиль кандидата попадает в команду только после его явного согласия.</p>
       <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />
       {myTeams && myTeams.length > 0 && (
-        <ul className="dtp-access-log">{myTeams.map((t) => <li key={t.id}><strong>{t.name}</strong> · {t._count?.members ?? '?'} чел. · {t.role === 'OWNER' ? 'владелец' : 'участник'}{t.id === teamId && ' · текущая'}{t.id !== teamId && <> <button type="button" className="secondary" onClick={() => setTeam(t)}>выбрать</button></>}</li>)}</ul>
+        <ul className="dtp-access-log">{myTeams.map((t) => <li key={t.id}><strong>{t.name}</strong> · {t._count?.members ?? '?'} чел. · {t.role === 'OWNER' ? 'владелец' : 'участник (те же права на пул)'}{t.id === teamId && ' · текущая'}{t.id !== teamId && <> <button type="button" className="secondary" onClick={() => setTeam(t)}>выбрать</button></>}</li>)}</ul>
       )}
       {teamId ? (
         <>
           <p>Команда: <strong>{myTeams?.find((t) => t.id === teamId)?.name ?? team?.name ?? teamId}</strong></p>
+          {/* Пункт [member-equals-owner] 2026-09-05: экран показывал
+              «владелец» и «участник», как будто это разные уровни
+              доступа. В коде роль различается РОВНО В ОДНОМ месте —
+              управление составом команды; на пул кандидатов права
+              одинаковые. Сказано до нажатия, а не выяснится потом. */}
+          <p className="card-section__empty">
+            Приглашённый получает те же права на пул, что и вы: заводить и вести кандидатов, передавать их профили
+            наружу по ссылке, отзывать передачи. Отличие одно — он не может приглашать других и менять состав
+            команды. Ссылка живёт 72 часа; её можно отозвать, но уже вступившего участника это не выведет.
+          </p>
           <div className="entity-form__actions">
             <button type="button" className="secondary" onClick={async () => { try { const r = await domainApi.postJson(`/recruiting-teams/${teamId}/invite-link`, {}); setInvite({ link: String(r.deepLink ?? r.token ?? ''), expiresAt: String(r.expiresAt ?? '') }); } catch (e) { setError(e ?? new Error('Ошибка')); } }}>Ссылка-приглашение</button>
           </div>
@@ -281,7 +372,7 @@ export function TeamPanel({ config }: { config: any }) {
         </>
       ) : (
         <>
-          <EntityForm fields={[{ name: 'name', label: 'Название команды', type: 'text', required: true }]} submitLabel="Создать команду" onSubmit={async (v) => { setTeam(await domainApi.postJson('/recruiting-teams', v)); refreshTeams(); }} />
+          <EntityForm fields={[{ name: 'name', label: 'Название команды', type: 'text', required: true }]} submitLabel="Создать команду" onSubmit={async (v) => { setTeam(await domainApi.postJson('/recruiting-teams', { ...v, teamType })); refreshTeams(); }} />
           <EntityForm fields={[{ name: 'token', label: 'Токен приглашения', type: 'text', required: true }]} submitLabel="Вступить по токену" onSubmit={async (v) => {
             const t = String(v.token);
             // Аудит 2026-09-02: joinTeam возвращает RecruitingTeamMember,

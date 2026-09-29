@@ -5,7 +5,9 @@
 // сценарий существовал в классификаторе интейка и полностью в API, но
 // не в этом типе — квиз отправлял пользователя в домен, экрана которого
 // нет: проект создавался, а страница отвечала «Неизвестный сценарий».
-export type DomainId = 'dtp' | 'family-law' | 'health' | 'interview-pool' | 'investment' | 'major-purchase' | 'job-search';
+// Пункт [job-domain-v2] §7: 'employer-hiring' — восьмой домен, работодатель
+// как пользователь (компания с командой) поверх общего слоя найма.
+export type DomainId = 'dtp' | 'family-law' | 'health' | 'interview-pool' | 'investment' | 'major-purchase' | 'job-search' | 'employer-hiring';
 
 export type FieldType = 'text' | 'textarea' | 'number' | 'date' | 'datetime' | 'select' | 'bool' | 'money' | 'url' | 'file-base64';
 

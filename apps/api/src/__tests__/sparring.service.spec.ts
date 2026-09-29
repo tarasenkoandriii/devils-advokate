@@ -66,7 +66,17 @@ function createFakePrisma() {
       findMany: async ({ where }: any) => relationships.filter((r) => r.personAId === where.OR[0].personAId || r.personBId === where.OR[1].personBId),
     },
     behaviorPrecedent: {
-      findMany: async ({ where }: any) => precedents.filter((p) => p.personId === where.personId),
+      // Пункт [partial-basis] 2026-09-04: фейк ЧЕСТНО обрезает по take и
+      // умеет count — иначе проверка усечения проверяла бы поведение
+      // фейка, а не сервиса.
+      findMany: async ({ where, take }: any) => {
+        const rows = precedents.filter((p) => p.personId === where.personId);
+        return take ? rows.slice(0, take) : rows;
+      },
+      count: async ({ where, take }: any) => {
+        const n = precedents.filter((p) => p.personId === where.personId).length;
+        return take ? Math.min(n, take) : n;
+      },
     },
     promptVersion: {
       findFirst: async () => null,
@@ -409,6 +419,38 @@ async function run() {
     // провайдера к моменту отказа — ровно та ошибка, которую аудит
     // нашёл в ConversationsService.streamUploadAudio().
     assertEqual(calls, ['checked'], 'ни одной загрузки при отсутствии согласия');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (сверка мест применения 2026-09-04): ВТОРОЙ шаг голосовой реплики тоже спрашивает согласие — отзыв между шагами останавливает отправку', async () => {
+    // Комментарий в коде прямо говорит, зачем проверка стоит здесь во
+    // второй раз: шаги независимы (клиент вправе вызвать submit с
+    // audioUrl, полученным раньше), а согласие могло быть отозвано между
+    // ними. Мутационная сверка мест применения показала, что удалить эту
+    // строку можно незаметно — правило существовало только в комментарии.
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    const calls: string[] = [];
+    const consent = {
+      assertAudioMayLeaveDevice: async () => {
+        calls.push('checked');
+        throw new ForbiddenException('Consent required: RECORDING');
+      },
+    };
+    const transcription = { submitWebhookJob: async () => { calls.push('SENT'); return { storedId: 'x' }; } };
+    const svc = new SparringService(
+      prisma as any, new FakeAIRouterService() as any, transcription as any, new FakeSecretsService() as any,
+      new FakeTextToSpeechService() as any, consent as any,
+    );
+    const session = await prisma.sparringSession.create({
+      data: { projectId: PROJECT_ID, status: 'ACTIVE', archetypeType: 'TROUBLEMAKER' },
+    });
+
+    await assertThrowsAsync(
+      () => svc.submitVoiceReply(USER_ID, session.id, 'https://provider.example/audio-1'),
+      ForbiddenException,
+      'submitVoiceReply() при отозванном согласии',
+    );
+    assertEqual(calls, ['checked'], 'ни одной отправки провайдеру после отказа');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: submitVoiceReply() запускает транскрибацию и создаёт PENDING job', async () => {
@@ -834,6 +876,25 @@ async function run() {
 
     await svc.startSession(USER_ID, PROJECT_ID, undefined, undefined, undefined, undefined, 'sched-1');
     assertEqual(fakeRouter.callCount, 1, 'без предзаготовки — обычная генерация, AI вызван как раньше');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [partial-basis]: образ оппонента построен на срезе — сказано один раз на сессию', async () => {
+    // Приписка относится к данным о человеке, а не к отдельной реплике:
+    // на каждом ответе она превратилась бы в шум, который перестают
+    // читать.
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedPerson({ id: 'person-1', displayName: 'Начальник Иван' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: 'person-1' });
+    for (let i = 0; i < 9; i++) {
+      prisma._seedPrecedent({ personId: 'person-1', precedentDescription: `случай ${i}` });
+    }
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new SparringService(prisma as any, fakeRouter as any, {} as any, {} as any, new FakeTextToSpeechService() as any, fakeConsent() as any);
+
+    const session = await svc.startSession(USER_ID, PROJECT_ID, 'person-1');
+    assertEqual(fakeRouter.lastRequest.userPrompt.includes('последние 5 из 9'), true, 'модели не сказано, что прецеденты — срез');
+    assertEqual((session.basisNote ?? '').includes('последние 5 из 9'), true, 'человеку не сказано, на чём построен образ оппонента');
   });
 
   for (const [name, fn] of scenarios) {

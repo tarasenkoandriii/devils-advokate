@@ -19,23 +19,44 @@ function createFakePrisma() {
     },
 
     outcomeScenario: {
-      findMany: async ({ where, select }: any) => {
+      // Пункт [background-jobs] 2026-09-04: калибровка больше НЕ читает
+      // таблицу целиком (было `findMany` без потолка по всем
+      // подтверждённым исходам всех пользователей продукта — плановое
+      // задание тянуло в память весь накопленный продукт ради четырёх
+      // средних). Заглушка бросает намеренно: если чтение вернётся,
+      // тесты назовут это вслух, а не молча продолжат работать.
+      findMany: async () => {
+        throw new Error('outcomeScenario.findMany: калибровка обязана считать агрегатами (groupBy), а не читать все строки');
+      },
+      groupBy: async ({ by, where }: any) => {
         let rows = scenarios;
         if (where?.outcomeConfirmed?.not === null) {
           rows = rows.filter((s) => s.outcomeConfirmed !== null);
         }
-        if (!select) return rows.map((r) => ({ ...r }));
-        const projected = rows.map((r) => {
-          const out: any = {};
-          for (const key of Object.keys(select)) out[key] = r[key];
-          return out;
-        });
-        return projected;
+        const groups = new Map<string, any>();
+        for (const r of rows) {
+          const key = by.map((k: string) => String(r[k])).join('|');
+          const existing = groups.get(key);
+          if (existing) {
+            existing._count._all++;
+            continue;
+          }
+          const fresh: any = { _count: { _all: 1 } };
+          for (const k of by) fresh[k] = r[k];
+          groups.set(key, fresh);
+        }
+        return [...groups.values()];
       },
+      // Пункт [uncalibrated-number] 2026-09-06: заглушка обязана
+      // понимать `calibratedProbability: { not: null }` — снятие
+      // протухшего числа адресуется только строкам, где число есть.
+      // Заглушка, которая молча игнорирует это условие, беднее
+      // production и пропустила бы полную перезапись таблицы.
       updateMany: async ({ where, data }: any) => {
         let count = 0;
         for (const s of scenarios) {
           if (where?.confidence && s.confidence !== where.confidence) continue;
+          if (where?.calibratedProbability?.not === null && (s.calibratedProbability ?? null) === null) continue;
           Object.assign(s, data);
           count++;
         }
@@ -96,11 +117,22 @@ describe('CalibrationService', () => {
     expect(status.brierScore).toBeCloseTo(expectedBrier, 5);
   });
 
+  /** ПЕРЕПИСАН, Пункт [uncalibrated-number] 2026-09-06. Тест был такой:
+   * три подтверждённых исхода в корзине MEDIUM, и он ТРЕБОВАЛ, чтобы
+   * calibratedProbability стала 2/3. То есть проверял ровно то
+   * поведение, которое ТЗ §4.3 запрещает буквально
+   * («calibratedProbability не активируется, пока датасет исходов
+   * меньше минимального размера выборки») — тест защищал дефект, а не
+   * инвариант. Изменён код, а не ослаблено требование: смысл теста
+   * («точность пишется и в ещё неподтверждённые сценарии корзины»)
+   * сохранён, но проверяется на выборке, которая имеет право на
+   * число. */
   it('recomputeCalibration пишет эмпирическую точность корзины обратно во ВСЕ сценарии этой корзины, включая ещё неподтверждённые', async () => {
     const prisma = createFakePrisma();
-    prisma._seedScenario({ confidence: 'MEDIUM', outcomeConfirmed: true });
-    prisma._seedScenario({ confidence: 'MEDIUM', outcomeConfirmed: true });
-    prisma._seedScenario({ confidence: 'MEDIUM', outcomeConfirmed: false });
+    // 30 подтверждённых в корзине — порог и всей выборки, и корзины.
+    for (let i = 0; i < 30; i++) {
+      prisma._seedScenario({ confidence: 'MEDIUM', outcomeConfirmed: i < 20 });
+    }
     // Ещё не подтверждённый сценарий той же корзины — должен всё равно
     // получить обновлённую calibratedProbability как лучшую текущую оценку.
     prisma._seedScenario({ confidence: 'MEDIUM', outcomeConfirmed: null });
@@ -108,13 +140,13 @@ describe('CalibrationService', () => {
     const service = makeService(prisma);
     await service.recomputeCalibration();
 
-    const empiricalAccuracy = 2 / 3; // 2 из 3 подтверждённых — true
+    const empiricalAccuracy = 20 / 30;
     for (const s of prisma._all()) {
       expect(s.calibratedProbability).toBeCloseTo(empiricalAccuracy, 5);
     }
   });
 
-  it('корзина без подтверждённых исходов не обновляется (нечего усреднять) и не ломает расчёт по другим корзинам', async () => {
+  it('корзина без подтверждённых исходов не ломает расчёт по другим корзинам', async () => {
     const prisma = createFakePrisma();
     prisma._seedScenario({ confidence: 'LOW', outcomeConfirmed: true });
     // HIGH-корзина вообще не встречается — recomputeCalibration не должен упасть.

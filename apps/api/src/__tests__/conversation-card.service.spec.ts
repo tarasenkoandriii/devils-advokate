@@ -48,6 +48,9 @@ function createFakePrisma() {
         }
         return take ? items.slice(0, take) : items;
       },
+      // Пункт [shown-not-all] 2026-09-05: фейк умеет count — карточка
+      // считает целое, чтобы сказать, что показано не всё.
+      count: async ({ where }: any) => args.filter((a) => a.projectId === where.projectId).length,
     },
     conversationScript: {
       findFirst: async ({ where }: any) => {

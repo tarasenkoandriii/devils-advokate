@@ -90,6 +90,19 @@ import {
   sandboxJsVacancy,
   sandboxJsVacancyMatch,
   sandboxJsStatistics,
+  sandboxTsOpenForVacancy,
+  sandboxTsConfirmAll,
+  sandboxTsPropose,
+  sandboxTsCvVariant,
+  sandboxTsOfferDraft,
+  sandboxEhCompany,
+  sandboxEhBrief,
+  sandboxEhConfig,
+  sandboxEhQuestionnaire,
+  sandboxEhPosting,
+  sandboxEhCandidate,
+  sandboxEhMatrix,
+  type SandboxSheetSummary,
 } from '../../lib/endpoints';
 import type {
   SandboxStatus,
@@ -476,6 +489,29 @@ export default function SandboxPage() {
   const [jsStats, setJsStats] = useState<SandboxJsStatistics | null>(null);
   const [jsBusy, setJsBusy] = useState<string | null>(null);
   const [jsError, setJsError] = useState<string | null>(null);
+
+  // ── Пункт [job-domain-v2] — лист условий соискателя (поверх job-search) и
+  // цепочка работодателя. Сводки — числа: пункты по сторонам, черновики,
+  // позиции, покрытие требований; содержимое с цитатами — в TMA.
+  const [tsSheet, setTsSheet] = useState<SandboxSheetSummary | null>(null);
+  const [tsOfferText, setTsOfferText] = useState('');
+  const [tsCv, setTsCv] = useState<{ highlights: number; cvText: string; note: string | null } | null>(null);
+  const [tsOfferDraft, setTsOfferDraft] = useState<string | null>(null);
+  const [tsLog, setTsLog] = useState<string[]>([]);
+  const [ehCompany, setEhCompany] = useState({ legalName: 'ТОВ Ромашка', registryCode: '12345678', domain: '' });
+  const [ehDone, setEhDone] = useState<{ company?: boolean; brief?: boolean; config?: boolean; questionnaire?: number; posting?: { complianceFlags: number; checklistOpen: string[] }; candidates: number; matrix?: { columns: number; rows: Array<{ displayName: string; covered: number; unknown: number }> } }>({ candidates: 0 });
+  const [ehBriefText, setEhBriefText] = useState('');
+  const [ehJobTitle, setEhJobTitle] = useState('');
+  const [ehCandidateName, setEhCandidateName] = useState('');
+  const [ehResume, setEhResume] = useState('');
+  const [ehSheet, setEhSheet] = useState<SandboxSheetSummary | null>(null);
+  const [ehError, setEhError] = useState<string | null>(null);
+  const [ehBusy, setEhBusy] = useState<string | null>(null);
+  async function withEh(action: string, fn: () => Promise<void>) {
+    setEhBusy(action); setEhError(null);
+    try { await fn(); } catch (e) { setEhError(errText(e)); } finally { setEhBusy(null); }
+  }
+  const sheetLine = (x: SandboxSheetSummary) => `${x.kind} · ${x.status} · пунктов: работодатель ${x.clauses.employer}, соискатель ${x.clauses.candidate}, черновиков ${x.clauses.drafts} · позиций: ${x.positions.confirmed} подтверждено / ${x.positions.drafts} черновиков · требования: ${x.counters.covered ?? 0} отражено / ${x.counters.partial ?? 0} частично / ${x.counters.not_covered ?? 0} нет / ${x.counters.unknown ?? 0} не обсуждалось · повестка: ${x.agenda}`;
 
   async function withJs(action: string, fn: () => Promise<void>) {
     setJsBusy(action);
@@ -1241,7 +1277,7 @@ export default function SandboxPage() {
                 {intakeState.status !== 'DISPATCHED' && (
                   <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <select value={dispatchScenario} onChange={(e) => setDispatchScenario(e.target.value)}>
-                      {['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase', 'job-search'].map((s) => (
+                      {['UNIVERSAL', 'dtp', 'family-law', 'health', 'interview-pool', 'investment', 'major-purchase', 'job-search', 'employer-hiring'].map((s) => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
@@ -1545,7 +1581,13 @@ export default function SandboxPage() {
                                             mpConfigId,
                                             mpVariantLabel,
                                             mpVariantPrice ? Number(mpVariantPrice) : undefined,
-                                            mpVariantPrice ? (mpDraft.currency ?? 'UAH') : undefined,
+                                            // Пункт [budget-invented-a-currency] 2026-09-24: здесь
+                                            // молча подставлялась гривна, когда у конфигурации
+                                            // валюты нет. Это не оформление, а ЗАПИСЬ: у варианта
+                                            // оставалась валюта, которой оператор не выбирал, и
+                                            // дальше она читалась как заявленная. Пусто значит
+                                            // «валюта проекта» — так это поле и задумано.
+                                            mpVariantPrice ? (mpDraft.currency ?? undefined) : undefined,
                                           );
                                           setMpVariantLabel('');
                                           setMpVariantPrice('');
@@ -2252,7 +2294,7 @@ export default function SandboxPage() {
                                   </div>
                                   {flBudget && (
                                     <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                                      {flBudget.byCurrency.map((b) => `${b.currency}: расходы ${b.totalExpense}, покрытие ${b.totalCoverage}, нетто ${b.netBudget}`).join(' · ')}
+                                      {flBudget.byCurrency.map((b) => `${b.currency ?? 'валюта не указана'}: расходы ${b.totalExpense}, покрытие ${b.totalCoverage}, нетто ${b.netBudget}`).join(' · ')}
                                       {flBudget.targetBudget !== null && ` · целевой бюджет: ${flBudget.targetBudget} ${flBudget.currency ?? ''}`}
                                     </div>
                                   )}
@@ -2641,6 +2683,48 @@ export default function SandboxPage() {
                                       ))}
                                     </div>
                                   )}
+                                  {/* Пункт [job-domain-v2] — лист условий по вакансии: пункты
+                                      работодателя из текста (AI-черновики) ↔ критерии соискателя;
+                                      подтверждение — отдельная кнопка; CV-вариант из своих слов;
+                                      оффер как документ. */}
+                                  {jsVacancies.length > 0 && (
+                                    <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 8 }}>
+                                      <b>Лист условий по вакансии</b>
+                                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                        {jsVacancies.map((v, i) => (
+                                          <button key={v.id} type="button" disabled={jsBusy !== null} onClick={() => withJs('ts-open', async () => { const r = await sandboxTsOpenForVacancy(v.id); setTsSheet(r); setTsLog((l) => [...l, `${r.resumed ? 'возобновлён' : 'открыт'} лист по ${jsMatches[i]?.title ?? v.siteHost}: ${sheetLine(r)}`]); })}>
+                                            {jsBusy === 'ts-open' ? '…' : `Лист: ${jsMatches[i]?.title ?? v.siteHost}`}
+                                          </button>
+                                        ))}
+                                      </div>
+                                      {tsSheet && (
+                                        <div style={{ marginTop: 8, fontSize: 13 }}>
+                                          <div><span className="badge badge-ok">ЛИСТ</span> {sheetLine(tsSheet)}</div>
+                                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                            <button type="button" disabled={jsBusy !== null || tsSheet.clauses.drafts + tsSheet.positions.drafts === 0} onClick={() => withJs('ts-confirm', async () => { const r = await sandboxTsConfirmAll(tsSheet.sheetId); setTsSheet(r); setTsLog((l) => [...l, `подтверждено человеком: пунктов ${r.clausesConfirmed}, позиций ${r.positionsConfirmed}`]); })}>
+                                              {jsBusy === 'ts-confirm' ? '…' : 'Подтвердить черновики (человек утверждает)'}
+                                            </button>
+                                            <button type="button" disabled={jsBusy !== null} onClick={() => withJs('ts-cv', async () => setTsCv(await sandboxTsCvVariant(tsSheet.sheetId)))}>
+                                              {jsBusy === 'ts-cv' ? '…' : 'CV-вариант под вакансию'}
+                                            </button>
+                                            <button type="button" disabled={jsBusy !== null} onClick={() => withJs('ts-offer-draft', async () => setTsOfferDraft(String((await sandboxTsOfferDraft(tsSheet.sheetId)).text ?? '')))}>
+                                              {jsBusy === 'ts-offer-draft' ? '…' : 'Черновик оффера из листа (без AI)'}
+                                            </button>
+                                          </div>
+                                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                                            <textarea value={tsOfferText} onChange={(e) => setTsOfferText(e.target.value)} rows={2} placeholder="Текст оффера / письма работодателя — сверить с листом (AI, черновики позиций с цитатами)" style={{ flex: '1 1 320px' }} />
+                                            <button type="button" disabled={jsBusy !== null || !tsOfferText.trim()} onClick={() => withJs('ts-propose', async () => { const r = await sandboxTsPropose(tsSheet.sheetId, tsOfferText, 'OFFER_TEXT', 'EMPLOYER'); setTsSheet(r); setTsLog((l) => [...l, `сверка оффера: предложено позиций ${r.proposed}${r.sample.length ? ` — напр. «${r.sample[0].quote ?? ''}» → ${r.sample[0].coverage ?? r.sample[0].stance}` : ''}`]); })}>
+                                              {jsBusy === 'ts-propose' ? '…' : 'Сверить оффер с листом'}
+                                            </button>
+                                          </div>
+                                          {tsCv && <div style={{ marginTop: 6 }}><span className="badge badge-ok">CV-ВАРИАНТ</span> подсветок: {tsCv.highlights}{tsCv.note && <span className="muted"> · {tsCv.note}</span>}<pre style={{ maxHeight: 160, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap' }}>{tsCv.cvText}</pre></div>}
+                                          {tsOfferDraft !== null && <div style={{ marginTop: 6 }}><span className="badge badge-ok">ЧЕРНОВИК ОФФЕРА</span><pre style={{ maxHeight: 160, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap' }}>{tsOfferDraft || '(согласованных пунктов пока нет — черновик пуст)'}</pre></div>}
+                                          {tsLog.length > 0 && <ul className="muted" style={{ fontSize: 12, marginTop: 6 }}>{tsLog.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+                                          <p className="muted" style={{ fontSize: 12 }}>Ни одного числа по человеку: счётчики — какие пункты обсуждены и чем подтверждены. «Подходит / не подходит» приложение не выносит.</p>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                   {jsStats && (
                                     <div style={{ fontSize: 13, marginTop: 6 }}>
                                       <span className="badge badge-ok">СТАТИСТИКА</span>{' '}
@@ -2664,6 +2748,79 @@ export default function SandboxPage() {
                         {jsError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{jsError}</p>}
                       </div>
                     )}
+
+                    {/* Пункт [job-domain-v2] — восьмой домен: работодатель нанимает сам.
+                        Проект — черновик до компании (409 COMPANY_REQUIRED — результат
+                        прогона, не сбой) → внутренний бриф → пункты листа (AI-черновики)
+                        → конфиг → анкета → текст вакансии с проверками → кандидат с листом
+                        → матрица покрытия без столбца «итог». */}
+                    {intakeState.chosenScenario === 'employer-hiring' && (intakeState.projectId ?? intakeState.dispatchedProjectId) && (() => {
+                      const pid = (intakeState.projectId ?? intakeState.dispatchedProjectId) as string;
+                      return (
+                        <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #2a2f3a)', paddingTop: 10 }}>
+                          <b>Найм в компанию (работодатель)</b>
+                          <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+                            Проект создан черновиком. Порядок — как у пользователя в TMA: компания → бриф → параметры → анкета → текст → кандидаты → матрица. Приложение не отбирает за работодателя: матрица без «итога», решения — люди.
+                          </p>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <input type="text" value={ehCompany.legalName} onChange={(e) => setEhCompany({ ...ehCompany, legalName: e.target.value })} placeholder="Название компании" />
+                            <input type="text" value={ehCompany.registryCode} onChange={(e) => setEhCompany({ ...ehCompany, registryCode: e.target.value })} placeholder="Код реестра (ЕГРПОУ)" style={{ width: 160 }} />
+                            <input type="text" value={ehCompany.domain} onChange={(e) => setEhCompany({ ...ehCompany, domain: e.target.value })} placeholder="домен (необязательно)" style={{ width: 180 }} />
+                            <button type="button" disabled={ehBusy !== null || ehDone.company} onClick={() => withEh('company', async () => { await sandboxEhCompany(pid, { legalName: ehCompany.legalName || undefined, registryCode: ehCompany.registryCode || undefined, domain: ehCompany.domain || undefined }); setEhDone((d) => ({ ...d, company: true })); })}>
+                              {ehBusy === 'company' ? '…' : ehDone.company ? 'Компания указана ✓' : '1. Указать компанию (без сети)'}
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                            <textarea value={ehBriefText} onChange={(e) => setEhBriefText(e.target.value)} rows={2} placeholder="Внутренний бриф: кого ищем, что важно, условия…" style={{ flex: '1 1 320px' }} />
+                            <button type="button" disabled={ehBusy !== null || !ehBriefText.trim()} title={!ehDone.company ? 'До компании ответит 409 COMPANY_REQUIRED — это и проверяем' : undefined} onClick={() => withEh('brief', async () => { const r = await sandboxEhBrief(pid, ehBriefText); setEhSheet(r); setEhDone((d) => ({ ...d, brief: true })); })}>
+                              {ehBusy === 'brief' ? '…' : '2. Бриф → пункты листа (AI)'}
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+                            <input type="text" value={ehJobTitle} onChange={(e) => setEhJobTitle(e.target.value)} placeholder="Должность (jobTitle)" />
+                            <button type="button" disabled={ehBusy !== null || !ehJobTitle.trim()} onClick={() => withEh('config', async () => { await sandboxEhConfig(pid, ehJobTitle); setEhDone((d) => ({ ...d, config: true })); })}>
+                              {ehBusy === 'config' ? '…' : ehDone.config ? 'Параметры ✓' : '3. Параметры вакансии'}
+                            </button>
+                            <button type="button" disabled={ehBusy !== null || !ehDone.config} onClick={() => withEh('questionnaire', async () => { const r = await sandboxEhQuestionnaire(pid); setEhDone((d) => ({ ...d, questionnaire: r.questions })); if (r.sheetId) setEhSheet(r as SandboxSheetSummary); })}>
+                              {ehBusy === 'questionnaire' ? '…' : ehDone.questionnaire !== undefined ? `Анкета: ${ehDone.questionnaire} ✓` : '4. Анкета (AI-черновик → фиксация)'}
+                            </button>
+                            {ehSheet && (
+                              <button type="button" disabled={ehBusy !== null || ehSheet.clauses.drafts + ehSheet.positions.drafts === 0} onClick={() => withEh('confirm', async () => setEhSheet(await sandboxTsConfirmAll(ehSheet.sheetId)))}>
+                                {ehBusy === 'confirm' ? '…' : 'Подтвердить черновики листа'}
+                              </button>
+                            )}
+                            <button type="button" disabled={ehBusy !== null || !ehDone.config} onClick={() => withEh('posting', async () => { const r = await sandboxEhPosting(pid); setEhDone((d) => ({ ...d, posting: { complianceFlags: r.complianceFlags, checklistOpen: r.checklistOpen } })); })}>
+                              {ehBusy === 'posting' ? '…' : '5. Текст вакансии + проверки (AI)'}
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                            <input type="text" value={ehCandidateName} onChange={(e) => setEhCandidateName(e.target.value)} placeholder="Имя кандидата" />
+                            <textarea value={ehResume} onChange={(e) => setEhResume(e.target.value)} rows={2} placeholder="Резюме кандидата (текст) — позиции по пунктам вакансии, AI-черновики с цитатами" style={{ flex: '1 1 280px' }} />
+                            <button type="button" disabled={ehBusy !== null || !ehCandidateName.trim() || !ehDone.config} onClick={() => withEh('candidate', async () => { const r = await sandboxEhCandidate(pid, ehCandidateName, ehResume || undefined); setEhSheet(r); setEhCandidateName(''); setEhResume(''); setEhDone((d) => ({ ...d, candidates: d.candidates + 1 })); })}>
+                              {ehBusy === 'candidate' ? '…' : '6. Кандидат + лист кандидата'}
+                            </button>
+                            <button type="button" disabled={ehBusy !== null || ehDone.candidates === 0} onClick={() => withEh('matrix', async () => { const r = await sandboxEhMatrix(pid); setEhDone((d) => ({ ...d, matrix: { columns: r.columns, rows: r.rows } })); })}>
+                              {ehBusy === 'matrix' ? '…' : '7. Матрица покрытия'}
+                            </button>
+                          </div>
+                          {ehSheet && <div style={{ fontSize: 13, marginTop: 8 }}><span className="badge badge-ok">ЛИСТ</span> {sheetLine(ehSheet)}</div>}
+                          {ehDone.posting && (
+                            <div style={{ fontSize: 13, marginTop: 6 }}>
+                              <span className={`badge ${ehDone.posting.complianceFlags ? 'badge-pending' : 'badge-ok'}`}>ТЕКСТ</span> compliance-флагов: {ehDone.posting.complianceFlags} · открытых пунктов чеклиста: {ehDone.posting.checklistOpen.join(', ') || 'нет'}
+                              <span className="muted"> — чеклист не блокирует публикацию</span>
+                            </div>
+                          )}
+                          {ehDone.matrix && (
+                            <div style={{ fontSize: 13, marginTop: 6 }}>
+                              <span className="badge badge-ok">МАТРИЦА</span> требований: {ehDone.matrix.columns}
+                              <ul style={{ margin: '4px 0' }}>{ehDone.matrix.rows.map((r) => <li key={r.displayName}>{r.displayName}: отражено {r.covered}, не обсуждено {r.unknown}</li>)}</ul>
+                              <span className="muted">столбца «итог» нет намеренно — сравнение людей по сумме галочек не задача приложения</span>
+                            </div>
+                          )}
+                          {ehError && <p style={{ color: 'var(--signal-critical)', marginTop: 6 }}>{ehError}</p>}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>

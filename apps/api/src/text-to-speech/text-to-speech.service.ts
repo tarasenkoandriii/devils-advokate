@@ -16,13 +16,15 @@
 // одинаковые фразы" (буквально ТЗ). Одинаковая фраза для разных
 // пользователей переиспользует один и тот же сгенерированный звук.
 
-import { BadGatewayException, BadRequestException, Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsentService } from '../consent/consent.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentType } from '@prisma/client';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
+import { spendLimit } from '../common/spend-limits';
+import { isUniqueViolation } from '../common/unique-violation';
 
 const ELEVENLABS_API_KEY_REF = 'ELEVENLABS_API_KEY';
 // Пункт [rate-limits]: маркер расхода ElevenLabs в AuditLogEntry.
@@ -52,6 +54,8 @@ export interface SynthesizeResult {
 
 @Injectable()
 export class TextToSpeechService {
+  private readonly logger = new Logger(TextToSpeechService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly consent: ConsentService,
@@ -59,8 +63,8 @@ export class TextToSpeechService {
   ) {}
 
   private async assertUnderDailyTtsLimit(userId: string): Promise<void> {
-    const raw = Number(process.env.TTS_CALLS_PER_USER_PER_DAY ?? '100');
-    const limit = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 100;
+    // Пункт [ceilings-nobody-was-told-about] 2026-09-24 — см. реестр.
+    const limit = spendLimit('TTS_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return;
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const count = await this.prisma.auditLogEntry.count({
@@ -114,8 +118,20 @@ export class TextToSpeechService {
       await this.prisma.ttsCache.create({
         data: { textHash, text: text.trim(), voiceId: resolvedVoiceId, audioBase64 },
       });
-    } catch {
-      // не критично — аудио всё равно сгенерировано и возвращается ниже
+    } catch (err) {
+      // Пункт [check-then-create-2] 2026-09-27: гонка тут и правда не
+      // критична — но голый `catch {}` глотал ЛЮБОЙ отказ базы. Если
+      // запись в кэш перестала работать вовсе (нет колонки после
+      // db push, кончилось место, прав нет), продукт продолжал бы платить
+      // за синтез КАЖДОГО повтора и не сказал бы об этом никому: сбой
+      // выглядел бы как обычный промах кэша. Гонку по-прежнему пропускаем
+      // молча, всё остальное — в лог, рядом с признаком «кэш не пишется».
+      if (!isUniqueViolation(err)) {
+        this.logger.warn(
+          `Синтез удался, но запись в кэш TTS не прошла (${textHash.slice(0, 12)}…): ${(err as Error).message}. ` +
+            'Каждый повтор этого текста будет оплачен заново — проверьте таблицу tts_cache.',
+        );
+      }
     }
 
     return { audioBase64, cached: false };

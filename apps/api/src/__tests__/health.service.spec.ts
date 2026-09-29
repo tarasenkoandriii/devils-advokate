@@ -333,7 +333,12 @@ describe('HealthService', () => {
     const reference = await service.addSourceReference('u1', provider.id, 'https://example.com/article');
 
     expect(fetchedUrls).toEqual(['https://example.com/article']);
-    expect(Object.keys(reference).sort()).toEqual(['createdAt', 'id', 'providerId', 'sourceText', 'sourceUrl']);
+    /** ДОПОЛНЕН, Пункт [stored-text-cut] 2026-09-06: к ответу добавлено
+     * поле `intakeNote` — если страница вошла в продукт не целиком,
+     * человек читает это рядом с самим текстом, а не догадывается по
+     * обрыву на полуслове. Смысл теста (перечень ключей — контракт
+     * полноты, новое поле обязано попасть сюда осознанно) сохранён. */
+    expect(Object.keys(reference).sort()).toEqual(['createdAt', 'id', 'intakeNote', 'providerId', 'sourceText', 'sourceUrl']);
     (global as any).fetch = undefined;
   });
 

@@ -19,6 +19,7 @@
 // userConfirmedIntentionalFalsehood — только пользователем).
 
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { hasPersonVerdict } from '../common/no-person-verdict';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AsyncJobOutcome } from '../ai-router/ai-router.service';
 import { ConversationSignalType } from '@prisma/client';
@@ -41,8 +42,12 @@ const ALLOWED_TYPES = new Set<string>([
 
 /** §7.4 — стоп-слова «выводов о личности» в выходе модели. Грубый, но
  * честный фильтр второй линии (первая — промпт): попадание — провал
- * валидации и retry, а не запись сигнала. */
-const FORBIDDEN_JUDGEMENT_PATTERNS = /лжёт|лжет|врёт|врет|обманывает|лживый|is lying|liar|deceptive person|психопат|нарцисс/i;
+ * валидации и retry, а не запись сигнала.
+ *
+ * Пункт [same-line-not-drawn] 2026-09-24: список переехал в
+ * `common/no-person-verdict.ts` и применяется теперь и к детектору
+ * манипуляций, у которого этой второй линии не было вовсе. Здесь
+ * поведение не менялось — только место, где живёт правило. */
 
 interface ParsedParalinguistics {
   segments: Array<{
@@ -63,7 +68,7 @@ export function parseParalinguisticsOutput(text: string): ParsedParalinguistics 
   if (typeof json !== 'object' || json === null) return null;
   const root = json as { segments?: unknown };
   if (!Array.isArray(root.segments)) return null;
-  if (FORBIDDEN_JUDGEMENT_PATTERNS.test(text)) return null;
+  if (hasPersonVerdict(text)) return null;
 
   const segments: ParsedParalinguistics['segments'] = [];
   for (const raw of root.segments) {
@@ -195,7 +200,26 @@ export class ParalinguisticsService implements OnModuleInit {
       if (outcome.kind === 'completed') {
         await this.persist(conversation.id, outcome.aiInferenceId, conversation.transcript?.segments ?? []);
       } else {
+        // ── Пункт [job-died-quietly] 2026-09-06 ──
+        //
+        // Здесь стоял ТОЛЬКО этот `logger.warn`, и больше ничего. Для
+        // человека провал был неотличим от удачного прохода, в котором
+        // ничего не нашлось: он включил галочку «паузы, темп,
+        // несовпадение слов и интонации», отметок не увидел и заключил,
+        // что их нет. Разбора при этом не было.
+        //
+        // Соседние обработчики завершения того же роутера делают
+        // правильно и давно: медиа-разбор пишет `autoAnalysisError` и
+        // откатывает статус, пакетная сверка вакансий пишет `matchNotes`.
+        // Правило было — просто не у этого из трёх. И `turning-points`
+        // прямо формулирует его в комментарии: «не остаётся в ANALYZING
+        // навсегда — тот же принцип, что AIRouterService откатывает
+        // AIJob в FAILED».
         this.logger.warn(`Paralinguistics job ${outcome.jobId} failed: ${outcome.reason}`);
+        await this.prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { paralinguisticsError: outcome.reason.slice(0, 1000) },
+        });
       }
     } finally {
       // Потребитель файла освобождается при ЛЮБОМ исходе — иначе blob
@@ -280,6 +304,20 @@ export class ParalinguisticsService implements OnModuleInit {
       }
     });
 
+    // Пункт [job-died-quietly] 2026-09-06: число отброшенного уходило в
+    // лог и никуда больше — при том что ВЕСЬ механизм
+    // `skippedWithoutQuote` в проекте существует ровно для того, чтобы
+    // такое число доходило до человека. Пропуск с подсчётом остаётся
+    // верным решением (полный провал выбросил бы и валидные сигналы);
+    // неверным было молчание о нём.
+    //
+    // Запись безусловная, включая ноль: прошлый неудачный проход мог
+    // оставить число, и удачный обязан его снять — иначе подпись
+    // «список неполон» переживёт причину, по которой появилась.
+    await this.prisma.conversation.update({
+      where: { id: conversationId },
+      data: { paralinguisticsSkipped: invented, paralinguisticsError: null },
+    });
     if (invented > 0) {
       this.logger.warn(
         `Paralinguistics for conversation ${conversationId}: модель сослалась на ${invented} несуществующих сегментов — пропущены`,

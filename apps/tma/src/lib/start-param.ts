@@ -12,7 +12,8 @@
 // из [A-Za-z0-9_-]. Менять только парой.
 import { getTelegramWebApp } from './telegram';
 
-export type LandingAudience = 'candidate' | 'agency';
+// Пункт [job-domain-v2] §7/§8: третья посадочная — «Нанимаю сам» (работодатель).
+export type LandingAudience = 'candidate' | 'agency' | 'employer';
 
 export interface StartAttribution {
   /** Параметр запуска КАК ПРИШЁЛ — по нему решается переход. */
@@ -28,6 +29,7 @@ export interface StartAttribution {
 const AUDIENCE_BY_SOURCE: Record<string, LandingAudience> = {
   jobs_landing: 'candidate',
   recruiting_landing: 'agency',
+  employer_landing: 'employer',
 };
 
 /** Разбор параметра запуска. Некорректный или пустой — null: гадать,
@@ -90,6 +92,11 @@ export function startParamRoute(attribution: StartAttribution | null): string | 
   if (raw.startsWith('share_')) return `/candidate-shares/${raw.slice('share_'.length)}`;
   if (raw.startsWith('team_')) return `/domains/interview-pool?invite=${raw.slice('team_'.length)}`;
   if (raw.startsWith('investment_group_')) return `/domains/investment?invite=${raw.slice('investment_group_'.length)}`;
+  // Пункт [job-domain-v2]: преданкета кандидата (А-2) — публичный экран без
+  // авторизации; приглашение агентству от работодателя (Р-4) — принятие
+  // командой агентства.
+  if (raw.startsWith('preq_')) return `/pre-questionnaire/${raw.slice('preq_'.length)}`;
+  if (raw.startsWith('eng_')) return `/engagements/accept?token=${raw.slice('eng_'.length)}`;
 
   // Посадочные /jobs: аудитория известна, ведём сразу в квиз — он и
   // классифицирует сценарий (ТЗ job-landing §4: отдельного

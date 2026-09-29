@@ -41,6 +41,10 @@ export function AdminNav() {
     // Пункт [db-state] 2026-09-01: read-only зеркало pg_cron/pg_net/
     // ai_jobs — «чтобы не пробивать руками в базе каждый раз».
     { href: '/db', label: 'БД', visible: me.isOperator },
+    // Пункт [dead-code-audit] 2026-09-03: журнал решений оператора.
+    // Маршрут был, экрана не было — аудит действий оператора существовал
+    // только для того, кто умеет дёргать API руками.
+    { href: '/audit-log', label: 'Аудит', visible: me.isOperator },
   ];
 
   const visibleItems = items.filter((i) => i.visible);

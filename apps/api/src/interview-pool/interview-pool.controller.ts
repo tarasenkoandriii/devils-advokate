@@ -15,7 +15,7 @@ import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { NotRestrictedGuard } from '../telegram-auth/not-restricted.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
-import { ProjectMode } from '@prisma/client';
+import { CandidateStage, ProjectMode, RecruitingTeamType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { getOnboardingAnswers, listDomainProjects } from '../common/domain-onboarding-reads';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
@@ -60,6 +60,9 @@ class FixQuestionnaireDto {
 class AddCandidateDto {
   candidateProfileId!: string;
   reuseHistory?: boolean;
+  /** А-10 (аудит 2026-09-03): кандидат из другого проекта — только с новым
+   * подтверждением его согласия рассматриваться здесь. */
+  candidateConsentReconfirmed?: boolean;
 }
 
 class RecordStageProgressDto {
@@ -72,8 +75,16 @@ class MarkFollowUpDto {
   fulfilled!: boolean;
 }
 
+// Аудит 2026-09-03: стадию воронки ставит рекрутер. Значение проверяется
+// в сервисе — enum от клиента приходит строкой.
+class SetStageDto {
+  stage!: CandidateStage;
+}
+
 class CreateTeamDto {
   name!: string;
+  /** [job-domain-v2] §7.1: AGENCY (по умолчанию) | EMPLOYER */
+  teamType?: 'AGENCY' | 'EMPLOYER';
 }
 
 class JoinTeamDto {
@@ -89,6 +100,11 @@ class CreateCandidateDto {
 
 class ShareCandidateDto {
   candidateConsentConfirmed!: boolean;
+}
+
+class RevokeConsentDto {
+  candidateAskedToRevoke!: boolean;
+  note?: string | null;
 }
 
 class ShareAllDto {
@@ -205,7 +221,7 @@ export class InterviewPoolController {
 
   @Post('interview-pool/projects/:projectId/candidates')
   async addCandidate(@CurrentUser() userId: string, @Param('projectId') projectId: string, @Body() dto: AddCandidateDto) {
-    return this.pool.addCandidate(userId, projectId, dto.candidateProfileId, dto.reuseHistory ?? false);
+    return this.pool.addCandidate(userId, projectId, dto.candidateProfileId, dto.reuseHistory ?? false, dto.candidateConsentReconfirmed ?? false);
   }
 
   @Get('interview-pool/projects/:projectId/candidates')
@@ -232,6 +248,17 @@ export class InterviewPoolController {
     @Body() dto: RecordStageProgressDto,
   ) {
     return this.pool.recordStageProgress(userId, statusId, dto.stageDefinitionId, dto.conversationId, dto.completedAt);
+  }
+
+  // Аудит 2026-09-03: без этого маршрута INTERVIEWED и UNDER_REVIEW не
+  // выставлял никто, и воронка сводного отчёта показывала два вечных нуля.
+  @Patch('interview-pool/pipeline-statuses/:statusId/stage')
+  async setStage(
+    @CurrentUser() userId: string,
+    @Param('statusId') statusId: string,
+    @Body() dto: SetStageDto,
+  ) {
+    return this.candidates.setStage(userId, statusId, dto.stage);
   }
 
   @Patch('interview-pool/pipeline-statuses/:statusId/follow-up/:id')
@@ -281,12 +308,26 @@ export class InterviewPoolController {
 
   @Post('recruiting-teams')
   async createTeam(@CurrentUser() userId: string, @Body() dto: CreateTeamDto) {
-    return this.team.createTeam(userId, dto.name);
+    return this.team.createTeam(userId, dto.name, dto.teamType === 'EMPLOYER' ? RecruitingTeamType.EMPLOYER : RecruitingTeamType.AGENCY);
   }
 
   @Post('recruiting-teams/:id/invite-link')
   async createInviteLink(@CurrentUser() userId: string, @Param('id') teamId: string) {
     return this.team.createInviteLink(userId, teamId);
+  }
+
+  @Get('recruiting-teams/:id/invites')
+  async listTeamInvites(@CurrentUser() userId: string, @Param('id') teamId: string) {
+    return this.team.listInvites(userId, teamId);
+  }
+
+  @Post('recruiting-teams/:id/invites/:inviteId/revoke')
+  async revokeTeamInvite(
+    @CurrentUser() userId: string,
+    @Param('id') teamId: string,
+    @Param('inviteId') inviteId: string,
+  ) {
+    return this.team.revokeInvite(userId, teamId, inviteId);
   }
 
   @Post('recruiting-teams/:id/join')
@@ -309,6 +350,12 @@ export class InterviewPoolController {
   @Post('candidate-profiles')
   async createCandidate(@CurrentUser() userId: string, @Body() dto: CreateCandidateDto) {
     return this.candidates.createCandidate(userId, dto.displayName, dto.contactInfo, dto.resumeText, dto.recruitingTeamId);
+  }
+
+  /** А-6: отзыв согласия, полученный вне продукта (аудит 2026-09-03). */
+  @Post('candidate-profiles/:id/revoke-consent')
+  async revokeCandidateConsent(@CurrentUser() userId: string, @Param('id') candidateProfileId: string, @Body() dto: RevokeConsentDto) {
+    return this.candidates.revokeConsent(userId, candidateProfileId, dto);
   }
 
   @Post('candidate-profiles/:id/share')
@@ -351,6 +398,11 @@ export class InterviewPoolShareController {
 @UseInterceptors(ApiResponseInterceptor)
 export class ClientReportController {
   constructor(private readonly reports: InterviewPoolReportService) {}
+
+  @Get('projects/:projectId')
+  async list(@CurrentUser() userId: string, @Param('projectId') projectId: string) {
+    return this.reports.list(userId, projectId);
+  }
 
   @Post('projects/:projectId/candidate/:candidateProfileId')
   async generateCandidateReport(

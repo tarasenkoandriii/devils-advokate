@@ -27,7 +27,8 @@ export function StartInTelegram({
   children,
   ariaLabel,
 }: {
-  start: 'jobs_landing' | 'recruiting_landing';
+  // Пункт [job-domain-v2] §8.5: третий источник — работодатель, нанимающий сам.
+  start: 'jobs_landing' | 'recruiting_landing' | 'employer_landing';
   className?: string;
   children: React.ReactNode;
   ariaLabel?: string;

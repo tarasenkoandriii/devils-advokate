@@ -1,5 +1,6 @@
 import { MotiveAnalysisService } from '../motive-analysis/motive-analysis.service';
 import { BadGatewayException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { createFakeConsentService } from './fake-consent';
 
 function createFakePrisma() {
   const projects = new Map<string, any>();
@@ -18,7 +19,10 @@ function createFakePrisma() {
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedPerson(p: any) { people.set(p.id, p); },
     _seedProjectPerson(pp: any) { projectPeople.push(pp); },
-    _seedFact(f: any) { facts.push({ status: 'ACTIVE', ...f }); },
+    // Пункт [source-collapse] 2026-09-05: у факта по умолчанию есть
+    // происхождение — без него фейк описывал бы данные, которых в базе
+    // не бывает (колонка обязательная).
+    _seedFact(f: any) { facts.push({ status: 'ACTIVE', sourceType: 'PERSONAL_RECORD', ...f }); },
     _seedPrecedent(p: any) { precedents.push(p); },
     _seedTrait(t: any) { traits.push(t); },
     _seedRelationship(r: any) { relationships.push(r); },
@@ -45,7 +49,17 @@ function createFakePrisma() {
       findMany: async ({ where }: any) => facts.filter((f) => f.personId === where.personId && f.status === where.status),
     },
     behaviorPrecedent: {
-      findMany: async ({ where }: any) => precedents.filter((p) => p.personId === where.personId),
+      // Пункт [partial-basis] 2026-09-04: фейк ЧЕСТНО обрезает по take и
+      // умеет count — иначе проверка усечения проверяла бы поведение
+      // фейка, а не сервиса.
+      findMany: async ({ where, take }: any) => {
+        const rows = precedents.filter((p) => p.personId === where.personId);
+        return take ? rows.slice(0, take) : rows;
+      },
+      count: async ({ where, take }: any) => {
+        const n = precedents.filter((p) => p.personId === where.personId).length;
+        return take ? Math.min(n, take) : n;
+      },
     },
     personCommunicationTrait: {
       findMany: async ({ where }: any) => traits.filter((t) => t.personId === where.personId),
@@ -123,21 +137,21 @@ async function run() {
   test('analyze() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.analyze(USER_ID, PROJECT_ID, PERSON_ID), NotFoundException, 'analyze() на чужой проект');
   });
 
   test('analyze() бросает NotFoundException, если персона не привязана к проекту', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'x', goal: null });
-    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.analyze(USER_ID, PROJECT_ID, PERSON_ID), NotFoundException, 'analyze() с персоной не из проекта');
   });
 
   test('analyze() бросает BadRequestException, если про персону ничего не известно', async () => {
     const prisma = createFakePrisma();
     seedProjectWithPerson(prisma);
-    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.analyze(USER_ID, PROJECT_ID, PERSON_ID), BadRequestException, 'analyze() без единого известного факта/прецедента/профиля');
   });
 
@@ -149,7 +163,7 @@ async function run() {
     prisma._seedTrait({ personId: PERSON_ID, traitType: 'RESPONDS_TO_DATA', value: 'Реагирует на конкретные цифры' });
     prisma._seedRelationship({ personAId: PERSON_ID, personBId: 'other', label: 'сосед по дому' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Недавно купил новую квартиру'), true, 'факт попал в промпт');
@@ -164,7 +178,7 @@ async function run() {
     prisma._seedFact({ personId: PERSON_ID, content: 'x' });
     prisma._seedObjective({ projectId: PROJECT_ID, desiredOutcome: 'Снизить аренду на 20%', minimumAcceptableOutcome: 'Хотя бы на 10%', constraints: [], nonNegotiables: ['Не переезжать'], negotiables: [] });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Снизить аренду на 20%'), true, 'желаемый исход попал в промпт');
@@ -176,7 +190,7 @@ async function run() {
     seedProjectWithPerson(prisma);
     prisma._seedFact({ personId: PERSON_ID, content: 'x' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('не структурирована'), true, 'честное указание отсутствия Decision Objective');
@@ -191,9 +205,10 @@ async function run() {
       { explanation: 'Возможно, экономит на будущий ремонт', supportingFactsSummary: 'Недавняя покупка квартиры', confidence: 'MEDIUM' },
       { explanation: 'Возможно, не хочет создавать прецедент для других арендаторов', supportingFactsSummary: 'Прошлый отказ другому арендатору', confidence: 'HIGH' },
     ]);
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
-    const created = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    // Пункт [partial-basis] 2026-09-04: ответ несёт и основание разбора.
+    const { hypotheses: created } = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(created.length, 2, 'обе гипотезы созданы как отдельные записи');
     assertEqual(created[0].confidence, 'MEDIUM', 'уверенность первой гипотезы сохранена');
   });
@@ -203,7 +218,7 @@ async function run() {
     seedProjectWithPerson(prisma);
     prisma._seedFact({ personId: PERSON_ID, content: 'x' });
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new MotiveAnalysisService(prisma as any, failingRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, failingRouter as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.analyze(USER_ID, PROJECT_ID, PERSON_ID), BadGatewayException, 'analyze() при недоступности провайдера');
   });
 
@@ -221,7 +236,7 @@ async function run() {
     }
     prisma._seedFact({ personId: PERSON_ID, content: 'x' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     // 10-й вызов (9 предыдущих РАЗЛИЧНЫХ анализов < лимита 10) — должен пройти.
     await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
@@ -234,7 +249,7 @@ async function run() {
       prisma._seedHypothesis({ createdByUserId: USER_ID, generatedByInferenceId: `call-${call}`, personId: PERSON_ID, projectId: PROJECT_ID, explanation: 'x', supportingFactsSummary: 'x', confidence: 'LOW' });
     }
     prisma._seedFact({ personId: PERSON_ID, content: 'x' });
-    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.analyze(USER_ID, PROJECT_ID, PERSON_ID), ForbiddenException, 'analyze() при достижении дневного лимита (10 различных анализов)');
   });
 
@@ -242,7 +257,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProjectWithPerson(prisma);
     prisma._seedHypothesis({ personId: PERSON_ID, projectId: PROJECT_ID, createdByUserId: USER_ID, explanation: 'x', supportingFactsSummary: 'x', confidence: 'LOW' });
-    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
 
     const list = await svc.list(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(list.length, 1, 'гипотеза видна');
@@ -251,7 +266,7 @@ async function run() {
   test('list() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new MotiveAnalysisService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.list(USER_ID, PROJECT_ID, PERSON_ID), NotFoundException, 'list() на чужой проект');
   });
 
@@ -265,9 +280,10 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { explanation: 'Обычная гипотеза без конфликта', supportingFactsSummary: 'x', confidence: 'LOW' },
     ]);
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
-    const created = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    // Пункт [partial-basis] 2026-09-04: ответ несёт и основание разбора.
+    const { hypotheses: created } = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(created[0].suggestsFigurantStatus, false, 'по умолчанию false — не подставляется true без явного указания AI');
   });
 
@@ -284,9 +300,10 @@ async function run() {
         suggestsFigurantStatus: true,
       },
     ]);
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
-    const created = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    // Пункт [partial-basis] 2026-09-04: ответ несёт и основание разбора.
+    const { hypotheses: created } = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(created[0].suggestsFigurantStatus, true, 'явное true от AI сохранено, не отброшено');
   });
 
@@ -298,10 +315,65 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { explanation: 'x', supportingFactsSummary: 'x', confidence: 'LOW', suggestsFigurantStatus: false },
     ]);
-    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any);
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
-    const created = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    // Пункт [partial-basis] 2026-09-04: ответ несёт и основание разбора.
+    const { hypotheses: created } = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
     assertEqual(created[0].suggestsFigurantStatus, false, 'явное false сохранено как false, не искажено');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [partial-basis]: гипотезы о мотивах строятся на срезе — и об этом сказано', async () => {
+    // Прецедентов берётся пять последних, а в промпте они назывались
+    // «известными»: гипотеза о мотиве строилась на ложной посылке
+    // полноты, и человек читал её как разбор по всему, что он записал.
+    const prisma = createFakePrisma();
+    seedProjectWithPerson(prisma);
+    for (let i = 0; i < 8; i++) {
+      prisma._seedPrecedent({ personId: PERSON_ID, precedentDescription: `случай ${i}` });
+    }
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
+
+    const { basisNote } = await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    assertEqual(fakeRouter.lastRequest.userPrompt.includes('последние 5 из 8'), true, 'модели не сказано, что прецеденты — срез');
+    assertEqual((basisNote ?? '').includes('последние 5 из 8'), true, 'человеку не сказано, на чём построены гипотезы');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [source-collapse]: догадка пользователя уходит модели как ДОГАДКА', async () => {
+    // Раньше ⚪ «моё предположение» уходило под заголовком «известные
+    // факты», неотличимо от записи со слов: гипотеза о мотивах строилась
+    // на догадке самого пользователя и возвращалась ему выводом.
+    const prisma = createFakePrisma();
+    seedProjectWithPerson(prisma);
+    prisma._seedFact({ personId: PERSON_ID, content: 'Сказал, что уезжает в мае', sourceType: 'PERSONAL_RECORD' });
+    prisma._seedFact({ personId: PERSON_ID, content: 'Наверное, он торопится', sourceType: 'USER_GUESS' });
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
+
+    await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    const prompt = fakeRouter.lastRequest.userPrompt;
+    assertEqual(/\[ДОГАДКА пользователя, не проверено\] Наверное, он торопится/.test(prompt), true,
+      'догадка ушла модели без пометки');
+    assertEqual(/\[со слов пользователя\] Сказал, что уезжает в мае/.test(prompt), true,
+      'запись со слов ушла без происхождения');
+    assertEqual(prompt.includes('не выдавай его обратно как подтверждённое'), true,
+      'модели не сказано, что делать с пометкой');
+    assertEqual(prompt.includes('Известные факты'), false,
+      'заголовок снова обещает «известные факты» над списком, где лежит догадка');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [source-collapse]: без догадок инструкция не добавляется', async () => {
+    // Лишний текст в промпте не бесплатная осторожность: он размывает
+    // то, что модель обязана прочитать.
+    const prisma = createFakePrisma();
+    seedProjectWithPerson(prisma);
+    prisma._seedFact({ personId: PERSON_ID, content: 'Сказал, что уезжает в мае', sourceType: 'PERSONAL_RECORD' });
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new MotiveAnalysisService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
+
+    await svc.analyze(USER_ID, PROJECT_ID, PERSON_ID);
+    assertEqual(fakeRouter.lastRequest.userPrompt.includes('не выдавай его обратно как подтверждённое'), false,
+      'инструкция про догадки добавлена там, где догадок нет');
   });
 
   for (const [name, fn] of scenarios) {

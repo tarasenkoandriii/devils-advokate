@@ -10,6 +10,7 @@
 // не мутируемый список, повторная генерация создаёт НОВУЮ запись.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { generateAgenda, getLatestAgenda } from '../lib/features';
 import { ConversationAgenda } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -20,14 +21,18 @@ interface AgendaSectionProps {
 
 export function AgendaSection({ projectId }: AgendaSectionProps) {
   const [agenda, setAgenda] = useState<ConversationAgenda | null>(null);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getLatestAgenda(projectId)
-      .then(setAgenda)
-      .catch(() => setAgenda(null))
+      .then((v) => { setAgenda(v); setNotLoaded(false); })
+      .catch(() => { setAgenda(null); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -50,6 +55,7 @@ export function AgendaSection({ projectId }: AgendaSectionProps) {
 
   return (
     <section className="agenda-section">
+      {notLoaded && <NotLoadedNotice what="повестку разговора" />}
       <h3>Повестка следующего разговора</h3>
       <p className="conversations-section__hint">
         AI формирует список пунктов на основе прошлых разговоров этого проекта и текущей цели — не повторяет уже
@@ -58,7 +64,7 @@ export function AgendaSection({ projectId }: AgendaSectionProps) {
 
       {agenda ? (
         <>
-          <p className="conversations-section__hint">Сформирована {new Date(agenda.createdAt).toLocaleString()}</p>
+          <p className="conversations-section__hint">Сформирована {new Date(agenda.createdAt).toLocaleString('ru-RU')}</p>
           <ul className="agenda-section__items">
             {agenda.items.map((item, i) => (
               <li key={i}>{item}</li>
@@ -69,7 +75,7 @@ export function AgendaSection({ projectId }: AgendaSectionProps) {
         <p className="conversations-section__hint">Повестка ещё не формировалась.</p>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <button type="button" onClick={handleGenerate} disabled={generating}>
         {generating ? 'Формируем…' : agenda ? 'Сформировать заново' : 'Сформировать повестку'}

@@ -5,6 +5,7 @@ import { SecretsService } from '../secrets/secrets.service';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
 function createFakePrisma() {
+  const auditEntries: Array<{ actorId: string; action: string; createdAt: Date; after?: any }> = [];
   const projects = new Map<string, any>();
   const users = new Map<string, any>();
   const conversations = new Map<string, any>();
@@ -184,6 +185,26 @@ function createFakePrisma() {
         return p;
       },
     },
+    // Пункт [ceilings-nobody-was-told-about] 2026-09-24: журнал
+    // действий здесь — счётчик расхода транскрибации. Заглушка ведёт
+    // себя как настоящий журнал: запись видна следующему чтению,
+    // иначе потолок был бы непроверяем в принципе.
+    auditLogEntry: {
+      findMany: async ({ where }: any) =>
+        auditEntries.filter(
+          (e) =>
+            (where?.actorId === undefined || e.actorId === where.actorId) &&
+            (where?.action === undefined || e.action === where.action) &&
+            (where?.createdAt?.gte === undefined || e.createdAt >= where.createdAt.gte),
+        ),
+      create: async ({ data }: any) => {
+        const entry = { ...data, createdAt: new Date() };
+        auditEntries.push(entry);
+        return entry;
+      },
+      count: async () => auditEntries.length,
+    },
+    _auditEntries: auditEntries,
     aIModelVersion: {
       // Повторный аудит 2026-09-01: сервис резолвит версию модели ДО
       // платного submitJob и через findFirst + orderBy (детерминизм),
@@ -310,16 +331,12 @@ function makeFakeAudioBlob() {
   return {
     presignCalls: [] as string[],
     deleteCalls: [] as string[],
-    releaseCalls: [] as { conversationId: string; pathname: string | null }[],
     async deleteByPathname(pathname: string) {
       this.deleteCalls.push(pathname);
     },
     async presignForTranscription(pathname: string) {
       this.presignCalls.push(pathname);
       return `https://blob.example.com/${pathname}?signature=fake`;
-    },
-    async releaseConversationAudio(conversationId: string, pathname: string | null) {
-      this.releaseCalls.push({ conversationId, pathname });
     },
     async confirmUpload() {
       throw new Error('confirmUpload не используется в этих сценариях');
@@ -440,6 +457,112 @@ async function run() {
     prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
     const ok = await svc.requestTranscription(USER_ID, conv.id, { audioUrl: 'https://x/y' });
     assertEqual(ok.status, 'TRANSCRIBING', 'статус при обоих выданных согласиях');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [ceilings-nobody-was-told-about]: суточный потолок расшифровок останавливает до платного вызова', async () => {
+    // До этого пункта у транскрибации не было потолка ВООБЩЕ — при
+    // поминутной оплате. Проверяется не наличие числа в коде, а то, что
+    // на потолке запрос НЕ ДОХОДИТ до провайдера.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedUser({ id: USER_ID, privacyProcessingMode: 'BALANCED' });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    prisma._seedModelVersion({ id: 'mv1', providerId: 'p1' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
+
+    const stt = makeFakeStt(new FakeTranscriptionService());
+    const secrets = { resolve: async () => 'fake-key' } as any;
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any, stt as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
+
+    const fresh = async () =>
+      prisma.conversation.create({
+        data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date() },
+      });
+
+    // Умолчание потолка — 30 записей в сутки. Набиваем журнал до него.
+    process.env.TRANSCRIPTIONS_PER_USER_PER_DAY = '2';
+    try {
+      const first = await svc.requestTranscription(USER_ID, (await fresh()).id, { audioUrl: 'https://x/1' });
+      assertEqual(first.status, 'TRANSCRIBING', 'первая расшифровка проходит');
+      await svc.requestTranscription(USER_ID, (await fresh()).id, { audioUrl: 'https://x/2' });
+
+      const submittedBefore = stt.submitCalls.length;
+      const third = await fresh();
+      let failed = false;
+      try {
+        await svc.requestTranscription(USER_ID, third.id, { audioUrl: 'https://x/3' });
+      } catch (err: any) {
+        failed = true;
+        assertEqual(err.getStatus?.(), 429, 'потолок отвечает 429, а не отказом навсегда');
+        assertEqual(/лимит расшифровок/.test(err.message), true, `текст потолка человеку: ${err.message}`);
+      }
+      assertEqual(failed, true, 'третья расшифровка сверх потолка не остановлена');
+      assertEqual(stt.submitCalls.length, submittedBefore, 'запрос всё-таки ушёл провайдеру — деньги потрачены');
+
+      // ОБРАТНАЯ ПРОБА: с поднятым потолком та же третья запись проходит,
+      // то есть остановил её именно потолок, а не что-то ещё.
+      process.env.TRANSCRIPTIONS_PER_USER_PER_DAY = '10';
+      const ok = await svc.requestTranscription(USER_ID, third.id, { audioUrl: 'https://x/3' });
+      assertEqual(ok.status, 'TRANSCRIBING', 'с поднятым потолком запись проходит');
+    } finally {
+      delete process.env.TRANSCRIPTIONS_PER_USER_PER_DAY;
+    }
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [ceilings-nobody-was-told-about]: потолок по ДЛИТЕЛЬНОСТИ считает минуты, а не что попало', async () => {
+    // Потолок по числу записей и потолок по минутам — разные рычаги;
+    // второй нужен ровно потому, что одна запись может быть на пять
+    // часов. Проверяется граница, а не наличие кода.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedUser({ id: USER_ID, privacyProcessingMode: 'BALANCED' });
+    prisma._seedProvider({ id: 'p1', name: 'assemblyai', credentialRef: 'ASSEMBLYAI_API_KEY' });
+    prisma._seedModelVersion({ id: 'mv1', providerId: 'p1' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'RECORDING' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EPHEMERAL_SERVER' });
+
+    const secrets = { resolve: async () => 'fake-key' } as any;
+    const svc = new ConversationsService(prisma as any, secrets, new ConsentService(prisma as any), new FakeTranscriptionService() as any, makeFakeStt(new FakeTranscriptionService()) as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any);
+
+    const fresh = async (durationSeconds: number | null) =>
+      prisma.conversation.create({
+        data: { projectId: PROJECT_ID, sourceType: 'UPLOADED_AUDIO', status: 'UPLOADED', occurredAt: new Date(), durationSeconds },
+      });
+
+    process.env.TRANSCRIPTIONS_PER_USER_PER_DAY = '0'; // здесь мешает только длительность
+    process.env.TRANSCRIPTION_MINUTES_PER_USER_PER_DAY = '10';
+    try {
+      // Девять минут — проходит; следом ещё две, суммарно одиннадцать.
+      await svc.requestTranscription(USER_ID, (await fresh(9 * 60)).id, { audioUrl: 'https://x/1' });
+      let failed = false;
+      try {
+        await svc.requestTranscription(USER_ID, (await fresh(2 * 60)).id, { audioUrl: 'https://x/2' });
+      } catch (err: any) {
+        failed = true;
+        assertEqual(/лимит расшифровки по длительности/.test(err.message), true, `текст потолка: ${err.message}`);
+      }
+      assertEqual(failed, false, 'девять минут из десяти — потолок сработал РАНЬШЕ времени');
+
+      // Теперь в журнале одиннадцать минут — следующая уже за потолком.
+      let blocked = false;
+      try {
+        await svc.requestTranscription(USER_ID, (await fresh(60)).id, { audioUrl: 'https://x/3' });
+      } catch (err: any) {
+        blocked = true;
+        assertEqual(err.getStatus?.(), 429, 'потолок по длительности отвечает 429');
+      }
+      assertEqual(blocked, true, 'сумма перевалила за потолок, а запрос прошёл');
+
+      // ОБРАТНАЯ ПРОБА: записи без указанной длительности сумму не
+      // двигают — и об этом сказано вслух в коде и в .env.example.
+      process.env.TRANSCRIPTION_MINUTES_PER_USER_PER_DAY = '1000';
+      const ok = await svc.requestTranscription(USER_ID, (await fresh(null)).id, { audioUrl: 'https://x/4' });
+      assertEqual(ok.status, 'TRANSCRIBING', 'запись без длительности не проходит при поднятом потолке');
+    } finally {
+      delete process.env.TRANSCRIPTIONS_PER_USER_PER_DAY;
+      delete process.env.TRANSCRIPTION_MINUTES_PER_USER_PER_DAY;
+    }
   });
 
   test('requestTranscription() успешно переводит статус в TRANSCRIBING и сохраняет job id', async () => {

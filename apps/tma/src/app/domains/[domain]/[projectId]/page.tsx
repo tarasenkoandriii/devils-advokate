@@ -22,6 +22,11 @@ import { MajorPurchaseWorkspace } from '../../../../components/domains/major-pur
 import { InvestmentWorkspace } from '../../../../components/domains/investment/InvestmentWorkspace';
 import { JobSearchWorkspace } from '../../../../components/domains/job-search/JobSearchWorkspace';
 import { InterviewPoolOverview } from '../../../../components/domains/interview-pool/InterviewPoolOverview';
+import { EmployerHiringWorkspace } from '../../../../components/domains/employer-hiring/EmployerHiringWorkspace';
+import { VacancySheetPanel } from '../../../../components/domains/hiring/VacancySheetPanel';
+import { EmployerDossierPanel } from '../../../../components/domains/hiring/EmployerDossierPanel';
+import { ClientBriefPanel, VacancyPostingPanel } from '../../../../components/domains/hiring/BriefAndPostingPanels';
+import { CoverageMatrixPanel, EngagementsPanel, ProcessDisciplinePanel } from '../../../../components/domains/hiring/TeamPanels';
 import { LiveHintsSession } from '../../../../components/LiveHintsSession';
 
 export default function DomainProjectPage() {
@@ -49,8 +54,8 @@ export default function DomainProjectPage() {
       });
   }, [manifest, params.projectId]);
 
-  if (!manifest) return <main className="page"><p className="generation-error">Неизвестный сценарий.</p></main>;
-  if (error) return <main className="page"><p className="generation-error">{error}</p></main>;
+  if (!manifest) return <main className="page"><p role="alert" className="generation-error">Неизвестный сценарий.</p></main>;
+  if (error) return <main className="page"><p role="alert" className="generation-error">{error}</p></main>;
   if (config === undefined) return <main className="page"><p>Загрузка…</p></main>;
 
   if (config === null) {
@@ -73,6 +78,7 @@ export default function DomainProjectPage() {
     : manifest.id === 'major-purchase' ? <MajorPurchaseWorkspace config={config as any} manifest={manifest} />
     : manifest.id === 'investment' ? <InvestmentWorkspace config={config as any} manifest={manifest} projectId={params.projectId} />
     : manifest.id === 'job-search' ? <JobSearchWorkspace config={config as any} manifest={manifest} projectId={params.projectId} onConfigUpdated={setConfig} />
+    : manifest.id === 'employer-hiring' ? <EmployerHiringWorkspace config={config} manifest={manifest} projectId={params.projectId} conversationId={conversationIdFromIntake} onConfigUpdated={setConfig} />
     : null;
   if (domainWorkspace) {
     return (
@@ -94,6 +100,16 @@ export default function DomainProjectPage() {
       { key: 'm:team', label: 'Команда', render: () => <TeamPanel config={config} /> },
       { key: 'm:reports', label: 'Отчёты', render: () => <ClientReportsPanel projectId={params.projectId} questions={config.questions ?? []} /> },
       { key: 'm:live', label: 'Live на собеседовании', render: () => <div className="dtp-section"><p className="dtp-hint">Во время собеседования: подсказывает следующий ещё не заданный вопрос опросника по живому транскрипту. Кандидат должен знать о записи — согласие спрашивается перед стартом.</p><LiveHintsSession projectId={params.projectId} mode="interview" /></div> },
+      // Пункт [job-domain-v2] — общий слой найма у агентства: лист вакансии,
+      // бриф заказчика, компания-заказчик, текст вакансии, матрица покрытия,
+      // дисциплина процесса, передача от работодателя (engagement).
+      { key: 'm:sheet', label: 'Лист вакансии', render: () => <VacancySheetPanel projectId={params.projectId} /> },
+      { key: 'm:brief', label: 'Бриф', render: () => <ClientBriefPanel projectId={params.projectId} role="agency" /> },
+      { key: 'm:company', label: 'Компания', render: () => <EmployerDossierPanel projectId={params.projectId} role="agency" /> },
+      { key: 'm:posting', label: 'Текст вакансии', render: () => <VacancyPostingPanel projectId={params.projectId} role="agency" /> },
+      { key: 'm:matrix', label: 'Матрица', render: () => <CoverageMatrixPanel projectId={params.projectId} /> },
+      { key: 'm:process', label: 'Процесс', render: () => <ProcessDisciplinePanel projectId={params.projectId} role="agency" /> },
+      { key: 'm:engagement', label: 'Заказчик-работодатель', render: () => <EngagementsPanel projectId={params.projectId} role="agency" /> },
     );
   }
   if (manifest.id === 'interview-pool') manualTabs.push({ key: 'm:share', label: 'Передача заказчику', render: () => <ShareAllPanel projectId={params.projectId} /> });

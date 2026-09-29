@@ -83,6 +83,10 @@ export interface ConversationCard {
   objective: DecisionObjective | null;
   boundaries: NegotiationBoundaries | null;
   topArguments: Argument[];
+  // Пункт [shown-not-all] 2026-09-05 — приписка появляется, только если
+  // аргументов больше, чем показано: у большинства проектов их меньше
+  // пяти, и говорить не о чем.
+  topArgumentsNote: string | null;
   doNotSay: string[];
   // Пункт 18 (backend) — AI-детекция риска из прошлых разговоров
   // (§3.53/§3.17 ТЗ), отдельно от doNotSay выше (ручной список).
@@ -348,6 +352,20 @@ export interface Transcript {
 export interface ConversationDetail extends Conversation {
   participants: ConversationParticipant[];
   transcript: Transcript | null;
+
+  // Пункт [job-died-quietly] 2026-09-06 — исход отдельного фонового
+  // прохода по подаче (паузы, темп, интонация). Тип клиента их не знал,
+  // и это было НЕ безобидно: сервер отдавал строку разговора целиком,
+  // то есть поля доходили, а экран о них не подозревал — тот же
+  // разрыв «данные есть, читателя нет», что этот пункт и разбирает.
+  paralinguisticsEnabled?: boolean;
+  /** Причина провала прохода как её вернул провайдер/валидатор. `null`
+   * — провала не записано; у разговоров до этой ревизии он всегда null,
+   * и это значит «не записано», а не «не было». */
+  paralinguisticsError?: string | null;
+  /** Сколько отметок отброшено: модель сослалась на реплики, которых в
+   * расшифровке нет. */
+  paralinguisticsSkipped?: number;
 }
 
 // Пункт 26 (backend) — сопоставление диаризации фигурантам.
@@ -487,6 +505,8 @@ export interface StaleFactWarning {
   personId: string;
   personDisplayName: string | null;
   content: string;
+  // Пункт [source-collapse] 2026-09-05 — происхождение доходит и сюда.
+  sourceType: FactSourceType;
   lastVerifiedAt: string | null;
   ageInDays: number;
 }
@@ -601,11 +621,15 @@ export interface LegalReference {
   citation: string;
   summary: string;
   sourceUrl?: string;
-  lastVerifiedAt: string;
+  seededAt: string;
 }
 export interface LegalDisclaimerResponse {
   bucket: string;
   references: LegalReference[];
+  // Пункт [silent-jurisdiction] 2026-09-06: ответ больше не бывает
+  // null — пробел называется словами, а не исчезновением блока.
+  coverage?: 'seeded' | 'not-researched';
+  seededDaysAgo?: number | null;
 }
 
 export interface SourceCheckResult {
@@ -708,7 +732,19 @@ export interface PrecedentSearchResult {
   precedents: BehaviorPrecedent[];
   total: number;
   analogousCount: number;
+  // Пункт [click-count] 2026-09-05 — числа по ОДНОЙ ситуации, отдельно
+  // от общих: доля осмысленна только внутри ситуации, а складывать
+  // прецеденты разных случаев в одну долю нельзя.
+  situation: string | null;
+  situationTotal: number;
+  situationAnalogousCount: number;
   conclusion: string;
+}
+
+/** Ответ на поиск прецедентов: что создано и сколько повторов отсечено. */
+export interface PrecedentSearchOutcome {
+  created: BehaviorPrecedent[];
+  duplicatesSkipped: number;
 }
 
 // Пункт 47 (backend) — Outcome Forecasting (§3.12 ТЗ), доводит пункт
@@ -781,6 +817,11 @@ export interface ScheduledConversation {
   linkedConversationId: string | null;
   linkedConversation: { id: string; occurredAt: string } | null;
   createdAt: string;
+  // Пункт [promised-arrival] 2026-09-05 — состояние напоминания
+  // считается сервером из уже сохранённых полей, а не экраном: экран,
+  // решающий это сам, однажды решит иначе, чем диспетчер.
+  reminderState?: 'not-requested' | 'scheduled' | 'sent' | 'overdue';
+  reminderDueAt?: string | null;
 }
 
 // Пункт 52 (backend) — Decision Track Record (§3.2 ТЗ), пункт 35
@@ -806,13 +847,21 @@ export interface CategoryCalibrationStats {
   matchCount: number;
   overOptimisticCount: number;
   overCautiousCount: number;
-  matchRate: number;
+  /** Пункт [rate-on-one-case] 2026-09-06: случаи, по которым доля
+   * вообще считается — с прогнозом и определённым исходом. */
+  classifiable: number;
+  /** null — показывать долю рано. Это НЕ «ноль процентов»: решает
+   * сервер, экран не придумывает порог сам. */
+  matchRate: number | null;
+  rateShown: boolean;
+  minSample: number;
 }
 
 export interface CalibrationSummary {
   totalRecorded: number;
   overall: CategoryCalibrationStats;
   byCategory: CategoryCalibrationStats[];
+  minSample: number;
 }
 
 // Пункт 55 (backend) — Sparring / Red Team (§3.1 ТЗ), пункт 34
@@ -870,16 +919,37 @@ export type PublicSubmissionStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
 export interface PublicParticipant {
   id: string;
-  projectId: string;
   displayName: string | null;
   createdAt: string;
+  /** Пункт [badge-was-the-key] 2026-09-24 — удостоверение, выданное
+   * один раз при входе. Хранится только у самого участника и в списки
+   * публичной страницы не попадает НИКОГДА. */
+  withdrawToken: string;
 }
 
+// Пункт [badge-was-the-key] 2026-09-24: `participantId` больше не
+// приходит — он был и удостоверением, и нитью, сшивавшей безымянную
+// заявку с подписанным комментарием того же человека. Вместо него
+// сервер сам отвечает на единственный вопрос, который был нужен экрану.
 export interface PublicArgumentSubmission {
+  id: string;
+  text: string;
+  stance: 'PRO' | 'CON';
+  status: PublicSubmissionStatus;
+  upvotes: number;
+  downvotes: number;
+  createdAt: string;
+  mine: boolean;
+}
+
+// Сторона АВТОРА проекта: он модерирует заявки и видит, кто подал.
+// Отдельный тип, потому что публичная сторона теперь отдаёт меньше —
+// и сводить их в один было бы способом однажды вернуть лишнее наружу.
+export interface OwnerPublicSubmission {
   id: string;
   projectId: string;
   participantId: string | null;
-  participant?: PublicParticipant | null;
+  participant?: { id: string; displayName: string | null } | null;
   text: string;
   stance: 'PRO' | 'CON';
   status: PublicSubmissionStatus;
@@ -889,21 +959,33 @@ export interface PublicArgumentSubmission {
   createdAt: string;
 }
 
+// Пункт [badge-was-the-key] 2026-09-24: `participantId` больше не
+// приходит. У комментария имя автора показывается — оно и приходит,
+// отдельным полем; сервер сам отвечает, чей это комментарий.
 export interface PublicComment {
   id: string;
-  projectId: string;
-  participantId: string | null;
-  participant?: PublicParticipant | null;
   text: string;
   createdAt: string;
+  authorName: string | null;
+  mine: boolean;
 }
 
 export interface PublicDiscussionView {
   question: string;
   goal: string | null;
-  arguments: Argument[];
+  // Пункт [badge-was-the-key] 2026-09-24: наружу уходят только те поля
+  // аргумента, которые страница показывает. `weight` — субъективная
+  // оценка автора проекта, и её здесь больше нет.
+  arguments: Array<{ id: string; text: string; stance: 'PRO' | 'CON' }>;
   submissions: PublicArgumentSubmission[];
   comments: PublicComment[];
+  // Сверка чтений без потолка 2026-09-04: списки обрезаны потолком, и
+  // страница обязана это сказать — обрезанный список, выглядящий полным,
+  // тот же дефект, что пустой экран вместо ошибки.
+  argumentsHasMore: boolean;
+  submissionsHasMore: boolean;
+  commentsHasMore: boolean;
+  pageLimit: number;
   // Пункт 80 (backend) — узкий read-only объём командного режима
   // (пункт 38 общего списка), согласовано явно перед реализацией.
   // Оба null, если ничего не сгенерировано владельцем проекта.
@@ -1153,12 +1235,50 @@ export interface VenueApplication {
   googlePlaceId: string | null;
   photoReferences: string[];
   status: VenueApplicationStatus;
+  // Пункт [own-submission] 2026-09-04: колонка в базе была, в типе — нет,
+  // поэтому дату решения показать было нечем.
+  moderatedAt: string | null;
   createdAt: string;
 }
 
+// Пункт [own-submission] 2026-09-04 — судьба своей отправки. Отдельный
+// тип, а не `LibraryEntry`: человеку возвращается только его собственное
+// и только то, что нужно для ответа «что с ней стало» — тексты
+// аргументов сюда не тянутся.
+// Пункт [partial-basis] 2026-09-04 — на чём построен свежий разбор.
+// Поле приходит ТОЛЬКО со свежим ответом: в базе основания нет (колонки
+// под него не существует ни у одной модели результата), поэтому в списках
+// сохранённых разборов его не будет — и экран говорит об этом прямо, а не
+// делает вид, что помнит.
+export interface WithBasisNote {
+  basisNote: string | null;
+}
+
+export type MotiveAnalysisResult = WithBasisNote & { hypotheses: MotiveHypothesis[] };
+export type OutcomeScenariosResult = WithBasisNote & { scenarios: OutcomeScenario[] };
+
+export interface MyLibrarySubmission {
+  id: string;
+  title: string;
+  category: string;
+  status: LibraryModerationStatus;
+  moderatedAt: string | null;
+  createdAt: string;
+  sourceProjectId: string | null;
+}
+
+/** Пункт [public-row-whole] 2026-09-06 — тип публичной витрины совпал
+ * с тем, что витрина действительно отдаёт.
+ *
+ * Здесь были объявлены `applicationId` и `referralFeeAmount` —
+ * коммерческое условие, согласованное с конкретным заведением. Сервер
+ * отдавал строку целиком, и оба поля уходили наружу через
+ * `public/venues`, у которого аутентификации нет вообще. Экран их не
+ * показывал, но «не показываем» и «не отдаём» — разные вещи: по HTTP
+ * их читал кто угодно. Комиссия осталась там, где ей место —
+ * `approved-venues/:id/commission-summary`, под операторским guard'ом. */
 export interface ApprovedVenue {
   id: string;
-  applicationId: string;
   name: string;
   address: string;
   phone: string | null;
@@ -1166,10 +1286,6 @@ export interface ApprovedVenue {
   photoReferences: string[];
   rating: number | null;
   createdAt: string;
-  // Пункт 67 (§3.22 "Монетизация") — леджер, не реальная платёжная
-  // интеграция. См. подробное обоснование в apps/api/prisma/README.md,
-  // «Пункт 67».
-  referralFeeAmount: number | null;
   isPriorityPartner: boolean;
 }
 
@@ -1257,12 +1373,21 @@ export interface SuccessStats {
   conflictsSmoothedLastWeek: number;
 }
 
-// Пункт 75 (backend) — Project Log (§3.39 ТЗ, честно суженный объём —
-// два источника событий из трёх, третий заблокирован §3.33, см.
-// /TODO.md). Вычисляемое представление на backend, не отдельная
-// сущность на клиенте.
+// Пункт 75 (backend) — Project Log (§3.39 ТЗ). Вычисляемое
+// представление на backend, не отдельная сущность на клиенте.
+// Пункт [project-log-v2] — все три источника событий и снятие флагов:
+// накал (§3.33) и прощупывание (§3.37) добавлены после того, как оба
+// детектора были реально построены, а FLAG_WITHDRAWN закрывает вторую
+// половину «появление/снятие флагов».
 export type ProjectLogColor = 'GREEN' | 'RED';
-export type ProjectLogEventType = 'STATUS_CHANGE' | 'DISCREPANCY_DETECTED' | 'MANIPULATION_DETECTED';
+export type ProjectLogEventType =
+  | 'STATUS_CHANGE'
+  | 'DISCREPANCY_DETECTED'
+  | 'MANIPULATION_DETECTED'
+  | 'FLAG_WITHDRAWN'
+  | 'ESCALATION_UP'
+  | 'ESCALATION_DOWN'
+  | 'PROBING_DETECTED';
 
 export interface ProjectLogEntry {
   color: ProjectLogColor;
@@ -1272,6 +1397,8 @@ export interface ProjectLogEntry {
   description: string;
   occurredAt: string;
   sourceConversationId: string | null;
+  sourceSessionId: string | null;
+  sourceSignalId: string | null;
 }
 
 // Пункт 76 (backend) — Weather Forecast (§3.21 ТЗ). cityLabel — только
@@ -1284,8 +1411,15 @@ export interface WeatherForecast {
   scheduledConversationId: string;
   cityLabel: string | null;
   temperatureCelsius: number | null;
-  condition: string;
-  recommendation: WeatherRecommendation;
+  /** Пункт [forecast-without-source] 2026-09-06: null — сервис ответил,
+   * но данных на это время не дал. Пусто здесь не значит «погода
+   * никакая» — значит «мы её не знаем». */
+  condition: string | null;
+  /** Чей это прогноз: сервисов два, и переключение между ними было
+   * молчаливым. null — строка создана до появления колонки. */
+  source: string | null;
+  /** null — данных о погоде нет, и совета по ним нет намеренно. */
+  recommendation: WeatherRecommendation | null;
   recommendationReason: string;
   createdAt: string;
 }
@@ -1296,8 +1430,9 @@ export interface WeatherForecast {
 export interface WeatherForecastPreview {
   cityLabel: string;
   temperatureCelsius: number | null;
-  condition: string;
-  recommendation: WeatherRecommendation;
+  condition: string | null;
+  source: string | null;
+  recommendation: WeatherRecommendation | null;
   recommendationReason: string;
 }
 
@@ -1382,6 +1517,8 @@ export interface ProbingTopic {
   confidence: number;
   firstDetectedAt: string;
   lastDetectedAt: string;
+  // Пункт [project-log-v2] — собеседник, если пользователь его выбрал.
+  personId?: string | null;
 }
 
 // Пункт 87 (backend) — Voice Embedding (голосовой отпечаток).
@@ -1390,5 +1527,12 @@ export interface VoiceEnrollmentStatus {
 }
 
 export interface VoiceVerifyResult {
-  isMatch: boolean | null; // null = ещё нет эталона для сравнения
+  isMatch: boolean | null;
+  // Пункт [voice-attribution] 2026-09-05 — вместе с вердиктом приходит
+  // основание: само сходство, применённый порог и прямое указание, что
+  // порог не откалиброван на реальных голосах.
+  similarity: number | null;
+  threshold: number;
+  calibrated: false;
+  reason?: string;
 }

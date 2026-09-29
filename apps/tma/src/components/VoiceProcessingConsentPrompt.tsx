@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import { grantConsent, hasConsent, listConsents } from '../lib/features';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 const CONSENT_VERSION = 'v1';
 
@@ -32,8 +33,12 @@ export function VoiceProcessingConsentPrompt({ source, onGranted, onCancel }: Vo
       await grantConsent({ consentType: 'VOICE_PROCESSING', version: CONSENT_VERSION, source });
       haptic('success');
       onGranted();
-    } catch {
-      haptic('error');
+    } catch (err) {
+      // Пункт [one-buzz-was-the-whole-answer] 2026-09-24. Здесь
+      // стояла одна вибрация. Экран согласия — худшее место для
+      // такого молчания: человек нажал «согласен», запрос упал, и
+      // он уходит, не зная, записано согласие или нет.
+      reportFailure(err, 'Не удалось записать согласие на обработку голоса');
     } finally {
       setGranting(false);
     }

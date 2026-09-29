@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import Script from 'next/script';
 import { TelegramInit } from './telegram-init';
 import { AppGate } from '../components/AppGate';
+import { FailureAnnouncer } from '../components/FailureAnnouncer';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -26,6 +27,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
          * проверка жила только внутри app/page.tsx — реальный пробел,
          * закрытый именно оборачиванием на уровне layout, а не
          * дублированием проверки в каждой отдельной странице. */}
+        {/* Пункт [one-buzz-was-the-whole-answer] 2026-09-24: одно
+         * объявление о неудаче на всё приложение. Тридцать копий
+         * одного поля состояния — способ разъехаться, и этот проект
+         * уже дважды за такие копии платил. */}
+        <FailureAnnouncer />
         <AppGate>{children}</AppGate>
       </body>
     </html>

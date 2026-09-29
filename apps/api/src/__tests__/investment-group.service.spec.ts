@@ -61,6 +61,18 @@ function createFakePrisma() {
         const key = where.groupId_userId;
         return members.find((m) => m.groupId === key.groupId && m.userId === key.userId) ?? null;
       },
+      // Пункт [check-then-create] 2026-09-04: вступление в группу перешло
+      // с «прочитать и создать» на `upsert` — окна между проверкой и
+      // вставкой больше нет. Мок обязан вести себя так же, иначе тест
+      // проверял бы не тот путь.
+      upsert: async ({ where, create }: any) => {
+        const key = where.groupId_userId;
+        const existing = members.find((m) => m.groupId === key.groupId && m.userId === key.userId);
+        if (existing) return existing;
+        const member = { id: nextId(), joinedAt: new Date(), pledgedAmount: null, ...create };
+        members.push(member);
+        return member;
+      },
       findMany: async ({ where }: any) => members.filter((m) => m.groupId === where.groupId),
       update: async ({ where, data }: any) => {
         const m = members.find((mm) => mm.id === where.id);

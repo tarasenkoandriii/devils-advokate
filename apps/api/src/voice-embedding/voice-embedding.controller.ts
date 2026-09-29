@@ -34,8 +34,11 @@ export class VoiceEmbeddingController {
 
   @Post('verify')
   async verify(@CurrentUser() userId: string, @Body() dto: VerifyDto) {
-    const isMatch = await this.voiceEmbedding.verify(userId, dto.embedding, dto?.threshold);
-    return { isMatch };
+    // Пункт [voice-attribution] 2026-09-05: наружу уходил один вердикт
+    // «это вы / это не вы». Теперь с ним едет и основание — само
+    // сходство, применённый порог и прямое указание, что порог не
+    // откалиброван на реальных голосах.
+    return this.voiceEmbedding.verifyDetailed(userId, dto.embedding, dto?.threshold);
   }
 
   @Delete()

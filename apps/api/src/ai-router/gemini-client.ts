@@ -151,6 +151,14 @@ export class GeminiClient implements AIBackgroundProviderClient {
    * проекта падал бы на «GeminiClient is background-only». */
   readonly lanes = ['background'] as const;
 
+  /** Формат ответа задаётся только просьбой в промпте. Пункт
+   * [json-mode-was-asked-and-dropped] 2026-09-26: `response_mime_type`
+   * в теле interactions не задаётся сознательно (ТЗ §5, причина ниже, у
+   * сборки тела), и `params.jsonMode` здесь ничего не меняет. Раньше об
+   * этом знал только читатель комментария; теперь это объявленное
+   * свойство клиента, и роутер может о нём спросить. */
+  readonly jsonModeSupport = 'prompt-only' as const;
+
   /** Синхронный complete() намеренно не реализован: для текстовых
    * taskType этот клиент не используется вовсе (ТЗ §5), а медиа-вызов
    * не помещается в maxDuration функции (§4.1). Явная ошибка честнее

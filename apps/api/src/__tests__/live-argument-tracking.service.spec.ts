@@ -7,6 +7,7 @@ function createFakePrisma() {
   const trackingStatuses: any[] = [];
   const manipulationFlags: any[] = [];
   let idCounter = 0;
+  let createManyCalls = 0;
   const nextId = () => `id-${++idCounter}`;
 
   return {
@@ -15,6 +16,7 @@ function createFakePrisma() {
     _seedTrackingStatus(s: any) { trackingStatuses.push({ id: nextId(), lastCheckedAt: new Date(), ...s }); },
     _seedManipulationFlag(f: any) { manipulationFlags.push({ id: nextId(), createdAt: new Date(), ...f }); },
     _getTrackingStatuses() { return trackingStatuses; },
+    _createManyCalls() { return createManyCalls; },
 
     project: {
       findFirst: async ({ where }: any) => {
@@ -32,6 +34,22 @@ function createFakePrisma() {
         const s = { id: nextId(), lastCheckedAt: new Date(), ...data };
         trackingStatuses.push(s);
         return s;
+      },
+      // Пункт [check-then-create] 2026-09-04: инициализация перешла с
+      // цикла «прочитать и создать» на один `createMany` со
+      // `skipDuplicates`. Мок обязан вести себя как база: пропускать то,
+      // что уже есть, по уникальному `argumentId`, а не падать и не
+      // дублировать — иначе тест проверял бы не тот путь.
+      createMany: async ({ data, skipDuplicates }: any) => {
+        createManyCalls++;
+        let count = 0;
+        for (const row of data) {
+          const exists = trackingStatuses.some((s) => s.argumentId === row.argumentId);
+          if (exists && skipDuplicates) continue;
+          trackingStatuses.push({ id: nextId(), lastCheckedAt: new Date(), ...row });
+          count++;
+        }
+        return { count };
       },
       findMany: async ({ where, include }: any) =>
         trackingStatuses
@@ -118,6 +136,40 @@ async function run() {
     await svc.initialize(USER_ID, PROJECT_ID);
     assertEqual(prisma._getTrackingStatuses().length, 1, 'не создан дубликат');
     assertEqual(prisma._getTrackingStatuses()[0].status, 'NEEDS_REPEAT', 'существующий статус не сброшен инициализацией');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [check-then-create]: две одновременные инициализации не ломают экран и не дублируют', async () => {
+    // Клиент зовёт инициализацию при каждом входе в режим сопровождения:
+    // двойное нажатие или переподключение дают два вызова внахлёст. Раньше
+    // оба проходили проверку «записи нет» и оба вставляли — вторая вставка
+    // падала на уникальном `argumentId`, и человек видел ошибку на
+    // действии, которое уже удалось. Воспроизводится ТОЛЬКО так: оба
+    // вызова запускаются до первой записи.
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedArgument({ id: ARG_ID, projectId: PROJECT_ID, text: 'x', stance: 'PRO' });
+    prisma._seedArgument({ id: 'arg-2', projectId: PROJECT_ID, text: 'y', stance: 'CON' });
+    const svc = new LiveArgumentTrackingService(prisma as any, new FakeAIRouterService() as any);
+
+    await Promise.all([svc.initialize(USER_ID, PROJECT_ID), svc.initialize(USER_ID, PROJECT_ID)]);
+
+    assertEqual(prisma._getTrackingStatuses().length, 2, 'по одной записи на аргумент, без дублей');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [check-then-create]: инициализация — один запрос, а не по два на аргумент', async () => {
+    // Самый нагруженный экран продукта: двадцать аргументов означали сорок
+    // обращений к базе, и число росло вместе с проектом человека.
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    for (let i = 0; i < 10; i++) {
+      prisma._seedArgument({ id: `arg-${i}`, projectId: PROJECT_ID, text: 'x', stance: 'PRO' });
+    }
+    const svc = new LiveArgumentTrackingService(prisma as any, new FakeAIRouterService() as any);
+
+    await svc.initialize(USER_ID, PROJECT_ID);
+
+    assertEqual(prisma._getTrackingStatuses().length, 10, 'записи созданы для всех аргументов');
+    assertEqual(prisma._createManyCalls(), 1, 'на десять аргументов — один запрос вставки, а не десять');
   });
 
   test('checkStatus() бросает BadRequestException, если список отслеживания пуст', async () => {

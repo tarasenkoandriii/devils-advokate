@@ -30,6 +30,10 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReligiousReminderFrequency } from '@prisma/client';
 
+/** «Раз в день» как окно, а не календарные сутки: 20 часов — см. разбор в
+ * shouldShow(). Экспортируется ради теста. */
+export const REMINDER_MIN_INTERVAL_MS = 20 * 60 * 60 * 1000;
+
 const RELIGIOUS_PRINCIPLES: Record<string, string[]> = {
   Христианство: [
     'Верность единому Богу',
@@ -92,14 +96,20 @@ export class ReligiousReminderService {
       return { shouldShow: false, principles: null };
     }
     if (user.religiousReminderFrequency === ReligiousReminderFrequency.ONCE_PER_DAY && user.religiousReminderLastShownAt) {
-      // Упрощённое сравнение "тот же календарный день по UTC" — без
-      // учёта часового пояса пользователя, тот же класс упрощения,
-      // что уже применялся к другим датовым сравнениям в проекте,
-      // честно не решает проблему полностью для пользователей рядом
-      // с полуночью по местному времени.
-      const lastShownDate = user.religiousReminderLastShownAt.toISOString().slice(0, 10);
-      const todayDate = new Date().toISOString().slice(0, 10);
-      if (lastShownDate === todayDate) {
+      // Аудит времени 2026-09-03. Здесь сравнивались календарные дни ПО UTC
+      // — и в старом комментарии честно говорилось, что для человека рядом
+      // с местной полуночью это не работает. Что именно он видел: показ в
+      // 23:50 и второй в 00:10, через двадцать минут, — «раз в день»
+      // превращалось в «дважды за вечер». Часового пояса у пользователя в
+      // продукте нет, и заводить его ради напоминания незачем.
+      //
+      // Поэтому окно, а не календарь: с последнего показа должно пройти
+      // не меньше REMINDER_MIN_INTERVAL_MS. Двадцать часов, не двадцать
+      // четыре, — из-за дрейфа: при ровно суточном пороге человек,
+      // открывающий приложение каждое утро примерно в одно время, каждый
+      // день попадал бы чуть раньше порога и в итоге пропускал день.
+      const sinceLastMs = Date.now() - user.religiousReminderLastShownAt.getTime();
+      if (sinceLastMs < REMINDER_MIN_INTERVAL_MS) {
         return { shouldShow: false, principles: null };
       }
     }

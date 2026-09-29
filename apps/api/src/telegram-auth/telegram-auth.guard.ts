@@ -23,6 +23,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeLanguageCode } from '../common/ai-response-language';
+import { blockedNotice } from './moderation-notice';
 import {
   validateTelegramInitData,
   TelegramInitDataInvalidError,
@@ -41,6 +42,11 @@ export interface AuthenticatedRequest extends Request {
   // сообщением — список таких эндпоинтов задача следующего прохода
   // (см. TODO.md), не фиксируется здесь окончательным списком.
   userRestricted?: boolean;
+  /** Пункт [decision-basis] 2026-09-04: основание и дата решения едут
+   * вместе с флагом — иначе `NotRestrictedGuard` знает, что человек
+   * ограничен, и не может сказать ему почему. */
+  userRestrictedNote?: string | null;
+  userRestrictedAt?: Date | null;
 }
 
 /** ISO-3166-1 alpha-2 из x-vercel-ip-country или null. Экспортирована ради тестов. */
@@ -71,16 +77,18 @@ export class TelegramAuthGuard implements CanActivate {
       // бо isBlocked має блокувати й read-запити, не тільки дев'ять
       // write-точок.
       if (devUserId.isBlocked) {
-        throw new UnauthorizedException('Account is blocked');
+        throw new UnauthorizedException(blockedNotice(devUserId));
       }
       request.userId = devUserId.id;
       request.userRestricted = devUserId.isRestricted;
+      request.userRestrictedNote = devUserId.restrictedNote;
+      request.userRestrictedAt = devUserId.restrictedAt;
       return true;
     }
 
     const rawInitData = request.headers['x-telegram-init-data'];
     if (!rawInitData || Array.isArray(rawInitData)) {
-      throw new UnauthorizedException('X-Telegram-Init-Data header is required');
+      throw new UnauthorizedException('Приложение открыто не из Telegram: не пришли данные входа. Откройте его через бота.');
     }
 
     const botToken = this.config.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
@@ -91,7 +99,7 @@ export class TelegramAuthGuard implements CanActivate {
     } catch (err) {
       if (err instanceof TelegramInitDataInvalidError) {
         this.logger.warn(`initData rejected: ${err.message}`);
-        throw new UnauthorizedException('Invalid Telegram initData');
+        throw new UnauthorizedException('Данные входа Telegram не прошли проверку. Закройте и откройте приложение заново.');
       }
       throw err;
     }
@@ -119,13 +127,15 @@ export class TelegramAuthGuard implements CanActivate {
     // isBlocked=true (дефолт false), перевірка після upsert не змінює
     // поведінку для нових користувачів, тільки для вже існуючих.
     if (user.isBlocked) {
-      throw new UnauthorizedException('Account is blocked');
+      throw new UnauthorizedException(blockedNotice(user));
     }
 
     request.telegramAuth = parsed;
     request.userId = user.id;
     // Пункт [admin-panel] §4.3 — сигнализируем, не блокируем.
     request.userRestricted = user.isRestricted;
+    request.userRestrictedNote = user.restrictedNote;
+    request.userRestrictedAt = user.restrictedAt;
     return true;
   }
 
@@ -136,7 +146,7 @@ export class TelegramAuthGuard implements CanActivate {
    * префикс "dev-", чтобы гарантированно не пересечься с настоящими
    * Telegram ID и было видно в БД, что запись тестовая).
    */
-  private async tryDevBypass(request: AuthenticatedRequest): Promise<{ id: string; isRestricted: boolean; isBlocked: boolean } | null> {
+  private async tryDevBypass(request: AuthenticatedRequest): Promise<{ id: string; isRestricted: boolean; isBlocked: boolean; restrictedNote: string | null; restrictedAt: Date | null; blockedNote: string | null; blockedAt: Date | null } | null> {
     const allowDevAuth = this.config.get<string>('ALLOW_DEV_AUTH') === 'true';
     if (!allowDevAuth) return null;
 
@@ -154,6 +164,6 @@ export class TelegramAuthGuard implements CanActivate {
       create: { telegramId: `dev-${devUserId}`, ipCountryCode },
     });
 
-    return { id: user.id, isRestricted: user.isRestricted, isBlocked: user.isBlocked };
+    return { id: user.id, isRestricted: user.isRestricted, isBlocked: user.isBlocked, restrictedNote: user.restrictedNote, restrictedAt: user.restrictedAt, blockedNote: user.blockedNote, blockedAt: user.blockedAt };
   }
 }

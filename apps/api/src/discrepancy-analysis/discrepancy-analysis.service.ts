@@ -49,6 +49,7 @@
 // конкретному Person — Пункт 26) и внутри разговора — только с ЕГО
 // ЖЕ другими репликами, не путать говорящих между собой.
 
+import { intakeNote, type SourceIntake } from '../common/source-intake';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -58,6 +59,8 @@ import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-
 import { SecretsService } from '../secrets/secrets.service';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { partialBasis, promptBasisNote } from '../common/partial-basis';
+import { orderLabel } from '../common/server-time';
 
 // Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
 // Google Fact Check Tools API — четвёртый источник сверки §3.16 ТЗ
@@ -247,6 +250,15 @@ function isValidSourceCheckPayload(text: string): boolean {
 const DEFAULT_SOURCE_CHECK_PROMPT =
   'Тебе дано утверждение из разговора и текст веб-страницы, которую пользователь сам указал как источник для проверки. Определи: CONFIRMED — источник подтверждает утверждение или согласуется с ним; CONTRADICTED — источник прямо противоречит утверждению (в этом случае укажи severity: INACCURACY для незначительного расхождения, DISCREPANCY для явного противоречия без уверенности в причине, STRONG_DISCREPANCY для однозначного противоречия с высокой уверенностью, и potentialImpact — коротко, для чего важно это проверить: на что может повлиять подтверждение расхождения, есть ли риск эскалации при обсуждении); INSUFFICIENT — текст источника не даёт достаточно информации, чтобы сравнить (не то же самое, что "нет противоречия" — просто нечем сравнить). НИКОГДА не утверждай, что человек солгал — только то, расходится ли утверждение с текстом ИМЕННО ЭТОГО источника. Ответь СТРОГО валидным JSON-объектом вида {"outcome": "CONFIRMED"|"CONTRADICTED"|"INSUFFICIENT", "severity": string, "explanation": string, "potentialImpact": string}. Поля severity/potentialImpact включай только при outcome=CONTRADICTED. Без пояснений вне JSON.';
 
+/** Аудит 2026-09-03. Модель просят называть издание без ссылки — но
+ * попросить и проверить это разные вещи. Всё, что похоже на адрес
+ * (схема, www, домен со слэшем), выбрасывается целиком: «частично
+ * почищенная» ссылка выглядела бы как настоящая. */
+export function sourcesWithoutFabricatedUrls(sources: string[]): string[] {
+  const looksLikeUrl = /(https?:\/\/|www\.|[a-z0-9-]+\.[a-z]{2,}(\/|$))/i;
+  return sources.filter((s) => typeof s === 'string' && s.trim().length > 0 && !looksLikeUrl.test(s.trim()));
+}
+
 @Injectable()
 export class DiscrepancyAnalysisService {
   constructor(
@@ -268,7 +280,7 @@ export class DiscrepancyAnalysisService {
     }
     const segments = conversation.transcript?.segments ?? [];
     if (segments.length === 0) {
-      throw new BadRequestException(`Conversation ${conversationId} has no transcript segments to analyze`);
+      throw new BadRequestException(`Разбор невозможен: у этого разговора нет расшифровки. Это не значит, что находок нет — их не искали.`);
     }
 
     const [arguments_, priorConversationsByPerson] = await Promise.all([
@@ -289,6 +301,18 @@ export class DiscrepancyAnalysisService {
     const historyContext = [...priorConversationsByPerson.entries()]
       .map(([personId, text]) => `История говорящего [personId=${personId}]:\n${text}`)
       .join('\n\n');
+    // Сверка «ссылка на реплику» 2026-09-04: здесь реплики уходят модели
+    // с НАСТОЯЩИМ id, а не с коротким номером, — и это решение, а не
+    // недосмотр. Номер экономил бы 25 символов на реплику, но ответ
+    // модели хранится дословно в `AIInference.output` и перечитывается
+    // позже (`list()` восстанавливает из него описание находки, сопоставляя
+    // ссылку с сигналом). Номер осмыслен только относительно того списка
+    // реплик, который был в ТОМ вызове: после повторной расшифровки или
+    // добавления реплик та же цифра указала бы на другую фразу — и
+    // объяснение молча приехало бы к чужим словам. Переписывать же
+    // сохранённый ответ модели «исправленным» нельзя: это запись о том,
+    // что модель сказала на самом деле. Экономия взята там, где ссылка
+    // разрешается один раз и хранится уже разрешённой (доменные разборы).
     const transcriptText = segments
       .map(
         (s: (typeof segments)[number]) =>
@@ -330,16 +354,22 @@ export class DiscrepancyAnalysisService {
       const segment = segmentById.get(point.segmentId);
       if (!segment) continue; // AI сослался на несуществующий id реплики — пропускаем, не падаем на всём батче
 
-      const signal = await this.prisma.conversationSignal.create({
-        data: {
-          signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
-          transcriptSegmentId: segment.id,
-          participantId: segment.participantId,
-          severity: point.severity as SignalSeverity,
-        },
-      });
-      await this.prisma.conversationSignalEvidence.create({
-        data: { conversationSignalId: signal.id, aiInferenceId: result.aiInferenceId },
+      // Сверка «половины операции» 2026-09-04: находка и её основание —
+      // одна запись, а не две. Расхождение в словах человека без ссылки
+      // на источник — обвинение без источника; хуже отсутствия находки.
+      const signal = await this.prisma.$transaction(async (tx) => {
+        const s = await tx.conversationSignal.create({
+          data: {
+            signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
+            transcriptSegmentId: segment.id,
+            participantId: segment.participantId,
+            severity: point.severity as SignalSeverity,
+          },
+        });
+        await tx.conversationSignalEvidence.create({
+          data: { conversationSignalId: s.id, aiInferenceId: result.aiInferenceId },
+        });
+        return s;
       });
       created.push({ ...signal, segment, sourceDescription: point.sourceDescription });
     }
@@ -408,8 +438,9 @@ export class DiscrepancyAnalysisService {
     }
 
     let sourceText: string;
+    let sourceIntake: SourceIntake;
     try {
-      sourceText = await fetchUrlText(url);
+      ({ text: sourceText, intake: sourceIntake } = await fetchUrlText(url));
     } catch (err) {
       if (err instanceof UnsafeUrlError || err instanceof UrlFetchError) {
         throw new BadRequestException(err.message);
@@ -455,16 +486,21 @@ export class DiscrepancyAnalysisService {
     // ConversationSignal, только информационный ответ пользователю.
     let signal: ConversationSignal | null = null;
     if (parsed.outcome === 'CONTRADICTED') {
-      signal = await this.prisma.conversationSignal.create({
-        data: {
-          signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
-          transcriptSegmentId: segment.id,
-          participantId: segment.participantId,
-          severity: parsed.severity as SignalSeverity,
-        },
-      });
-      await this.prisma.conversationSignalEvidence.create({
-        data: { conversationSignalId: signal.id, aiInferenceId: result.aiInferenceId },
+      // Сверка «половины операции» 2026-09-04 — находка и её основание
+      // пишутся вместе или не пишутся вовсе.
+      signal = await this.prisma.$transaction(async (tx) => {
+        const s = await tx.conversationSignal.create({
+          data: {
+            signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
+            transcriptSegmentId: segment.id,
+            participantId: segment.participantId,
+            severity: parsed.severity as SignalSeverity,
+          },
+        });
+        await tx.conversationSignalEvidence.create({
+          data: { conversationSignalId: s.id, aiInferenceId: result.aiInferenceId },
+        });
+        return s;
       });
     }
 
@@ -472,6 +508,12 @@ export class DiscrepancyAnalysisService {
       outcome: parsed.outcome,
       explanation: parsed.explanation,
       sourceUrl: url,
+      // Пункт [stored-text-cut] 2026-09-06: «источник не подтверждает»
+      // и «источник прочитан не целиком» — разные вещи, и вторую
+      // человек обязан знать, прежде чем принять первую за вывод о
+      // странице. Опровержение по началу страницы это опровержение по
+      // началу страницы, а не по странице.
+      sourceIntakeNote: intakeNote(sourceIntake),
       signal: signal ? { ...signal, sourceDescription: `Источник по ссылке, указанной пользователем: ${url} — ${parsed.explanation}` } : null,
     };
   }
@@ -532,30 +574,36 @@ export class DiscrepancyAnalysisService {
 
     let signal: ConversationSignal | null = null;
     if (hasNegativeRating) {
-      signal = await this.prisma.conversationSignal.create({
-        data: {
-          signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
-          transcriptSegmentId: segment.id,
-          participantId: segment.participantId,
-          severity: SignalSeverity.INACCURACY,
-        },
-      });
       const negativeClaim = claims.find((c) => NEGATIVE_RATING_PATTERN.test(c.textualRating))!;
-      await this.prisma.conversationSignalEvidence.create({
-        data: {
-          conversationSignalId: signal.id,
-          factCheckClaimId: negativeClaim.claimId,
-          // Пункт [fact-check-source-closure]: тот же детектируемый
-          // маркер "Источник — ...", что уже проверяется в
-          // exportFactsToVerify() (wasFactCheckVerified ниже) — без
-          // этого записанное здесь описание не распозналось бы как
-          // "уже проверено", несмотря на реальную проверку.
-          // Расширение на будущее (2026-08-30, по прямому запросу) —
-          // title теперь доступен (см. FactCheckClaim.title), включаем
-          // в описание доказательства, если фактчекер его указал —
-          // не выдумываем заголовок, если поле пустое.
-          factCheckSourceDescription: `Источник — Google Fact Check Tools API: ${negativeClaim.publisher} оценил утверждение как "${negativeClaim.textualRating}"${negativeClaim.title ? ` («${negativeClaim.title}»)` : ''} (${negativeClaim.reviewUrl})`,
-        },
+      // Сверка «половины операции» 2026-09-04: здесь основание — ссылка на
+      // конкретную проверку конкретного фактчекера. Сигнал без неё
+      // означал бы «наш AI решил, что это неправда», хотя решил не он.
+      signal = await this.prisma.$transaction(async (tx) => {
+        const s = await tx.conversationSignal.create({
+          data: {
+            signalType: ConversationSignalType.FACTUAL_DISCREPANCY,
+            transcriptSegmentId: segment.id,
+            participantId: segment.participantId,
+            severity: SignalSeverity.INACCURACY,
+          },
+        });
+        await tx.conversationSignalEvidence.create({
+          data: {
+            conversationSignalId: s.id,
+            factCheckClaimId: negativeClaim.claimId,
+            // Пункт [fact-check-source-closure]: тот же детектируемый
+            // маркер "Источник — ...", что уже проверяется в
+            // exportFactsToVerify() (wasFactCheckVerified ниже) — без
+            // этого записанное здесь описание не распозналось бы как
+            // "уже проверено", несмотря на реальную проверку.
+            // Расширение на будущее (2026-08-30, по прямому запросу) —
+            // title теперь доступен (см. FactCheckClaim.title), включаем
+            // в описание доказательства, если фактчекер его указал —
+            // не выдумываем заголовок, если поле пустое.
+            factCheckSourceDescription: `Источник — Google Fact Check Tools API: ${negativeClaim.publisher} оценил утверждение как "${negativeClaim.textualRating}"${negativeClaim.title ? ` («${negativeClaim.title}»)` : ''} (${negativeClaim.reviewUrl})`,
+          },
+        });
+        return s;
       });
     }
 
@@ -852,7 +900,13 @@ export class DiscrepancyAnalysisService {
               verdict: hyp.verdict as AiFactCheckVerdict,
               confidence: hyp.confidence,
               rationale: hyp.rationale,
-              sources: hyp.sources ?? [],
+              // Аудит 2026-09-03: промпт запрещает выдумывать URL, но
+              // проверялся только тип поля — и «ссылка», которой не
+              // существует, показывалась как источник проверки факта.
+              // Придуманный адрес хуже отсутствия адреса: по нему человек
+              // считает утверждение проверенным. Названия изданий
+              // остаются, адреса вырезаются вместе с записью.
+              sources: sourcesWithoutFabricatedUrls(hyp.sources ?? []),
             };
             aiCheckedSegments += 1;
             await this.storeAiHypothesis(r.text, r.ai);
@@ -914,7 +968,10 @@ export class DiscrepancyAnalysisService {
     const expiresAt = new Date(Date.now() + FACT_CHECK_CACHE_TTL_MS);
     await this.prisma.factCheckApiCache.upsert({
       where: { queryHash },
-      create: { queryHash, claimText: text, resultJson: hypothesis as never, expiresAt },
+      // Аудит удаления 2026-09-03: дословную фразу из разговора кэш
+      // больше не хранит — ему хватает хэша, а строка не принадлежит
+      // никому и потому переживала удаление аккаунта.
+      create: { queryHash, resultJson: hypothesis as never, expiresAt },
       update: { resultJson: hypothesis as never, expiresAt },
     });
   }
@@ -940,7 +997,7 @@ export class DiscrepancyAnalysisService {
     // результат в рамках одного окна кэша).
     await this.prisma.factCheckApiCache.upsert({
       where: { queryHash },
-      create: { queryHash, claimText, resultJson: claims as any, expiresAt },
+      create: { queryHash, resultJson: claims as any, expiresAt }, // без claimText — см. аудит удаления 2026-09-03
       update: { resultJson: claims as any, expiresAt },
     });
 
@@ -1040,7 +1097,20 @@ export class DiscrepancyAnalysisService {
       lines.push('');
     });
 
-    const header = `Список утверждений для проверки — разговор от ${new Date(conversation.occurredAt).toLocaleDateString('ru-RU')}, отсортировано по важности (всего ${sorted.length}, из них требует проверки: ${toVerifyCount})\n\n`;
+    // Пункт [date-only] 2026-09-04: здесь стояло
+    // `toLocaleDateString('ru-RU')` по `occurredAt`. Форматирование идёт
+    // в часовом поясе СЕРВЕРА (на Vercel — UTC), а часового пояса
+    // человека сервер не знает вовсе — это уже разбиралось и обходилось
+    // в religious-reminder.service.ts. Для разговора, состоявшегося в
+    // 01:00 по Киеву, в промпт уходила ПРЕДЫДУЩАЯ дата, и модель,
+    // повторяя её в ответе, называла человеку день, которого он не
+    // помнит.
+    //
+    // Дата здесь — контекст, а не предмет проверки: список утверждений
+    // разбирается одинаково от любого числа. Поэтому вместо неверной
+    // точности даты нет вовсе. Промолчать дешевле, чем сказать
+    // неправильно, — тот же принцип, что во всём продукте.
+    const header = `Список утверждений для проверки, отсортировано по важности (всего ${sorted.length}, из них требует проверки: ${toVerifyCount})\n\n`;
 
     return { text: header + lines.join('\n').trimEnd(), count: sorted.length };
   }
@@ -1073,18 +1143,38 @@ export class DiscrepancyAnalysisService {
             include: { segments: { where: { participant: { personId } }, include: { participant: true } } },
           },
         },
-        orderBy: { occurredAt: 'desc' },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
         take: PRIOR_CONVERSATIONS_LIMIT,
       });
 
+      // Пункт [shown-not-all] 2026-09-05: сверка со «своими же прошлыми
+      // словами» шла по ПОСЛЕДНИМ пяти разговорам, а модели подавалась
+      // как история говорящего. Разница здесь дороже обычного: вывод
+      // «противоречит сказанному ранее» на неполной истории — обвинение
+      // на неполных данных, и продукт прямо запрещает себе называть
+      // человека солгавшим.
+      const priorTotal = await this.prisma.conversation.count({
+        where: {
+          projectId,
+          id: { not: excludeConversationId },
+          status: { in: [ConversationProcessingStatus.TRANSCRIBED, ConversationProcessingStatus.ANALYZED] },
+          participants: { some: { personId } },
+        },
+      });
+      const basis = partialBasis('прошлые разговоры', pastConversations.length, priorTotal, 'recent');
+
       const text = pastConversations
-        .map((c: any) => {
+        // Пункт [server-said-which-day] 2026-09-24: в ЭТОМ ЖЕ ФАЙЛЕ, на
+        // шестьдесят строк выше, дата убрана Пунктом [date-only] с
+        // объяснением, почему серверное число неверно. Здесь она
+        // осталась: правило было, просто не везде.
+        .map((c: any, i: number, all: any[]) => {
           const segs = (c.transcript?.segments ?? []).map((s: any) => s.text).join(' ');
-          return segs ? `(${c.occurredAt.toISOString().slice(0, 10)}) ${segs}` : null;
+          return segs ? `(разговор ${orderLabel(i, all.length, true)}) ${segs}` : null;
         })
         .filter(Boolean)
         .join('\n');
-      if (text) result.set(personId, text);
+      if (text) result.set(personId, `${text}${promptBasisNote(basis)}`);
     }
     return result;
   }

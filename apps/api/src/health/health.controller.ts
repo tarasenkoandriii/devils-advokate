@@ -43,6 +43,8 @@ class CreateConsultationDto {
   conversationId?: string;
   occurredAt!: string;
   estimatedCost?: number;
+  // Аудит денег 2026-09-03: валюта оценки. Пусто = валюта проекта.
+  currency?: string | null;
 }
 
 class ReviewConsultationDto {
@@ -142,7 +144,7 @@ export class HealthController {
 
   @Post('providers/:id/consultations')
   async createConsultation(@CurrentUser() userId: string, @Param('id') providerId: string, @Body() dto: CreateConsultationDto) {
-    return this.health.createConsultation(userId, providerId, dto.conversationId, dto.occurredAt, dto.estimatedCost);
+    return this.health.createConsultation(userId, providerId, dto.conversationId, dto.occurredAt, dto.estimatedCost, dto.currency);
   }
 
   @Get('providers/:id/consultations')

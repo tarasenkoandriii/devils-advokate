@@ -192,7 +192,7 @@ export function UserVoiceRecordingSection({ sheet, onSaved, onClose }: UserVoice
 
       {stage === 'saving' && <p className="conversations-section__hint">Сохраняем…</p>}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
     </div>
   );
 }

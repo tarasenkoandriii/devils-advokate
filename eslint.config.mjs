@@ -101,7 +101,16 @@ export default tseslint.config(
   {
     // Спеки: standalone-раннер печатает результат в консоль,
     // самодельные фейки — это any по своей природе.
-    files: ['apps/api/src/__tests__/**/*.ts', 'apps/tma/src/__tests__/**/*.ts', 'apps/landing/src/__tests__/**/*.ts'],
+    // `apps/admin` появился в этом списке в Пункте [decision-basis]
+    // 2026-09-04: до него у панели не было ни одного теста, поэтому и
+    // исключения для спеков ей не завели. Тот же знакомый вид — правило
+    // в проекте было, просто не везде.
+    files: [
+      'apps/api/src/__tests__/**/*.ts',
+      'apps/tma/src/__tests__/**/*.ts',
+      'apps/admin/src/__tests__/**/*.ts',
+      'apps/landing/src/__tests__/**/*.ts',
+    ],
     rules: {
       'no-console': 'off',
       '@typescript-eslint/no-unsafe-function-type': 'off',

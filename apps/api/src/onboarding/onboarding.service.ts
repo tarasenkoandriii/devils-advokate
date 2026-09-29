@@ -29,19 +29,27 @@
 import { Injectable } from '@nestjs/common';
 import { countryNameToCode } from '../legal-disclaimer/jurisdiction-bucket';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { AIRouterService } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { reverseGeocode, NominatimError } from '../common/nominatim-client';
+import { LOCATION_PURPOSES } from '../consent/location-purposes';
+import { allFilled, substanceSite } from '../common/claim-substance';
 
 const RELIGIOUS_CONSENT_VERSION = 'v1';
 const RELIGION_SUGGESTION_TASK_TYPE = 'onboarding-religion-suggestion';
 
-export interface SaveOnboardingInput {
-  religion?: string | null;
-  city?: string | null;
-  country?: string | null;
-  countryCode?: string | null;
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class SaveOnboardingInput {
+  // null здесь осмыслен: человек стирает ранее указанное, и это не то
+  // же самое, что «поле не прислали».
+  @IsOptional() @IsString() @MaxLength(100) religion?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) city?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) country?: string | null;
+  @IsOptional() @IsString() @Matches(/^[A-Za-z]{2}$/) countryCode?: string | null;
 }
 
 interface RawReligionSuggestion {
@@ -49,10 +57,32 @@ interface RawReligionSuggestion {
   reasoning: string;
 }
 
-function isValidReligionSuggestionPayload(text: string): boolean {
+// Требование формата — В ПРОМПТЕ, а не только во флаге `jsonMode`.
+// Пункт [json-mode-was-asked-and-dropped] 2026-09-26: этот вызов был
+// ЕДИНСТВЕННЫМ из 87, где формат просил один флаг — а флаг читает
+// только OpenAI-совместимый клиент. Достанься задача Anthropic или
+// Google (а кому она достанется, решают ключ и порядок capability, не
+// умение держать формат), модель вернула бы прозу,
+// isValidReligionSuggestionPayload не прошёл бы, обе попытки упали, и
+// catch ниже вернул бы `suggestedReligion: null` — молча и ровно так
+// же, как если бы модели было нечего предложить. Пробел настройки
+// выглядел как отсутствие подсказки.
+export const RELIGION_SUGGESTION_SYSTEM_PROMPT =
+  'Ты даёшь ОБЩУЮ, осторожную статистическую подсказку о наиболее распространённой религии в указанной стране — не утверждение о конкретном человеке. Явно избегай излишней уверенности, где религиозный состав страны неоднороден. ' +
+  'Ответь СТРОГО валидным JSON вида {"suggestedReligion": string, "reasoning": string}, без пояснений вне JSON.';
+
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidReligionSuggestionPayload(text: string): boolean {
   try {
-    const parsed = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null && typeof parsed.suggestedReligion === 'string' && typeof parsed.reasoning === 'string';
+    // Пункт [finding-without-substance-2] 2026-09-26: способ сказать
+    // «подсказки нет» в этом методе УЖЕ ЕСТЬ и он другой —
+    // `suggestedReligion: null` из ветки catch. Пустая строка поэтому не
+    // «нечего предложить», а подсказка ни о чём; а пустое обоснование
+    // отбирает у человека единственное, на чём он может не согласиться с
+    // подсказкой о своей религии.
+    return allFilled(JSON.parse(text), substanceSite('isValidReligionSuggestionPayload').required.map((f) => f.field));
   } catch {
     return false;
   }
@@ -120,7 +150,7 @@ export class OnboardingService {
     // построен с явным расчётом на этот пункт (см. комментарий в
     // consent.service.ts про revoke()) — здесь только добавлена сама
     // проверка, которой раньше не было в этом конкретном месте.
-    await this.consent.requireConsent(userId, ConsentType.LOCATION);
+    await this.consent.requireConsent(userId, ConsentType.LOCATION, undefined, LOCATION_PURPOSES.ONBOARDING_CITY);
 
     let geo: { country: string | null; countryCode: string | null; city: string | null };
     try {
@@ -137,8 +167,7 @@ export class OnboardingService {
     }
 
     const userPrompt = `Страна: ${geo.country}. Какая религия/конфессия наиболее распространена в этой стране? Учитывай, что это лишь ОБЩАЯ статистическая тенденция по стране, не факт о конкретном человеке — в любой стране есть значительное религиозное разнообразие.`;
-    const systemPrompt =
-      'Ты даёшь ОБЩУЮ, осторожную статистическую подсказку о наиболее распространённой религии в указанной стране — не утверждение о конкретном человеке. Явно избегай излишней уверенности, где религиозный состав страны неоднороден.';
+    const systemPrompt = RELIGION_SUGGESTION_SYSTEM_PROMPT;
 
     let result;
     try {

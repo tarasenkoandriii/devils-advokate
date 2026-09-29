@@ -36,7 +36,7 @@ export function InviteBanner({
   return (
     <div className="domain-panel">
       <p>{title}</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <button
         type="button"
         className="primary"

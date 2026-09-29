@@ -61,6 +61,17 @@ export class PhotoVerificationService {
 
     const pathname = `photo-verification/${personFactId}-${Date.now()}`;
     let blobUrl: string | null = null;
+    // Пункт [delete-says-done] 2026-09-06: исход удаления публичной
+    // копии доходит до человека. Экран обещает ему БЕЗУСЛОВНО —
+    // «Ссылка удаляется сразу после завершения поиска», — а фото на
+    // это время реально публично в интернете (осознанный риск, под
+    // отдельным согласием). Если удаление не прошло, промолчать об
+    // этом значит оставить человека с обещанием вместо факта.
+    let publicCopy: { removed: boolean; note: string | null } = {
+      removed: false,
+      note: 'Публичная копия не создавалась.',
+    };
+    let verifications: unknown[] = [];
     try {
       const blob = await this.uploadToBlob(blobToken, pathname, imageBuffer, contentType);
       blobUrl = blob.url;
@@ -68,7 +79,7 @@ export class PhotoVerificationService {
       const searchResults = await this.searchReverseImage(serpApiKey, blob.url);
 
       if (searchResults.length === 0) {
-        return [
+        verifications = [
           await this.prisma.photoVerification.create({
             data: {
               personFactId,
@@ -77,9 +88,8 @@ export class PhotoVerificationService {
             },
           }),
         ];
-      }
-
-      return this.prisma.$transaction(
+      } else {
+      verifications = await this.prisma.$transaction(
         searchResults.map((r) =>
           this.prisma.photoVerification.create({
             data: {
@@ -94,6 +104,7 @@ export class PhotoVerificationService {
           }),
         ),
       );
+      }
     } catch (err) {
       if (err instanceof VercelBlobError) {
         throw new BadRequestException(`Не удалось загрузить фото для проверки: ${err.message}`);
@@ -106,9 +117,17 @@ export class PhotoVerificationService {
       // Удаление ВСЕГДА, даже при ошибке поиска — минимизация окна
       // публичной доступности не должна зависеть от успеха запроса.
       if (blobUrl) {
-        await deleteBlob(blobToken, blobUrl);
+        const outcome = await deleteBlob(blobToken, blobUrl);
+        publicCopy = outcome.deleted
+          ? { removed: true, note: null }
+          : {
+              removed: false,
+              note: `Публичную копию фото удалить НЕ удалось (${outcome.reason ?? 'причина неизвестна'}). Она остаётся доступной по ссылке ${blobUrl} — у Vercel Blob нет собственного срока жизни, файл лежит, пока его не удалят. Сообщите об этом, чтобы копию убрали вручную.`,
+            };
       }
     }
+
+    return { verifications, publicCopy };
   }
 
   async list(userId: string, personFactId: string) {

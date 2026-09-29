@@ -1,7 +1,9 @@
 // Пункт [major-purchase] (devils-advocate-major-purchase-tz.md §5.2-5.6).
 
+import { intakeNote, type SourceIntake } from '../common/source-intake';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../common/unique-violation';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
 import { SecretsService } from '../secrets/secrets.service';
@@ -10,6 +12,7 @@ import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-
 import { searchNearestByDistance, searchByText, getPlaceDetails } from '../venue-recommendation/google-places-client';
 import { ExtractedConfigDraft } from './major-purchase-onboarding.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { LOCATION_PURPOSES } from '../consent/location-purposes';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 // Пункт [major-purchase] §2.2 ТЗ — офіційні значення Google Places API,
@@ -33,7 +36,10 @@ const PLACE_TYPE_BY_CATEGORY: Record<PurchaseCategory, string> = {
 // всі geo-фічі". purposes["major_purchase_viewings"] і далі
 // записується при grant() для аудиту, просто не є окремою гранульованою
 // перевіркою.
-const LOCATION_PURPOSE = 'major_purchase_viewings';
+// Пункт [consent-purpose] 2026-09-05: значение переехало в общий
+// словарь применений — две копии одной строки в разных файлах и есть
+// способ разойтись, а строка уходит в базу и назад не переписывается.
+const LOCATION_PURPOSE = LOCATION_PURPOSES.MAJOR_PURCHASE;
 
 const CONCLUSION_TASK_TYPE = 'major-purchase-meeting-conclusion';
 const PRICE_EXTRACT_TASK_TYPE = 'major-purchase-price-extraction';
@@ -93,25 +99,41 @@ export class MajorPurchaseService {
 
     const existing = await this.prisma.majorPurchaseConfig.findUnique({ where: { projectId } });
     if (existing) {
-      throw new BadRequestException(`MajorPurchaseConfig for project ${projectId} already exists`);
+      throw new BadRequestException(`Разбор крупной покупки для этого проекта уже настроен`);
     }
 
-    return this.prisma.majorPurchaseConfig.create({
-      data: {
-        projectId,
-        category,
-        goalDescription: draft.goalDescription,
-        budgetMin: draft.budgetMin ?? undefined,
-        budgetMax: draft.budgetMax ?? undefined,
-        currency: draft.currency ?? undefined,
-        financingMethod: draft.financingMethod ?? undefined,
-        timeline: draft.timeline ?? undefined,
-        criteria: {
-          create: draft.criteria.map((c) => ({ text: c.text, isRequired: c.isRequired, orderIndex: c.orderIndex })),
+    // Пункт [check-then-create] 2026-09-04: проверка выше остаётся, но
+    // она НЕ гарантия — между ней и вставкой есть окно, и два
+    // одновременных нажатия (двойной тап, повтор при плохой связи)
+    // проходили её оба. `projectId` уникален, поэтому второй вызов падал
+    // с P2002, и человек читал внутреннюю ошибку сервера вместо того же
+    // «уже настроено», что и при обычном повторе. Гонку здесь не
+    // исключить без блокировки, но ответ обязан быть один и тот же
+    // независимо от того, кто успел раньше.
+    try {
+      // `return await`, а не `return`: без await промис уходит из
+      // try/catch, и отказ базы летит мимо обработчика — ошибка
+      // была бы «поймана» только на бумаге.
+      return await this.prisma.majorPurchaseConfig.create({
+        data: {
+          projectId,
+          category,
+          goalDescription: draft.goalDescription,
+          budgetMin: draft.budgetMin ?? undefined,
+          budgetMax: draft.budgetMax ?? undefined,
+          currency: draft.currency ?? undefined,
+          financingMethod: draft.financingMethod ?? undefined,
+          timeline: draft.timeline ?? undefined,
+          criteria: {
+            create: draft.criteria.map((c) => ({ text: c.text, isRequired: c.isRequired, orderIndex: c.orderIndex })),
+          },
         },
-      },
-      include: { criteria: { orderBy: { orderIndex: 'asc' } } },
-    });
+        include: { criteria: { orderBy: { orderIndex: 'asc' } } },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new BadRequestException(`Разбор крупной покупки для этого проекта уже настроен`);
+      throw err;
+    }
   }
 
   // ── Варіанти (§5.2 ТЗ) ──
@@ -159,7 +181,7 @@ export class MajorPurchaseService {
    * коментар над searchNearestByDistance() в google-places-client.ts. */
   async setLocationByGeolocation(userId: string, variantId: string, latitude: number, longitude: number) {
     const variant = await this.assertOwnedVariant(userId, variantId);
-    await this.consent.requireConsent(userId, ConsentType.LOCATION, variant.config.projectId);
+    await this.consent.requireConsent(userId, ConsentType.LOCATION, variant.config.projectId, LOCATION_PURPOSES.MAJOR_PURCHASE);
 
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
     const placeType = PLACE_TYPE_BY_CATEGORY[variant.config.category];
@@ -356,8 +378,9 @@ export class MajorPurchaseService {
     const variant = await this.assertOwnedVariant(userId, variantId);
 
     let sourceText: string;
+    let sourceIntake: SourceIntake;
     try {
-      sourceText = await fetchUrlText(sourceUrl);
+      ({ text: sourceText, intake: sourceIntake } = await fetchUrlText(sourceUrl));
     } catch (err) {
       if (err instanceof UnsafeUrlError || err instanceof UrlFetchError) {
         throw new BadRequestException(err.message);
@@ -390,9 +413,13 @@ export class MajorPurchaseService {
       extractedPrice = null;
     }
 
-    return this.prisma.marketComparison.create({
+    // Пункт [stored-text-cut] 2026-09-06: если страница вошла не
+    // целиком, человек узнаёт об этом рядом с ценой, которую из неё
+    // вынули, — цена могла стоять в необработанной части.
+    const created = await this.prisma.marketComparison.create({
       data: { variantId, sourceUrl, sourceText, extractedPrice },
     });
+    return { ...created, intakeNote: intakeNote(sourceIntake) };
   }
 
   // ── Порівняльний вивід (§5.6 ТЗ) ──
@@ -404,7 +431,7 @@ export class MajorPurchaseService {
       this.prisma.purchaseVariant.findMany({
         where: { configId },
         include: {
-          meetings: { orderBy: { occurredAt: 'desc' }, take: 1 },
+          meetings: { orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }], take: 1 },
           comparisons: true,
         },
       }),

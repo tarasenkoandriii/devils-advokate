@@ -6,6 +6,7 @@
 // (§3.8 ТЗ, v3-фича) — просто список + кнопка, достаточно для MVP.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   addPerson,
   createRelationship,
@@ -40,8 +41,11 @@ import {
   SteelmanCase,
 } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
+import { PersonResearchConsent, consentOrError } from './PersonResearchConsent';
 import { PersonFactsSection } from './PersonFactsSection';
 import { MotiveAnalysisSection } from './MotiveAnalysisSection';
+import { factSourceLabel } from '../lib/fact-provenance';
 
 // Пункт 39: те же шесть признаков, что в backend TRAIT_LABELS
 // (communication-profile.service.ts) — не изобретены заново на фронтенде.
@@ -59,6 +63,11 @@ interface PeopleSectionProps {
 }
 
 export function PeopleSection({ projectId }: PeopleSectionProps) {
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой любой из
+  // загрузок этого раздела ставил пустой список и молчал. Имя блока в
+  // множестве — чтобы подпись стояла у того списка, который не пришёл,
+  // а не одна на весь экран.
+  const [loadFailed, setLoadFailed] = useState<Set<string>>(new Set());
   const [people, setPeople] = useState<ProjectPersonLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
@@ -67,7 +76,7 @@ export function PeopleSection({ projectId }: PeopleSectionProps) {
   const reload = useCallback(() => {
     return listPeople(projectId)
       .then(setPeople)
-      .catch(() => setPeople([]));
+      .catch(() => { setPeople([]); setLoadFailed((prev) => new Set(prev).add('people')); });
   }, [projectId]);
 
   useEffect(() => {
@@ -83,8 +92,8 @@ export function PeopleSection({ projectId }: PeopleSectionProps) {
       setNewName('');
       await reload();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось добавить участника');
     } finally {
       setAdding(false);
     }
@@ -100,7 +109,7 @@ export function PeopleSection({ projectId }: PeopleSectionProps) {
   useEffect(() => {
     suggestRelationships()
       .then(setSuggestions)
-      .catch(() => setSuggestions([]));
+      .catch(() => { setSuggestions([]); setLoadFailed((prev) => new Set(prev).add('suggestions')); });
   }, [projectId]);
 
   if (loading) return null;
@@ -109,6 +118,8 @@ export function PeopleSection({ projectId }: PeopleSectionProps) {
     <section className="people-section">
       <h3>Участники разговора</h3>
 
+      {loadFailed.has('people') && <NotLoadedNotice what="список людей проекта" />}
+      {loadFailed.has('suggestions') && <NotLoadedNotice what="предложения по ролям" />}
       {people.length === 0 && (
         <p className="people-section__hint">
           Добавьте человека, с которым предстоит разговор, чтобы построить Steelman его позиции.
@@ -162,6 +173,10 @@ function PersonRow({
   onChanged: () => void;
 }) {
   const [cases, setCases] = useState<SteelmanCase[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: каждый блок
+  // карточки грузится отдельно, и молчал отдельно — поэтому и
+  // подпись о сбое стоит у своего блока, а не одна на карточку.
+  const [rowFailed, setRowFailed] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -179,8 +194,8 @@ function PersonRow({
       await updatePersonStatus(projectId, link.personId, newStatus);
       onChanged();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось изменить статус участника');
     } finally {
       setChangingStatus(false);
     }
@@ -192,8 +207,8 @@ function PersonRow({
       await removePerson(projectId, link.personId);
       onChanged();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось убрать участника');
       setRemoving(false);
     }
     // не сбрасываем removing в finally при успехе — строка сейчас
@@ -205,7 +220,7 @@ function PersonRow({
     if (!expanded) return;
     listSteelmanCases(projectId, link.personId)
       .then(setCases)
-      .catch(() => setCases([]));
+      .catch(() => { setCases([]); setRowFailed((prev) => new Set(prev).add('cases')); });
   }, [expanded, projectId, link.personId]);
 
   async function handleGenerate() {
@@ -236,7 +251,7 @@ function PersonRow({
     if (!expanded) return;
     listSourceConflicts(link.personId)
       .then(setConflicts)
-      .catch(() => setConflicts([]));
+      .catch(() => { setConflicts([]); setRowFailed((prev) => new Set(prev).add('conflicts')); });
   }, [expanded, link.personId]);
 
   async function handleDetectConflicts() {
@@ -264,8 +279,8 @@ function PersonRow({
         prev.map((c) => (c.id === conflictId ? { ...c, resolvedAt: new Date().toISOString() } : c)),
       );
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось отметить расхождение разобранным');
     }
   }
 
@@ -281,7 +296,7 @@ function PersonRow({
     if (!expanded) return;
     listStaleFactsByPerson(link.personId)
       .then(setStaleFacts)
-      .catch(() => setStaleFacts([]));
+      .catch(() => { setStaleFacts([]); setRowFailed((prev) => new Set(prev).add('staleFacts')); });
   }, [expanded, link.personId]);
 
   // Пункт 39: Communication Profile (§3.11 ТЗ текст, роадмап-пункт 24
@@ -293,12 +308,13 @@ function PersonRow({
   const [communicationProfile, setCommunicationProfile] = useState<PersonCommunicationTrait[]>([]);
   const [refreshingProfile, setRefreshingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileConsentNeeded, setProfileConsentNeeded] = useState(false);
 
   useEffect(() => {
     if (!expanded) return;
     getCommunicationProfile(link.personId)
       .then(setCommunicationProfile)
-      .catch(() => setCommunicationProfile([]));
+      .catch(() => { setCommunicationProfile([]); setRowFailed((prev) => new Set(prev).add('communicationProfile')); });
   }, [expanded, link.personId]);
 
   async function handleRefreshProfile() {
@@ -310,7 +326,12 @@ function PersonRow({
       haptic('success');
     } catch (err) {
       haptic('error');
-      setProfileError(err instanceof Error ? err.message : 'Не удалось обновить профиль');
+      // Пункт [consent-that-could-not-be-given] 2026-09-24: отказ
+      // «нужно согласие» — не ошибка, а вопрос. Показать его текстом
+      // ошибки значило бы завести тупик: разрешить было бы негде.
+      const outcome = consentOrError(err, 'Не удалось обновить профиль');
+      if ('consentNeeded' in outcome) setProfileConsentNeeded(true);
+      else setProfileError(outcome.message);
     } finally {
       setRefreshingProfile(false);
     }
@@ -329,7 +350,7 @@ function PersonRow({
     if (!expanded) return;
     listRelationshipsForPerson(link.personId)
       .then(setRelationships)
-      .catch(() => setRelationships([]));
+      .catch(() => { setRelationships([]); setRowFailed((prev) => new Set(prev).add('relationships')); });
   }, [expanded, link.personId]);
 
   async function handleAddRelationship() {
@@ -362,23 +383,29 @@ function PersonRow({
       await deleteRelationship(relationshipId);
       setRelationships((prev) => prev.filter((r) => r.id !== relationshipId));
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось удалить связь');
     }
   }
 
   // Пункт 45: Precedent Search (§3.9 ТЗ) — только из личных записей
   // (прошлые разговоры + факты), без публичного поиска.
   const [precedentResult, setPrecedentResult] = useState<PrecedentSearchResult | null>(null);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: `null` при сбое
+  // читается как «прецедентов не найдено» — вывод о человеке, которого
+  // продукт не делал.
+  const [precedentFailed, setPrecedentFailed] = useState(false);
   const [situationInput, setSituationInput] = useState('');
   const [searchingPrecedents, setSearchingPrecedents] = useState(false);
   const [precedentError, setPrecedentError] = useState<string | null>(null);
+  const [precedentConsentNeeded, setPrecedentConsentNeeded] = useState(false);
+  const [duplicatesSkipped, setDuplicatesSkipped] = useState(0);
 
   useEffect(() => {
     if (!expanded) return;
     listPrecedents(link.personId)
       .then(setPrecedentResult)
-      .catch(() => setPrecedentResult(null));
+      .catch(() => { setPrecedentResult(null); setPrecedentFailed(true); });
   }, [expanded, link.personId]);
 
   async function handleFindPrecedents() {
@@ -386,14 +413,20 @@ function PersonRow({
     setSearchingPrecedents(true);
     setPrecedentError(null);
     try {
-      await findPrecedents(link.personId, situationInput.trim());
+      // Пункт [click-count] 2026-09-05: повтор больше не множит записи,
+      // и об отсечённом сказано вслух — иначе «ничего не добавилось»
+      // читается как «не сработало», и человек жмёт снова.
+      const outcome = await findPrecedents(link.personId, situationInput.trim());
+      setDuplicatesSkipped(outcome.duplicatesSkipped);
       const result = await listPrecedents(link.personId);
       setPrecedentResult(result);
       setSituationInput('');
       haptic('success');
     } catch (err) {
       haptic('error');
-      setPrecedentError(err instanceof Error ? err.message : 'Не удалось найти прецеденты');
+      const outcome = consentOrError(err, 'Не удалось найти прецеденты');
+      if ('consentNeeded' in outcome) setPrecedentConsentNeeded(true);
+      else setPrecedentError(outcome.message);
     } finally {
       setSearchingPrecedents(false);
     }
@@ -431,8 +464,10 @@ function PersonRow({
         </button>
       </div>
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
+      {expanded && rowFailed.has('cases') && <NotLoadedNotice what="разборы «адвокат дьявола» по этому человеку" />}
+      {expanded && rowFailed.has('conflicts') && <NotLoadedNotice what="расхождения в источниках о этом человеке" />}
       {expanded && cases.length > 0 && (
         <div className="steelman-cases">
           {cases.map((c) => (
@@ -464,7 +499,7 @@ function PersonRow({
           <button type="button" onClick={handleDetectConflicts} disabled={detectingConflicts}>
             {detectingConflicts ? 'Проверяем факты…' : 'Проверить факты на противоречия'}
           </button>
-          {conflictsError && <p className="generation-error">{conflictsError}</p>}
+          {conflictsError && <p role="alert" className="generation-error">{conflictsError}</p>}
 
           {unresolvedConflicts.length > 0 && (
             <ul className="source-conflicts__list">
@@ -493,11 +528,13 @@ function PersonRow({
           )}
         </div>
       )}
+      {expanded && rowFailed.has('staleFacts') && <NotLoadedNotice what="устаревшие факты о этом человеке" />}
       {expanded && staleFacts.length > 0 && (
         <div className="stale-facts">
           {staleFacts.map((f) => (
             <p key={f.id} className="stale-facts__item">
-              <span className="stale-facts__age">{Math.floor(f.ageInDays / 30)} мес. назад:</span> {f.content}
+              <span className="stale-facts__age">{Math.floor(f.ageInDays / 30)} мес. назад:</span>{' '}
+              <span className="person-facts-section__source">{factSourceLabel(f.sourceType)}</span> {f.content}
             </p>
           ))}
         </div>
@@ -505,6 +542,7 @@ function PersonRow({
       {expanded && (
         <div className="communication-profile">
           <p className="steelman-case__label">Коммуникационный профиль (наблюдения, не тип личности)</p>
+          {rowFailed.has('communicationProfile') && <NotLoadedNotice what="наблюдаемый профиль общения" />}
           {communicationProfile.length > 0 ? (
             <ul className="communication-profile__list">
               {communicationProfile.map((t) => (
@@ -518,7 +556,13 @@ function PersonRow({
           ) : (
             <p className="conversations-section__hint">Пока не обновлялся — нужны факты или расшифрованные разговоры с этим человеком.</p>
           )}
-          {profileError && <p className="generation-error">{profileError}</p>}
+          {profileError && <p role="alert" className="generation-error">{profileError}</p>}
+          {profileConsentNeeded && (
+            <PersonResearchConsent
+              source="people-section-communication-profile"
+              onGranted={() => { setProfileConsentNeeded(false); void handleRefreshProfile(); }}
+            />
+          )}
           <button type="button" onClick={handleRefreshProfile} disabled={refreshingProfile}>
             {refreshingProfile ? 'Анализируем…' : 'Обновить профиль'}
           </button>
@@ -527,6 +571,7 @@ function PersonRow({
       {expanded && (
         <div className="relationships-block">
           <p className="steelman-case__label">Связи с другими фигурантами</p>
+          {rowFailed.has('relationships') && <NotLoadedNotice what="связи этого человека" />}
           {relationships.length > 0 ? (
             <ul className="relationships-block__list">
               {relationships.map((r) => {
@@ -582,7 +627,7 @@ function PersonRow({
                   <option value="MUTUAL">Взаимно (например, братья/коллеги)</option>
                 </select>
               </label>
-              {relationshipError && <p className="generation-error">{relationshipError}</p>}
+              {relationshipError && <p role="alert" className="generation-error">{relationshipError}</p>}
               <div className="conversations-section__add-actions">
                 <button
                   type="button"
@@ -602,9 +647,16 @@ function PersonRow({
           <p className="conversations-section__hint">
             Только по прошлым разговорам и фактам, уже сохранённым здесь — без поиска в интернете.
           </p>
+          {precedentFailed && <NotLoadedNotice what="результат поиска прецедентов" />}
           {precedentResult && precedentResult.total > 0 && (
             <>
               <p className="precedent-search-block__conclusion">{precedentResult.conclusion}</p>
+              {duplicatesSkipped > 0 && (
+                <p className="conversations-section__hint" role="status">
+                  Повторов отсечено: {duplicatesSkipped} — эти прецеденты уже были найдены для той же ситуации, и
+                  второй раз они не записаны, чтобы не считаться дважды.
+                </p>
+              )}
               <ul className="precedent-search-block__list">
                 {precedentResult.precedents.map((p) => (
                   <li key={p.id} className={`precedent-search-block__item precedent-search-block__item--${p.similarity.toLowerCase()}`}>
@@ -629,7 +681,13 @@ function PersonRow({
                 placeholder="Например: хочу попросить отгул на пятницу"
               />
             </label>
-            {precedentError && <p className="generation-error">{precedentError}</p>}
+            {precedentError && <p role="alert" className="generation-error">{precedentError}</p>}
+            {precedentConsentNeeded && (
+              <PersonResearchConsent
+                source="people-section-precedents"
+                onGranted={() => { setPrecedentConsentNeeded(false); void handleFindPrecedents(); }}
+              />
+            )}
             <div className="conversations-section__add-actions">
               <button
                 type="button"

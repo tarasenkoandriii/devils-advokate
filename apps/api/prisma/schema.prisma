@@ -262,6 +262,7 @@ enum ProjectMode {
   FAMILY_LAW
   DTP
   JOB_SEARCH
+  EMPLOYER_HIRING // Пункт [job-domain-v2] §7 — работодатель как пользователь (компания с командой)
 }
 
 model Project {
@@ -299,6 +300,12 @@ model Project {
   // Пункт [job-search] 2026-09-01 — домен кандидата: CV + сверка
   // вакансий с локальных джоб-сайтов (по ссылкам пользователя).
   jobSearchConfig JobSearchConfig?
+  // Пункт [job-domain-v2] — лист условий и связки трёх поддоменов найма.
+  termsSheets         TermsSheet[]
+  vacancyPosting      VacancyPosting?
+  clientBriefs        ClientBrief[]
+  employerDossiers    EmployerDossier[]
+  agencyEngagements   EmployerAgencyEngagement[]
 
   question String
   goal     String?
@@ -600,6 +607,8 @@ model Person {
   behaviorPrecedents BehaviorPrecedent[]
   // Пункт 46: перспективы, сгенерированные для этого человека как реального фигуранта
   archetypePerspectivesAsRealPerson ArchetypePerspective[]
+  // Пункт [job-domain-v2] §3.9 — заявление представителя компании, связанное с этим человеком (соискатель)
+  representativeClaim EmployerRepresentativeClaim?
   // Пункт 50: запланированные разговоры с этим фигурантом
   scheduledConversations ScheduledConversation[]
   // Пункт 55: сессии спарринга, симулирующие этого человека как оппонента
@@ -613,6 +622,11 @@ model Person {
   commitments Commitment[]
   // Пункт 21: Source Conflict Resolver
   sourceConflicts SourceConflict[]
+  // Пункт [project-log-v2]: с кем именно шёл разговор — выбор пользователя,
+  // нужен логу проекта (§3.39), чтобы записи о накале и прощупывании
+  // называли человека, а не «конфликт обострился»
+  escalationEvents EscalationCategoryEvent[]
+  probingTopics    ProbingTopic[]
 
   @@index([createdByUserId])
   @@map("people")
@@ -698,8 +712,22 @@ model PersonFact {
 
   // Обязателен при scope=PROJECT, null для остальных scope-значений.
   // Проверяется в service-слое (см. README §"Инварианты").
+  //
+  // Сверка удаления проекта 2026-09-04: было `onDelete: SetNull`, и это
+  // ломало ровно тот инвариант, что описан строкой выше. Удаление
+  // проекта превращало факт со scope=PROJECT в строку с projectId=null —
+  // состояние, создать которое сервис запрещает. Последствие хуже
+  // формального: читают такие факты как `{ scope: 'PROJECT', projectId }`,
+  // поэтому осиротевший факт не находится НИКОГДА, но остаётся в базе.
+  // Человек нажал «удалить проект», а собранные там сведения о другом
+  // человеке продолжали существовать — и ни посмотреть, ни удалить их
+  // через интерфейс уже нельзя.
+  //
+  // Cascade здесь точен: факты других scope хранят projectId=null по
+  // определению, поэтому каскад их не касается — уходят ровно те, что
+  // принадлежали удалённому проекту.
   projectId String?
-  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   scope      FactScope      @default(PROJECT)
   content    String
@@ -926,9 +954,17 @@ model ConversationSignal {
   // при создании (§3.33 ТЗ), не в схеме.
   confirmedGenuinely Boolean?
 
-  disputed  Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
+  // Пункт [project-log-v2] (§3.39 ТЗ, «появление/снятие флагов»): снять
+  // флаг может ТОЛЬКО человек — ни один сервис и ни одна модель не
+  // выставляет disputed сама. До этого пункта поле существовало в схеме,
+  // но не выставлялось нигде, и лог показывал лишь появление флагов (🔴),
+  // никогда их снятие (🟢) — половину описанной в ТЗ динамики.
+  // disputedAt хранит момент снятия отдельно от updatedAt: последний
+  // меняется от любой правки строки и датой события быть не может.
+  disputed   Boolean   @default(false)
+  disputedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now()) @updatedAt
 
   evidence ConversationSignalEvidence[]
 
@@ -1133,6 +1169,32 @@ model Conversation {
   // находит разговор. Строкой без FK, как aiJobId у элемента очереди.
   paralinguisticsJobId String?
 
+  // ── Пункт [job-died-quietly] 2026-09-06 ──
+  //
+  // Провал паралингвистического прохода записывался ТОЛЬКО в лог
+  // сервера. Для человека это было неотличимо от удачного прохода, в
+  // котором ничего не нашлось: он включил галочку «паузы, темп,
+  // несовпадение слов и интонации», отметок не увидел и заключил, что
+  // их нет. А разбора не было.
+  //
+  // Почему не `status = FAILED` у разговора: расшифровка в порядке, сам
+  // разговор не сломан — сломался ДОПОЛНИТЕЛЬНЫЙ проход. Пометить
+  // FAILED весь разговор значило бы соврать в другую сторону.
+  //
+  // Почему причина текстом, а не ключом (в отличие от
+  // `common/not-checked.ts`): причин здесь не конечный набор — это
+  // сообщение провайдера или валидатора, которое иначе не восстановить.
+  // Экран показывает его как есть, честнее пересказа.
+  paralinguisticsError String?
+
+  // Сколько находок паралингвистики отброшено потому, что модель
+  // сослалась на несуществующие реплики (§8.2). Пропуск с подсчётом —
+  // решение верное (полный провал выбросил бы и валидные сигналы), но
+  // число до этого пункта уходило в лог и никуда больше, тогда как
+  // ВЕСЬ механизм `skippedWithoutQuote` в проекте существует ровно для
+  // того, чтобы такое число доходило до человека.
+  paralinguisticsSkipped Int @default(0)
+
   // Пункт 13: интеграция STT/диаризации (AssemblyAI, см. README) —
   // provider отслеживается через уже существующий реестр AIModelVersion
   // (не через AIJob — та модель жёстко завязана на PromptVersion,
@@ -1144,6 +1206,22 @@ model Conversation {
   transcriptionProviderVersionId String?
   transcriptionProviderVersion   AIModelVersion? @relation(fields: [transcriptionProviderVersionId], references: [id])
   externalTranscriptionJobId     String?
+
+  // Сверка вебхуков и токенов 2026-09-04 — атомарный забор обработки
+  // вебхука расшифровки. Проверка «разговор ещё в TRANSCRIBING» стояла и
+  // раньше, но была read-then-act: два ретрая провайдера (а ретрай он
+  // шлёт именно тогда, когда наш ответ медленный, то есть первый вызов
+  // ещё выполняется) оба читали статус и оба шли дальше. Последствия
+  // названы в самом обработчике: вторая паралингвистическая джоба и
+  // второй декремент счётчика потребителей, то есть удаление аудио,
+  // пока первая джоба его читает. Тот же приём, что уже применён к
+  // напоминаниям планировщика и к джобам голосовых реплик: сначала
+  // атомарно забрать право условным UPDATE, потом работать.
+  //
+  // Отметка снимается на ветке ошибки (повтор после сбоя провайдера
+  // намеренно разрешён) и протухает через TRANSCRIPTION_CLAIM_TTL_MS —
+  // упавший обработчик не должен запирать разговор навсегда.
+  transcriptionClaimedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1437,7 +1515,10 @@ model AIJob {
   inputHash String // для идемпотентности повторных запросов (implementation-ready §7)
 
   modelVersionId String
-  modelVersion   AIModelVersion @relation("AIJobModelVersion", fields: [modelVersionId], references: [id])
+  // Аудит 2026-09-03: правило удаления объявлено явно. Restrict — Prisma-
+  // умолчание для обязательной связи, и здесь оно верное: версию модели,
+  // на которую ссылаются джобы, удалять нельзя — иначе теряется, чем считали.
+  modelVersion   AIModelVersion @relation("AIJobModelVersion", fields: [modelVersionId], references: [id], onDelete: Restrict)
 
   // Пункт 7: мигрировано из строки в FK.
   promptVersionId String?
@@ -1648,7 +1729,9 @@ model EvaluationRun {
   modelVersion    AIModelVersion? @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
 
   evaluationDatasetId String
-  evaluationDataset   EvaluationDataset @relation(fields: [evaluationDatasetId], references: [id])
+  // Аудит 2026-09-03: явное Restrict — набор, по которому уже прогнали
+  // оценку, не удаляется молча вместе с историей прогонов.
+  evaluationDataset   EvaluationDataset @relation(fields: [evaluationDatasetId], references: [id], onDelete: Restrict)
 
   status      EvaluationRunStatus @default(RUNNING)
   startedAt   DateTime            @default(now())
@@ -1709,7 +1792,9 @@ model EvaluationResult {
   evaluationRun   EvaluationRun @relation(fields: [evaluationRunId], references: [id], onDelete: Cascade)
 
   evaluationMetricId String
-  evaluationMetric   EvaluationMetric @relation(fields: [evaluationMetricId], references: [id])
+  // Аудит 2026-09-03: явное Restrict — метрику, на которую ссылаются
+  // результаты, удалять нельзя: числа осиротеют без определения.
+  evaluationMetric   EvaluationMetric @relation(fields: [evaluationMetricId], references: [id], onDelete: Restrict)
 
   value     Float
   threshold Float?
@@ -1787,6 +1872,12 @@ enum ConsentType {
   // самий клас вимоги, що вже застосований до RELIGIOUS_CONTENT, тут
   // суворіше (PHI-суміжна інформація, не персональні уподобання).
   HEALTH_DATA
+  // Пункт [job-domain-v2] §7.2 / §13.2 — согласие соискателя на передачу
+  // своих данных (CV-вариант, отмеченные пункты листа) получателю-
+  // пользователю: агентству или работодателю. Согласие = акт передачи с
+  // текстом версии v3 (purposes: to_agency | to_employer); проверяется и
+  // тип, и версия — старая запись без версии не засчитывается.
+  CANDIDATE_DATA_TRANSFER
   // Пункт [dtp] (§3.2 ТЗ) — окремий від RECORDING (той описує запис
   // ВЛАСНИХ розмов користувача з розкриттям) і від EXTERNAL_AI (куди
   // дані передаються потім) — тут проблема геть інша: юридичний
@@ -2200,8 +2291,14 @@ model Commitment {
   projectId String
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  personId String
-  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  // Пункт [job-domain-v2] §5.4: контрагент — Person (соискатель: HR,
+  // менеджер) ИЛИ CandidateProfile (агентство/работодатель: кандидат
+  // намеренно не Person). Ровно одно из двух — проверка в сервисе.
+  // Миграция НЕ аддитивна (DROP NOT NULL personId).
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: Cascade)
+  candidateProfileId String?
+  candidateProfile   CandidateProfile? @relation(fields: [candidateProfileId], references: [id], onDelete: Cascade)
 
   owner       CommitmentOwner
   description String
@@ -2219,6 +2316,7 @@ model Commitment {
 
   @@index([projectId])
   @@index([personId, status])
+  @@index([candidateProfileId])
   @@index([extractedFromConversationId])
   @@index([extractedFromSegmentId])
   @@map("commitments")
@@ -3197,6 +3295,17 @@ model PublicParticipant {
 
   displayName String? // null = анонимный участник
 
+  // Пункт [badge-was-the-key] 2026-09-24 — УДОСТОВЕРЕНИЕ, а не
+  // идентификатор. Право «забрать своё» проверялось по `id`, а `id`
+  // уходил в публичный ответ каждому, кто открыл ссылку: знать его и
+  // значило быть этим человеком. Секрет выдаётся один раз при входе и
+  // не появляется НИ В ОДНОМ списке.
+  //
+  // Для существующих строк — manual-migrations/public_participant_withdraw_token_2026_09_24.sql
+  // ДО db push: колонка добавляется со значением по умолчанию, иначе
+  // уже вошедшие участники потеряли бы право забрать написанное.
+  withdrawToken String @unique @default(cuid())
+
   createdAt DateTime @default(now())
 
   submissions PublicArgumentSubmission[]
@@ -3599,6 +3708,13 @@ model TtsCache {
 
   createdAt DateTime @default(now())
 
+  // Аудит удаления 2026-09-03: кэш содержит ТЕКСТ пользователя и его
+  // озвучку, но не привязан к пользователю — удаление аккаунта его не
+  // касалось, а срока жизни у записи не было вовсе, то есть фраза
+  // человека и её аудио оставались в базе навсегда. Срок жизни теперь
+  // есть (чистит сторожевая тем же тиком, что протухшие джобы), индекс —
+  // чтобы выборка по нему не была полным сканом.
+  @@index([createdAt])
   @@map("tts_cache")
 }
 
@@ -4129,10 +4245,25 @@ model WeatherForecast {
   cityLabel String?
 
   temperatureCelsius Float?
-  condition          String // человекочитаемое описание погоды ("гроза", "ясно" и т.д.)
+  // Пункт [forecast-without-source] 2026-09-06: NULL — сервис ответил,
+  // но данных на эту дату не дал. Раньше сюда писалась СТРОКА «нет
+  // данных», и она уходила в промпт как описание погоды: модель
+  // выдавала по ней рекомендацию «проводить / перенести». Пусто здесь
+  // не значит «погода никакая» — значит «мы её не знаем».
+  condition          String? // человекочитаемое описание погоды ("гроза", "ясно" и т.д.)
+
+  // Пункт [forecast-without-source] 2026-09-06: чей это прогноз.
+  // Сервисов два (Windy с ключом, Open-Meteo без), переключение между
+  // ними было молчаливым, и человек читал число, не зная его автора, —
+  // при том что весь остальной продукт называет опору у каждого
+  // вывода. NULL — строка создана до появления колонки.
+  source String?
 
   // 🟡 "эвристика-совет, не диагноз конкретной ситуации" — buкально ТЗ.
-  recommendation       WeatherRecommendation
+  // NULL, Пункт [forecast-without-source] 2026-09-06 — данных о погоде
+  // нет, и советовать по ним нечего. Совет без опоры хуже его
+  // отсутствия: человек читает его как вывод о своей встрече.
+  recommendation       WeatherRecommendation?
   recommendationReason String
 
   generatedByInferenceId String?
@@ -4278,6 +4409,10 @@ model LiveHintEvent {
   // повторювати вже підказане", джерело кандидатів інше).
   suggestedQuestionnaireItemId String?
   suggestedQuestionnaireItem   QuestionnaireItem? @relation(fields: [suggestedQuestionnaireItemId], references: [id], onDelete: SetNull)
+  // Пункт [job-domain-v2] §5.4 — подсказка «пункт листа не обсуждён»
+  // (для работодателя/агентства — свой лист, для соискателя — К-6).
+  clauseId String?
+  clause   TermsClause? @relation(fields: [clauseId], references: [id], onDelete: SetNull)
 
   dismissed Boolean @default(false)
 
@@ -4290,6 +4425,7 @@ model LiveHintEvent {
   @@index([projectId])
   @@index([suggestedArgumentId])
   @@index([suggestedQuestionnaireItemId])
+  @@index([clauseId])
   @@index([generatedByInferenceId])
   @@map("live_hint_events")
 }
@@ -4445,9 +4581,20 @@ model EscalationCategoryEvent {
   sessionId String // группирует события одного непрерывного запуска AssistanceScreen
   category  EscalationCategory
 
+  // Пункт [project-log-v2] (§3.39 ТЗ): «запись лога никогда не абстрактна —
+  // всегда называет конкретного человека». Собеседника ВЫБИРАЕТ ПОЛЬЗОВАТЕЛЬ
+  // при старте экрана сопровождения; модель его не угадывает по голосу и не
+  // подставляет «вероятного фигуранта». Поэтому поле необязательное: без
+  // выбора событие остаётся метрикой (сводка «конфликтов сглажено»), но в лог
+  // проекта не попадает — там оно было бы безымянным, а безымянных цветных
+  // записей ТЗ не допускает.
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
 
   @@index([projectId, sessionId])
+  @@index([personId])
   @@map("escalation_category_events")
 }
 
@@ -4507,7 +4654,15 @@ model ProbingTopic {
   firstDetectedAt DateTime @default(now())
   lastDetectedAt  DateTime @default(now())
 
+  // Пункт [project-log-v2] — тот же принцип, что у EscalationCategoryEvent
+  // выше: кого именно человек слушает, знает только он сам. Тема без
+  // выбранного собеседника продолжает отслеживаться и предупреждать на
+  // экране сопровождения, но в лог проекта не попадает.
+  personId String?
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
   @@index([projectId])
+  @@index([personId])
   @@map("probing_topics")
   updatedAt DateTime @default(now()) @updatedAt
 }
@@ -4798,7 +4953,15 @@ model FactCheckApiCache {
   // ("Vaccines cause autism" / "vaccines  cause autism " — один хэш).
   queryHash String @unique
 
-  claimText  String // оригинальный (не нормализованный) текст запроса — для аудита/дебага, не сам ключ поиска
+  // Аудит удаления 2026-09-03: раньше здесь лежал ОРИГИНАЛЬНЫЙ текст
+  // утверждения — то есть дословная фраза из частного разговора
+  // пользователя, «для аудита/дебага». Кэш не привязан ни к какому
+  // пользователю, поэтому удаление аккаунта его не касалось, и фраза
+  // переживала удаление. Поле больше не заполняется (nullable ради
+  // старых строк, которые вычищает сторожевая по expiresAt): кэшу нужен
+  // только хэш, а хранить чужую реплику ради удобства отладки — ровно то,
+  // от чего продукт отказывается в других местах.
+  claimText  String? // НЕ заполняется с 2026-09-03, см. комментарий выше
   resultJson Json   // сырой claims[] от Google Fact Check Tools API, уже в разобранном виде FactCheckClaim[] — повторное чтение из кэша не дублирует логику парсинга
 
   createdAt DateTime @default(now())
@@ -4958,6 +5121,9 @@ model MarketComparison {
 model RecruitingTeam {
   id   String @id @default(cuid())
   name String
+  // Пункт [job-domain-v2] §7.1 — та же таблица для агентства и для
+  // работодателя; различаются тексты интерфейса и набор функций (§12).
+  teamType RecruitingTeamType @default(AGENCY)
 
   createdAt DateTime @default(now())
 
@@ -4995,6 +5161,13 @@ model RecruitingTeamInvite {
   team   RecruitingTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   token     String   @unique
+  // Сверка вебхуков и токенов 2026-09-04: приглашение многоразовое по
+  // замыслу (одну ссылку владелец шлёт нескольким людям), но отозвать
+  // его было нечем — утёкшую ссылку оставалось только пережидать 72
+  // часа, а она открывает ПОЛНЫЙ доступ к общей базе (§4.5). Отзыв —
+  // не новая механика, а та же, что уже есть у шеринга кандидата.
+  revokedAt DateTime?
+
   expiresAt DateTime
 
   createdAt DateTime @default(now())
@@ -5006,6 +5179,11 @@ model RecruitingTeamInvite {
 enum RecruitingTeamRole {
   OWNER
   MEMBER
+}
+
+enum RecruitingTeamType {
+  AGENCY
+  EMPLOYER
 }
 
 // ── Кандидат (§3.0 ТЗ) — НЕ Person/ProjectPerson навмисно, ті
@@ -5024,6 +5202,18 @@ model CandidateProfile {
   contactInfo String?
   resumeText  String?
 
+  // Пункт [job-domain-v2] §3.3/§7.2 — отзыв согласия кандидатом: копия
+  // остаётся (законный интерес получателя на записи о своём процессе),
+  // но из новых снимков, отчётов и доставок исключается. Проставляется
+  // на ПРОФИЛЕ, а не на шеринге: кандидат, заведённый вручную, шеринга
+  // не имеет, а отозвать согласие может.
+  consentRevokedAt    DateTime?
+  // Копия, принятая из проекта другой роли (самошеринг соискателя,
+  // передача агентства работодателю) — происхождение без FK: граница
+  // проектов разных владельцев, каскад через неё не тянется (§4.9).
+  sharedFromProjectId String?
+  consentTextVersion  String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -5031,6 +5221,7 @@ model CandidateProfile {
   relevanceEntries PoolRelevanceEntry[]
   clientReports    ClientReport[]
   sentShares       CandidateShare[]
+  commitments      Commitment[] // [job-domain-v2] А-7: обещания кандидату
   @@index([ownerUserId])
   @@index([recruitingTeamId])
 
@@ -5042,8 +5233,10 @@ model InterviewPoolConfig {
   projectId String  @unique
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  jobTitle            String
-  extendedDescription String
+  // Пункт [job-domain-v2] §5.4: конфиг создаётся ПУСТЫМ вместе с проектом
+  // работодателя (бриф разбирается до онбординга) — поэтому дефолты.
+  jobTitle            String @default("")
+  extendedDescription String @default("")
 
   salaryRange      String?
   employmentLoad   EmploymentLoad?
@@ -5066,6 +5259,7 @@ model InterviewPoolConfig {
   questions       QuestionnaireItem[]
   interviewStages InterviewStageDefinition[]
   complianceFlags ComplianceFlag[]
+  termsSheet      TermsSheet? // [job-domain-v2] §4.1 — лист VACANCY, опора = конфиг
 
   @@map("interview_pool_configs")
 }
@@ -5143,8 +5337,20 @@ model ComplianceFlag {
   conversationId String?
   conversation   Conversation? @relation("ComplianceFlagConversation", fields: [conversationId], references: [id], onDelete: SetNull)
 
+  // Пункт [job-domain-v2] §5.4 — флаг из текста вакансии (А-14) или из
+  // брифа (А-24); configId остаётся обязательным: конфиг у проекта есть
+  // всегда. Правило «никогда во внешние документы» — без изменений.
+  postingRevisionId String?
+  postingRevision   VacancyPostingRevision? @relation(fields: [postingRevisionId], references: [id], onDelete: Cascade)
+  clientBriefId     String?
+  clientBrief       ClientBrief? @relation(fields: [clientBriefId], references: [id], onDelete: Cascade)
+  // А-24: нейтральная деловая альтернатива формулировки (предложение, не правка)
+  alternativeText   String?
+
   createdAt DateTime @default(now())
   @@index([configId])
+  @@index([postingRevisionId])
+  @@index([clientBriefId])
 
   @@index([conversationId]) // Пункт [project-audit] 2026-09-01: FK без индекса (именованные связи проходили мимо конвенционного теста)
   @@map("compliance_flags")
@@ -5186,6 +5392,8 @@ model CandidatePipelineStatus {
 
   followUpRequests CandidateFollowUpRequest[]
   stageProgress    CandidateStageProgress[]
+  termsSheet       TermsSheet? // [job-domain-v2] §4.1 — лист INTERVIEW по кандидату
+  preQuestionnaireInvites PreQuestionnaireInvite[] // [job-domain-v2] А-2
 
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
@@ -5230,6 +5438,18 @@ model PoolRelevanceSnapshot {
 
   triggerConversationId String?
 
+  // Сверка «пустота, неотличимая от полноты» 2026-09-04: кандидат, чью
+  // сверку не удалось выполнить (сбой AI, нет расшифрованных разговоров,
+  // отозвано согласие), просто ПРОПУСКАЛСЯ — его не было в снимке, и
+  // рекрутер не мог отличить «его сравнили, совпадений нет» от «его не
+  // сравнивали вовсе». Для продукта, где по такому снимку решают,
+  // с кем продолжать разговор, это худший вид молчания.
+  //
+  // Здесь — кто не попал в снимок и почему, человеческим текстом.
+  // Формат: [{ candidateProfileId, reason }]. Json, а не отдельная
+  // таблица: это описание одного снимка, живёт и умирает вместе с ним.
+  notAssessed Json?
+
   entries PoolRelevanceEntry[]
 
   createdAt DateTime @default(now())
@@ -5273,8 +5493,15 @@ model PoolRelevanceEntry {
 model CandidateShare {
   id String @id @default(cuid())
 
-  sourceCandidateId String
-  sourceCandidate   CandidateProfile @relation(fields: [sourceCandidateId], references: [id], onDelete: Cascade)
+  // Пункт [job-domain-v2] §5.4: nullable — самошеринг соискателя (К-8)
+  // идёт из проекта JOB_SEARCH, где CandidateProfile-источника нет;
+  // источник тогда — CvVariant. Миграция НЕ аддитивна (DROP NOT NULL),
+  // см. prisma/manual-migrations/job_domain_v2_2026_09_02.sql.
+  sourceCandidateId String?
+  sourceCandidate   CandidateProfile? @relation(fields: [sourceCandidateId], references: [id], onDelete: Cascade)
+  sourceCvVariantId String?
+  sourceSheetId     String? // лист соискателя, пункты которого отмечены «можно показать»
+  visibleClauseIds  String[] // К-8: только отмеченные пункты уходят получателю
 
   sharedByUserId String
   sharedByUser   User   @relation(fields: [sharedByUserId], references: [id], onDelete: Cascade)
@@ -5284,6 +5511,14 @@ model CandidateShare {
   expiresAt  DateTime
 
   candidateConsentConfirmed Boolean @default(false)
+  // §7.2 — чьё согласие и по какому тексту: RECRUITER_CONFIRMED (v1,
+  // рекрутер подтвердил со слов кандидата) / CANDIDATE_SELF (соискатель
+  // сам). Версия текста согласия пишется в шеринг: продукт проверяет
+  // не только тип, но и версию (§13.2).
+  consentSource      CandidateConsentSource @default(RECRUITER_CONFIRMED)
+  consentTextVersion String                 @default("v2")
+  acceptedIntoMode   ProjectMode?
+  revokedAt          DateTime?
 
   acceptedByUserId          String?
   acceptedAt                DateTime?
@@ -5295,7 +5530,13 @@ model CandidateShare {
   @@index([batchToken])
   @@index([sourceCandidateId])
   @@index([sharedByUserId])
+  @@index([sourceCvVariantId])
   @@map("candidate_shares")
+}
+
+enum CandidateConsentSource {
+  RECRUITER_CONFIRMED
+  CANDIDATE_SELF
 }
 
 // ── Звіти для замовника (§4.9 ТЗ) ──
@@ -5318,6 +5559,9 @@ model ClientReport {
 
   sentAt       DateTime?
   sentViaShare String?
+  // Пункт [job-domain-v2] Р-4 — доставка в проект работодателя-пользователя
+  // (копия по engagement); без FK — граница проектов разных владельцев.
+  deliveredToProjectId String?
   @@index([projectId])
   @@index([candidateProfileId])
 
@@ -5499,6 +5743,13 @@ model InvestmentGroupInvite {
   group   InvestmentGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   token     String   @unique
+  // Сверка вебхуков и токенов 2026-09-04: приглашение многоразовое по
+  // замыслу (одну ссылку владелец шлёт нескольким людям), но отозвать
+  // его было нечем — утёкшую ссылку оставалось только пережидать 72
+  // часа, а она открывает ПОЛНЫЙ доступ к общей базе (§4.5). Отзыв —
+  // не новая механика, а та же, что уже есть у шеринга кандидата.
+  revokedAt DateTime?
+
   expiresAt DateTime
 
   createdAt DateTime @default(now())
@@ -6327,12 +6578,17 @@ model JobSearchConfig {
   cvText       String?
   cvDraftedAt  DateTime?
   cvReviewedAt DateTime?
+  // Пункт [job-domain-v2] К-22 — трассировка элементов cvDraft к абзацам
+  // импортированного документа: [{path, quote, sourceRef}] параллельно
+  // cvDraft (сам CvDraft и isValidCvDraft не меняются).
+  cvDraftEvidence Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  criteria  JobSearchCriterion[]
-  vacancies JobVacancy[]
+  criteria          JobSearchCriterion[]
+  vacancies         JobVacancy[]
+  vacancyCandidates VacancyCandidate[] // [job-domain-v2] К-11/К-12
 
   @@map("job_search_configs")
 }
@@ -6358,9 +6614,51 @@ model JobVacancy {
   configId String
   config   JobSearchConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
 
-  sourceUrl String
-  siteHost  String // домен джоб-сайта — ось статистики «по локальным сайтам»
+  // Пункт [job-domain-v2] §5.4: nullable — вакансия из вставленного
+  // текста, пересланного сообщения или копии от работодателя ссылки не
+  // имеет. Миграция НЕ аддитивна (два DROP NOT NULL).
+  sourceUrl String?
+  siteHost  String? // домен джоб-сайта — ось статистики «по локальным сайтам»
   rawText   String // текст страницы вакансии (safe-url-fetch), НЕ пересказ
+  // Пункт [stored-text-cut] 2026-09-06: длина текста ДО обрезки по
+  // потолку. Валидатор запроса пропускает 20 000 знаков, запись режет
+  // до 12 000 — и раньше это происходило молча: человек вставлял
+  // объявление на 15 000 знаков и нигде не узнавал, что три тысячи в
+  // продукт не попали. NULL — строка создана до появления колонки.
+  rawTextTotalChars Int?
+
+  // Пункт [job-domain-v2] связка П — откуда пришла, дубли, слежение.
+  intakeSource     VacancyIntakeSource @default(MANUAL_URL)
+  intakeBatchId    String?
+  contentHash      String? // К-15: нормализованный текст → группа дублей
+  duplicateOfId    String? // К-15: главная вакансия группы; лист открывается на неё
+  watchEnabled     Boolean @default(false) // К-16: слежение включает пользователь per-вакансия
+  lastRefetchedAt  DateTime?
+  previousRawText  String?
+  // Пункт [state-not-sent] 2026-09-06. Снятие вакансии с публикации
+  // РАНЬШЕ ЗАПИСЫВАЛОСЬ В САМ `rawText`: перечитывание дописывало в
+  // конец текста строку «[Снята с публикации: источник ответил 404 —
+  // дата]». То есть продукт дописывал СВОИ слова в поле, о котором сам
+  // же объявил строкой выше «текст страницы вакансии, НЕ пересказ», и
+  // дальше отдавал этот текст модели и человеку как текст источника.
+  // Плюс плановое перечитывание идёт КАЖДЫЕ СУТКИ и метку дописывало
+  // заново: у снятой вакансии со слежением текст рос на строку в день,
+  // а «изменения» показывали свежий diff каждый день — при том что
+  // вакансия не менялась с момента снятия.
+  //
+  // Состояние источника — колонка, а не текст. NULL значит «источник
+  // отвечал при последней проверке», см. lastRefetchedAt рядом.
+  removedFromSourceAt DateTime?
+  responseStatus   JobVacancyResponseStatus? // К-29: из принесённой истории откликов
+  responseStatusAt DateTime?
+  // К-14: пакетная сверка фоновой полосой роутера — какая джоба и когда
+  // поставлена; результат пишет completion handler по jobId.
+  batchMatchJobId    String?
+  batchMatchQueuedAt DateTime?
+  favorite           Boolean @default(false) // К-27: ориентир «похожие на эту»
+  // §4.8 — компания, к которой сходятся вакансии; досье в проекте соискателя.
+  employerDossierId String?
+  employerDossier   EmployerDossier? @relation(fields: [employerDossierId], references: [id], onDelete: SetNull)
 
   // Заполняется AI-сверкой с CV (matchVacancy); до неё — null. Никаких
   // score/rank — только покрытие критериев + нейтральные заметки, тот
@@ -6374,6 +6672,504 @@ model JobVacancy {
 
   createdAt DateTime @default(now())
 
+  termsSheet       TermsSheet? // [job-domain-v2] §4.1 — лист VACANCY_RESPONSE
+  vacancyCandidate VacancyCandidate?
+
   @@index([configId])
+  @@index([employerDossierId])
+  @@index([configId, contentHash])
+  @@index([batchMatchJobId])
   @@map("job_vacancies")
+}
+
+enum VacancyIntakeSource {
+  MANUAL_URL
+  SEARCH_PAGE
+  EMAIL_ALERT
+  TELEGRAM_FORWARD
+  PASTED_TEXT
+  EMPLOYER_SHARE
+}
+
+enum JobVacancyResponseStatus {
+  APPLIED
+  VIEWED
+  INTERVIEW
+  OFFER
+  REJECTED
+  WITHDRAWN
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Пункт [job-domain-v2] 2026-09-02 (docs/devils-advocate-job-domain-v2-tz.md §5)
+// — «лист условий» как договорный документ: одна механика на три
+// поддомена найма (соискатель JOB_SEARCH, агентство INTERVIEW_POOL,
+// работодатель EMPLOYER_HIRING).
+//
+// ЧТО НЕ ХРАНИТСЯ ПО ПОСТРОЕНИЮ: балл по листу, ранг, «вероятность
+// оффера», любой агрегат по стороне или по человеку. Счётчики покрытий
+// вычисляются на экране из позиций.
+// ═══════════════════════════════════════════════════════════════════
+
+enum TermsSide {
+  EMPLOYER
+  CANDIDATE
+}
+
+// Три вида листа, каждый с РОВНО ОДНОЙ опорой (§4.1): VACANCY — конфиг
+// проекта агентства/работодателя (условия компании по вакансии, один на
+// проект); INTERVIEW — кандидат (наследует пункты VACANCY через
+// sourceClauseId); VACANCY_RESPONSE — соискатель по чужой вакансии.
+enum TermsSheetKind {
+  VACANCY
+  INTERVIEW
+  VACANCY_RESPONSE
+}
+
+enum TermsSheetStatus {
+  DRAFT
+  IN_NEGOTIATION
+  AGREED
+  DECLINED
+  WITHDRAWN
+}
+
+// §4.2 — пункт либо ТРЕБОВАНИЕ (к нему применимо покрытие другой
+// стороной), либо УСЛОВИЕ (к нему применима позиция стороны).
+enum TermsClauseKind {
+  REQUIREMENT
+  CONDITION
+}
+
+enum ClauseCoverage {
+  covered
+  partial
+  not_covered
+  unknown
+}
+
+enum ClauseStance {
+  unknown
+  offered
+  accepted
+  countered
+  declined
+  open
+}
+
+// §4.3 — опора позиции. Импортированная переписка — тоже
+// TRANSCRIPT_SEGMENT (она создаёт Conversation + TranscriptSegment).
+enum EvidenceKind {
+  TRANSCRIPT_SEGMENT
+  VACANCY_TEXT
+  OFFER_TEXT
+  CLIENT_BRIEF
+  PUBLIC_SOURCE
+  OWN_DOCUMENT
+  INTERVIEWER_DEBRIEF
+  USER_STATED
+}
+
+model TermsSheet {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  kind   TermsSheetKind
+  status TermsSheetStatus @default(DRAFT)
+
+  // Ровно одна опора по kind; Prisma не выражает XOR — инвариант держит
+  // сервис (400) и конвенционный тест. «Один за всё время» буквально:
+  // закрытый лист возобновляют, новый на ту же опору не открывают (409).
+  configId         String?              @unique
+  config           InterviewPoolConfig? @relation(fields: [configId], references: [id], onDelete: Cascade)
+  pipelineStatusId String?                  @unique
+  pipelineStatus   CandidatePipelineStatus? @relation(fields: [pipelineStatusId], references: [id], onDelete: Cascade)
+  vacancyId        String?     @unique
+  vacancy          JobVacancy? @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+
+  title String // «Backend, ТОВ Х» — человеку, не машине
+
+  clauses    TermsClause[]
+  offers     OfferDocument[]
+  cvVariants CvVariant[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, kind])
+  @@map("terms_sheets")
+}
+
+model TermsClause {
+  id      String     @id @default(cuid())
+  sheetId String
+  sheet   TermsSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  side       TermsSide
+  kind       TermsClauseKind
+  text       String
+  category   String? // словарь категорий остаётся доменным — здесь строка
+  isRequired Boolean @default(false)
+  orderIndex Int
+
+  // Происхождение пункта (одно из): критерий соискателя, вопрос анкеты,
+  // пункт VACANCY-листа (наследование в INTERVIEW), текст источника.
+  sourceCriterionId         String?
+  sourceQuestionnaireItemId String?
+  sourceClauseId            String?
+  sourceEvidence            EvidenceKind?
+  sourceRef                 String? // id сегмента / вакансии / оффера / брифа
+  sourceQuote               String? // цитата источника, ≤ 500 (А-22: пункт → фраза брифа)
+
+  // Пункт из неструктурированного текста — черновик до подтверждения (§4.3).
+  confirmedAt DateTime?
+  rejectedAt  DateTime?
+
+  // Пара «одно условие с двух сторон»: предлагает движок, подтверждает человек.
+  counterpartClauseId    String?
+  counterpartConfirmedAt DateTime?
+
+  positions        ClausePosition[]
+  suggestedInHints LiveHintEvent[]
+
+  createdAt DateTime @default(now())
+
+  @@index([sheetId, orderIndex])
+  @@index([sourceClauseId])
+  @@index([counterpartClauseId])
+  @@map("terms_clauses")
+}
+
+// Позиция стороны по пункту — append-only редакции (§4.4), опора обязательна (§4.3).
+model ClausePosition {
+  id       String      @id @default(cuid())
+  clauseId String
+  clause   TermsClause @relation(fields: [clauseId], references: [id], onDelete: Cascade)
+
+  bySide   TermsSide
+  coverage ClauseCoverage? // только clause.kind = REQUIREMENT
+  stance   ClauseStance?   // только clause.kind = CONDITION — ровно одно заполнено
+  note     String?         // 1–2 нейтральных предложения, без вердикта
+
+  evidenceKind  EvidenceKind
+  evidenceRef   String?
+  evidenceQuote String? // ≤ 500, дословно
+
+  proposedByInferenceId String?
+  confirmedAt           DateTime? // null = черновик
+  rejectedAt            DateTime? // отклонён человеком — след остаётся (explainability, А-9)
+  supersedesId          String?   // предыдущая ПОДТВЕРЖДЁННАЯ позиция той же bySide по этому пункту
+
+  createdAt DateTime @default(now())
+
+  @@index([clauseId, bySide, createdAt])
+  @@map("clause_positions")
+}
+
+// Оффер — документ той же природы, что вакансия (§4.6): дословно, разбирается тем же движком.
+model OfferDocument {
+  id      String     @id @default(cuid())
+  sheetId String
+  sheet   TermsSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  rawText    String
+  source     String? // «письмо от 12.09», URL, имя файла
+  parsedAt   DateTime?
+  reviewedAt DateTime? // у работодателя: ревью перед отправкой (Р-3)
+
+  // Копия у соискателя от работодателя-пользователя (§7.2): происхождение и судьба.
+  sharedFromProjectId String?
+  sharedAt            DateTime?
+  withdrawnAt         DateTime? // работодатель отозвал/заменил — копия помечается, не удаляется
+
+  createdAt DateTime @default(now())
+
+  @@index([sheetId])
+  @@map("offer_documents")
+}
+
+// CV под вакансию — детерминированный рендеринг листа со стороны соискателя (§4.5).
+model CvVariant {
+  id      String     @id @default(cuid())
+  sheetId String
+  sheet   TermsSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  lang         String @default("ru") // К-28: языковой вариант — тоже CvVariant
+  highlightMap Json   // [{highlightRef, clauseId, rephrased?, rephraseConfirmed?}]
+  cvText       String
+  backCheck    Json?  // К-28: пункты перевода против оригинала — потеряно/добавлено
+
+  compiledAt DateTime  @default(now())
+  reviewedAt DateTime?
+
+  @@index([sheetId])
+  @@map("cv_variants")
+}
+
+// ── Текст вакансии (связка Т) ──
+
+model VacancyPosting {
+  id        String  @id @default(cuid())
+  projectId String  @unique // INTERVIEW_POOL или EMPLOYER_HIRING
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  revisions    VacancyPostingRevision[]
+  variants     VacancyPostingVariant[]
+  reviewShares PostingReviewShare[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("vacancy_postings")
+}
+
+// Редакция — история правок ИСТОЧНИКА текста.
+model VacancyPostingRevision {
+  id        String         @id @default(cuid())
+  postingId String
+  posting   VacancyPosting @relation(fields: [postingId], references: [id], onDelete: Cascade)
+
+  text       String
+  checks     Json?     // только не-compliance: { salaryDisclosed, clauseLinks[], readability[] } — без числа-«качества»
+  reviewedAt DateTime? // утверждена к публикации
+
+  variants        VacancyPostingVariant[]
+  complianceFlags ComplianceFlag[]
+  reviewShares    PostingReviewShare[]
+
+  createdAt DateTime @default(now())
+
+  @@index([postingId, createdAt])
+  @@map("vacancy_posting_revisions")
+}
+
+// Вариант — детерминированный срез редакции под площадку (channel) и язык (lang): две оси.
+model VacancyPostingVariant {
+  id        String         @id @default(cuid())
+  postingId String
+  posting   VacancyPosting @relation(fields: [postingId], references: [id], onDelete: Cascade)
+
+  derivedFromRevisionId String
+  derivedFromRevision   VacancyPostingRevision @relation(fields: [derivedFromRevisionId], references: [id], onDelete: Cascade)
+
+  channel    String // 'full' | 'short' | 'telegram' | 'career_page' — словарь в сервисе
+  lang       String // 'uk' | 'ru' | 'en'
+  text       String
+  backCheck  Json?  // А-18: пункты перевода против оригинала
+  reviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([postingId, derivedFromRevisionId, channel, lang])
+  @@index([derivedFromRevisionId])
+  @@map("vacancy_posting_variants")
+}
+
+// А-30 — согласование текста с заказчиком вне продукта, по токену со сроком.
+model PostingReviewShare {
+  id         String                 @id @default(cuid())
+  postingId  String
+  posting    VacancyPosting         @relation(fields: [postingId], references: [id], onDelete: Cascade)
+  revisionId String
+  revision   VacancyPostingRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+
+  token     String   @unique
+  expiresAt DateTime
+  comments  Json?    // [{at, text}] — без аккаунта и имени
+
+  createdAt DateTime @default(now())
+
+  @@index([postingId])
+  @@index([revisionId])
+  @@map("posting_review_shares")
+}
+
+// ── Бриф (связка Б, приём — в ядре) ──
+
+enum ClientBriefOrigin {
+  EXTERNAL              // письмо/созвон заказчика агентства
+  INTERNAL              // внутренний бриф нанимающего менеджера (работодатель)
+  FROM_EMPLOYER_PROJECT // копия по engagement из проекта работодателя
+}
+
+model ClientBrief {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  rawText         String
+  source          String? // «письмо от …», «созвон 12.09», «со слов, голосом»
+  origin          ClientBriefOrigin @default(EXTERNAL)
+  sourceProjectId String? // FROM_EMPLOYER_PROJECT: без FK — граница проектов
+  extractedAt     DateTime?
+
+  complianceFlags ComplianceFlag[]
+
+  receivedAt DateTime @default(now())
+
+  @@index([projectId])
+  @@map("client_briefs")
+}
+
+// ── Приток (связка П): «кандидат в базу» — заголовок и ссылка БЕЗ содержимого ──
+
+model VacancyCandidate {
+  id       String          @id @default(cuid())
+  configId String
+  config   JobSearchConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  title        String
+  company      String?
+  url          String?
+  intakeSource VacancyIntakeSource
+  batchId      String?
+
+  fetchedVacancyId String?     @unique // после загрузки → JobVacancy
+  fetchedVacancy   JobVacancy? @relation(fields: [fetchedVacancyId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([configId, createdAt])
+  @@map("vacancy_candidates")
+}
+
+// ── Компания и представитель (§3.7–3.9, §4.8) ──
+
+enum EmployerFactCategory {
+  REGISTRY
+  COURT
+  TAX
+  SANCTIONS
+  REVIEWS
+  DOMAIN
+  OTHER
+}
+
+// Единственная модель компании на все роли; у работодателя — досье на себя.
+model EmployerDossier {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  legalName    String? // nullable до подтверждения реестром
+  registryCode String? // ЄДРПОУ / РНОКПП ФОП
+  domain       String?
+  jurisdiction String  @default("UA") // §13.4
+  confirmedAt  DateTime?
+  lastRefreshedAt DateTime?
+
+  facts           EmployerDossierFact[]
+  representatives EmployerRepresentativeClaim[]
+  jobVacancies    JobVacancy[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Postgres считает NULL различными: до registryCode единственность по
+  // (projectId, domain) держит сервис (409).
+  @@unique([projectId, registryCode])
+  @@index([projectId, domain])
+  @@map("employer_dossiers")
+}
+
+model EmployerDossierFact {
+  id        String          @id @default(cuid())
+  dossierId String
+  dossier   EmployerDossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+
+  category  EmployerFactCategory
+  quote     String? // дословно из открытого источника, ≤ 1000; для REVIEWS — ВСЕГДА null (§3.7)
+  sourceUrl String  // хост из EMPLOYER_REGISTRY_HOSTS или ссылка пользователя
+  fetchedAt DateTime
+
+  @@index([dossierId, category])
+  @@map("employer_dossier_facts")
+}
+
+// Представитель — НЕ объект исследования (§3.9). Не Person: Person
+// однопользовательская, а команда должна видеть заявление; соискатель
+// МОЖЕТ связать заявление со своим Person (К-3, обязательства компании).
+enum RepresentationCheck {
+  CONFIRMED_PUBLIC
+  NOT_CONFIRMED
+  AS_STATED
+}
+
+model EmployerRepresentativeClaim {
+  id        String          @id @default(cuid())
+  dossierId String
+  dossier   EmployerDossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+
+  displayName   String
+  claimedRole   String?
+  contactDomain String?
+
+  personId String? @unique
+  person   Person? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  check          RepresentationCheck @default(AS_STATED)
+  checkSourceUrl String? // ТОЛЬКО хост реестра; сайт компании не загружается (§3.8)
+  checkedAt      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([dossierId])
+  @@map("employer_representative_claims")
+}
+
+// ── Работодатель ↔ агентство (Р-15 / Р-4) ──
+
+enum EngagementStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+  CLOSED
+}
+
+model EmployerAgencyEngagement {
+  id                String  @id @default(cuid())
+  employerProjectId String
+  employerProject   Project @relation(fields: [employerProjectId], references: [id], onDelete: Cascade)
+
+  agencyProjectId String? // INTERVIEW_POOL: создаётся при accept или передаётся; без FK — граница проектов
+  agencyTeamId    String?
+
+  token       String   @unique
+  sharedItems String[] // 'brief' | 'config' | 'questionnaire' | 'posting' — ровно эти четыре
+  status      EngagementStatus @default(PENDING)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([employerProjectId])
+  @@index([agencyProjectId])
+  @@map("employer_agency_engagements")
+}
+
+// ── А-2: преданкета по ссылке (§13.3 — первой очередью ТЕКСТОМ) ──
+// Кандидат до интервью отвечает на вопросы анкеты без аккаунта: два
+// отдельных согласия v1 §6.1a показываются в самой форме ДО ответа и
+// фиксируются здесь (что и когда). Ответы → TranscriptSegment разговора
+// кандидата → черновики позиций CANDIDATE. Ответы не оцениваются числом и
+// не сравниваются между кандидатами.
+model PreQuestionnaireInvite {
+  id               String                  @id @default(cuid())
+  pipelineStatusId String
+  pipelineStatus   CandidatePipelineStatus @relation(fields: [pipelineStatusId], references: [id], onDelete: Cascade)
+
+  token     String   @unique
+  expiresAt DateTime
+
+  aiNoticeAcceptedAt       DateTime? // «с ответами работает AI-ассистент»
+  transferConsentAcceptedAt DateTime? // «ответы станут частью моего профиля у этого агентства/работодателя»
+  answeredAt               DateTime?
+  conversationId           String?   // разговор, куда легли ответы (без FK — SetNull-семантика через сервис)
+
+  createdAt DateTime @default(now())
+
+  @@index([pipelineStatusId])
+  @@map("pre_questionnaire_invites")
 }

@@ -18,9 +18,12 @@
 // обязательств здесь только вручную.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { createCommitment, listCommitmentsByProject, listPeople, updateCommitment } from '../lib/features';
+import { dueMoment } from '../lib/form-input';
 import { Commitment, CommitmentOwner, ProjectPersonLink } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 interface CommitmentsSectionProps {
   projectId: string;
@@ -28,18 +31,22 @@ interface CommitmentsSectionProps {
 
 export function CommitmentsSection({ projectId }: CommitmentsSectionProps) {
   const [commitments, setCommitments] = useState<Commitment[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [people, setPeople] = useState<ProjectPersonLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
 
   const reload = useCallback(() => {
     return listCommitmentsByProject(projectId)
-      .then(setCommitments)
-      .catch(() => setCommitments([]));
+      .then((v) => { setCommitments(v); setNotLoaded(false); })
+      .catch(() => { setCommitments([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
-    void Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
+    void Promise.all([reload(), listPeople(projectId).then((v) => { setPeople(v); setNotLoaded(false); }).catch(() => { setPeople([]); setNotLoaded(true); })]).finally(() =>
       setLoading(false),
     );
   }, [reload, projectId]);
@@ -50,8 +57,8 @@ export function CommitmentsSection({ projectId }: CommitmentsSectionProps) {
       await updateCommitment(commitment.id, { status: nextStatus });
       await reload();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось изменить статус обязательства');
     }
   }
 
@@ -60,6 +67,7 @@ export function CommitmentsSection({ projectId }: CommitmentsSectionProps) {
 
   return (
     <section className="commitments-section">
+      {notLoaded && <NotLoadedNotice what="обязательства и список людей проекта" />}
       <h3>Обязательства</h3>
 
       {commitments.length === 0 && !showAddForm && (
@@ -118,7 +126,7 @@ function CommitmentRow({
           <span>{commitment.description}</span>
           {commitment.dueDate && (
             <span className="commitments-list__due">
-              До {new Date(commitment.dueDate).toLocaleDateString()}
+              До {new Date(commitment.dueDate).toLocaleDateString('ru-RU')}
               {commitment.isOverdue && ' — просрочено'}
             </span>
           )}
@@ -155,7 +163,12 @@ function AddCommitmentForm({
         personId,
         owner,
         description: description.trim(),
-        dueDate: dueDate ? new Date(dueDate).toISOString() : undefined,
+        // Пункт [date-only] 2026-09-04: было `new Date(dueDate)` — строка
+        // только с датой разбирается как полночь UTC, и западнее Гринвича
+        // человек видел предыдущий день, а «просрочено» наступало на
+        // сутки раньше. Конец МЕСТНОГО дня: и показывается тот же день, и
+        // срок истекает, когда день кончился.
+        dueDate: dueMoment(dueDate),
       });
       haptic('success');
       onDone();
@@ -198,7 +211,7 @@ function AddCommitmentForm({
         <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
       </label>
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <div className="conversations-section__add-actions">
         <button type="button" onClick={handleSubmit} disabled={saving || !description.trim()}>

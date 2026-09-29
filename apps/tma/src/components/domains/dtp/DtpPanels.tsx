@@ -7,6 +7,7 @@
 // именно сказал каждый консультант по каждому критерию. Формы ввода
 // остаются EntityForm (по манифесту) — переписывать их смысла нет.
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from '../../NotLoadedNotice';
 import { domainApi } from '../../../lib/domains/api';
 import { EntitySpec } from '../../../lib/domains/types';
 import { EntityForm } from '../EntityForm';
@@ -57,7 +58,7 @@ export function DtpAdvisors({ configId, criteria, spec }: { configId: string; cr
   return (
     <section className="dtp-section">
       <p className="dtp-hint">Юрист, оценщик, страховой агент — каждый отдельно. Приложение не ранжирует их: оно показывает, что каждый сказал по вашим критериям, чтобы расхождения были видны.</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {data && data.length === 0 && <p className="card-section__empty">Консультантов пока нет.</p>}
       {data?.map((a) => <SourceCard key={a.id} source={a} subtitle={a.advisorName} badge={a.role} criteria={criteria} spec={spec} routes={{ generate: (id) => `/dtp/consultations/${id}/generate-breakdown`, review: (id) => `/dtp/consultations/${id}/review` }} />)}
       {adding ? (
@@ -73,16 +74,30 @@ export function DtpAdvisors({ configId, criteria, spec }: { configId: string; cr
 function ParticipantCard({ p, spec, onChanged }: { p: DtpParticipant; spec: EntitySpec; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [ins, setIns] = useState<DtpParticipant['insurance']>(p.insurance ?? undefined);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой запроса ставил
+  // `null`, а `null` здесь читается как «страховки нет» — вывод о
+  // человеке, которого продукт не делал.
+  const [notLoaded, setNotLoaded] = useState(false);
   useEffect(() => {
     if (p.insurance !== undefined) return;
-    domainApi.getJson(`/dtp/participants/${p.id}/insurance`).then(setIns).catch(() => setIns(null));
+    domainApi.getJson(`/dtp/participants/${p.id}/insurance`).then((v) => { setIns(v); setNotLoaded(false); }).catch(() => { setIns(null); setNotLoaded(true); });
   }, [p.id, p.insurance]);
   const insuranceAction = spec.actions?.find((a) => a.key === 'insurance');
   return (
     <div className="dtp-card">
+      {notLoaded && <NotLoadedNotice what="сведения о страховке этого участника" consequence="«Страховки нет» ниже может быть следствием сбоя, а не записью." />}
       <div className="dtp-card__head dtp-card__head--static">
         <span><span className={`dtp-badge dtp-badge--role-${p.role.toLowerCase()}`}>{ROLE_LABEL[p.role]}</span> <strong>{p.displayName ?? 'без имени'}</strong></span>
-        {p.hasFledScene && <span className="dtp-badge dtp-badge--bad">скрылся с места</span>}
+        {/* Пункт [colour-made-a-verdict] 2026-09-24: отметка ставится
+            САМИМ ПОЛЬЗОВАТЕЛЕМ при добавлении участника — это его запись
+            о том, что произошло, а выглядела она как установленный факт
+            о названном человеке. У продукта для этого есть словарь
+            происхождения («со слов»), и он применён везде, где речь о
+            людях, — кроме этого места.
+            Цвет оставлен намеренно, в отличие от доли по кандидату:
+            здесь он отмечает юридически значимое ОБСТОЯТЕЛЬСТВО (от него
+            зависят сроки и порядок действий), а не качество человека. */}
+        {p.hasFledScene && <span className="dtp-badge dtp-badge--bad" title="Записано с ваших слов при добавлении участника">скрылся с места — с ваших слов</span>}
       </div>
       <div className="dtp-card__body">
         {ins === undefined && <p className="dtp-muted">Страховка: загрузка…</p>}
@@ -106,7 +121,7 @@ export function DtpParticipants({ configId, spec }: { configId: string; spec: En
   const hasSelf = data?.some((p) => p.role === 'SELF');
   return (
     <section className="dtp-section">
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {data && !hasSelf && <p className="dtp-hint">Добавьте себя (роль «Я») — без этого бюджет и протокол не смогут отделить ваши расходы от чужих.</p>}
       {data?.map((p) => <ParticipantCard key={p.id} p={p} spec={spec} onChanged={() => setTick((t) => t + 1)} />)}
       {adding ? (
@@ -127,7 +142,7 @@ export function DtpFault({ configId, spec }: { configId: string; spec: EntitySpe
   const official = sorted.find((d) => d.isOfficial);
   return (
     <section className="dtp-section">
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {official
         ? <p className="dtp-status dtp-status--ok">Официально: <strong>{official.statusText}</strong> · {FAULT_SOURCE_LABEL[official.source] ?? official.source}{official.referenceDocumentNumber && ` · № ${official.referenceDocumentNumber}`} · {dateOnly(official.determinedAt)}</p>
         : <p className="dtp-status dtp-status--warn">Официального определения вины пока нет — всё ниже это мнения, не решения.</p>}

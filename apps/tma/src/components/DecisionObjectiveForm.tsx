@@ -11,6 +11,8 @@
 
 import { useEffect, useState } from 'react';
 import { getObjective, saveObjective } from '../lib/features';
+import { toDateInputValue } from '../lib/date-only';
+import { dueMoment } from '../lib/form-input';
 
 interface DecisionObjectiveFormProps {
   projectId: string;
@@ -52,7 +54,7 @@ export function DecisionObjectiveForm({ projectId, onSaved }: DecisionObjectiveF
         setIdealOutcome(obj.idealOutcome ?? '');
         setMinimumAcceptableOutcome(obj.minimumAcceptableOutcome ?? '');
         setUnacceptableOutcome(obj.unacceptableOutcome ?? '');
-        setDeadline(obj.deadline ? obj.deadline.split('T')[0] : '');
+        setDeadline(toDateInputValue(obj.deadline));
         setConstraints(listToLines(obj.constraints));
         setNonNegotiables(listToLines(obj.nonNegotiables));
         setNegotiables(listToLines(obj.negotiables));
@@ -75,7 +77,11 @@ export function DecisionObjectiveForm({ projectId, onSaved }: DecisionObjectiveF
         idealOutcome: idealOutcome || undefined,
         minimumAcceptableOutcome: minimumAcceptableOutcome || undefined,
         unacceptableOutcome: unacceptableOutcome || undefined,
-        deadline: deadline || undefined,
+        // Пункт [date-only] 2026-09-04: раньше сюда уходила голая строка
+        // `2026-09-10`, и полночь UTC делал уже СЕРВЕР — тот же сдвиг
+        // дня, только этажом ниже. Часовой пояс знает только браузер,
+        // значит и момент собирать здесь.
+        deadline: dueMoment(deadline),
         constraints: linesToList(constraints),
         nonNegotiables: linesToList(nonNegotiables),
         negotiables: linesToList(negotiables),
@@ -146,7 +152,7 @@ export function DecisionObjectiveForm({ projectId, onSaved }: DecisionObjectiveF
         <textarea rows={2} value={doNotSay} onChange={(e) => setDoNotSay(e.target.value)} />
       </label>
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <button type="button" onClick={handleSave} disabled={saving}>
         {saving ? 'Сохраняем…' : 'Сохранить цель'}

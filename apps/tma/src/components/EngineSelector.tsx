@@ -12,17 +12,28 @@ interface EngineSelectorProps {
 export function EngineSelector({ value, onChange }: EngineSelectorProps) {
   const [engines, setEngines] = useState<AvailableEngine[]>([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     listEngines()
-      .then(setEngines)
-      .catch(() => setEngines([]))
+      .then((list) => { setEngines(list); setFailed(false); })
+      // Аудит 2026-09-03: сбой прятал сам выбор движка — пользователь
+      // молча уезжал на модель по умолчанию, считая, что выбора нет.
+      // Это ровно «конфигурационный пробел выглядит как отсутствие
+      // функции», от которого продукт отказывается в других местах.
+      .catch(() => { setEngines([]); setFailed(true); })
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading || engines.length === 0) {
-    return null;
+  if (loading) return null;
+  if (failed) {
+    return (
+      <p className="conversations-section__hint">
+        Список моделей не загрузился — запрос уйдёт на модель по умолчанию. Это сбой связи, а не «выбора нет».
+      </p>
+    );
   }
+  if (engines.length === 0) return null;
 
   return (
     <label className="engine-selector">

@@ -20,6 +20,10 @@ function makeDeps() {
   const jobs = new Map<string, any>();
   let idCounter = 0;
   const rawQueries: string[] = [];
+  // Пункт [freeze-stopped-only-the-hands] 2026-09-25: состояние заморозки
+  // держим отдельной коробкой, чтобы тест менял его после постановки
+  // задачи — как это и бывает вживую.
+  const freeze: { at: Date | null } = { at: null };
 
   const prisma = {
     _jobs: jobs,
@@ -64,6 +68,14 @@ function makeDeps() {
       }),
       findMany: jest.fn(async (): Promise<any[]> => []),
     },
+    // Пункт [freeze-stopped-only-the-hands] 2026-09-25: роутер перед
+    // отправкой спрашивает, не заморожен ли проект. Заглушка отвечает
+    // из переменной, чтобы тест мог заморозить проект «между»
+    // постановкой и отправкой — ровно как это бывает вживую.
+    _freeze: freeze,
+    project: {
+      findUnique: jest.fn(async () => ({ frozenAt: freeze.at })),
+    },
     aIInference: {
       create: jest.fn(async ({ data }: any) => ({ id: `inf-${++idCounter}`, ...data })),
     },
@@ -93,6 +105,12 @@ function makeDeps() {
   const consent = {
     requireConsent: jest.fn(async () => undefined),
     assertAudioMayLeaveDevice: jest.fn(async () => undefined),
+    // Пункт [revoked-then-sent] 2026-09-06: заглушка была беднее
+    // production — метода не было вовсе, потому что до этой правки
+    // воркер согласие не спрашивал. Теперь спрашивает, и заглушка
+    // обязана знать ту же форму: «согласие активно» по умолчанию,
+    // тесты про отзыв переопределяют.
+    hasActiveConsent: jest.fn(async () => true),
   };
   const contentScan = {
     scan: jest.fn(async ({ text }: any) => ({ blocked: false, sanitizedText: text, resultId: `scan-${++idCounter}`, detectionsCount: 0 })),
@@ -305,7 +323,13 @@ describe('AIRouterService — воркер', () => {
     expect(res.failed).toBe(1);
     const job = deps.prisma._jobs.get(jobId);
     expect(job.status).toBe('FAILED');
-    expect(job.partialResult).toContain('budget_exceeded');
+    // Пункт [failure-spoke-to-the-operator] 2026-09-25: `partialResult`
+    // читает ЭКРАН ЧЕЛОВЕКА (paralinguisticsError, autoAnalysisError,
+    // matchNotes), поэтому туда уходит человеческий текст, а машинная
+    // подробность — в лог. Утверждение теста не ослаблено: закрываемся
+    // так же сразу и так же не молча.
+    expect(job.partialResult).toContain('суточный лимит');
+    expect(job.partialResult).not.toContain('budget_exceeded');
     // Ретрая нет: новая постановка упёрлась бы в тот же лимит (§9.3).
     expect(job.retryCount).toBe(0);
   });
@@ -366,7 +390,13 @@ describe('AIRouterService — воркер', () => {
     expect(res.waiting).toBe(0);
     const job = deps.prisma._jobs.get(jobId);
     expect(job.status).toBe('FAILED');
-    expect(job.partialResult).toContain('Invalid interaction id');
+    // Пункт [failure-spoke-to-the-operator] 2026-09-25: `partialResult`
+    // читает ЭКРАН ЧЕЛОВЕКА (paralinguisticsError, autoAnalysisError,
+    // matchNotes), поэтому туда уходит человеческий текст, а машинная
+    // подробность — в лог. Утверждение теста не ослаблено: закрываемся
+    // так же сразу и так же не молча.
+    expect(job.partialResult).toContain('Поставщик модели отклонил');
+    expect(job.partialResult).not.toContain('Invalid interaction id');
     expect(job.retryCount).toBe(0);
     expect((outcomes[0] as { kind: string }).kind).toBe('failed');
   });
@@ -397,7 +427,15 @@ describe('AIRouterService — воркер', () => {
     expect(res.waiting).toBe(0);
     const job = deps.prisma._jobs.get(jobId);
     expect(job.status).toBe('FAILED');
-    expect(job.partialResult).toContain('mystery');
+    // Пункт [failure-spoke-to-the-operator] 2026-09-25: `partialResult`
+    // читает ЭКРАН ЧЕЛОВЕКА (paralinguisticsError, autoAnalysisError,
+    // matchNotes), поэтому туда уходит человеческий текст, а машинная
+    // подробность — в лог. Утверждение теста не ослаблено: закрываемся
+    // так же сразу и так же не молча.
+    // `completed` без читаемого текста роутер закрывает как отказ
+    // провайдера — вид провала тот же, что у отвергнутого запроса.
+    expect(job.partialResult).toContain('Поставщик модели отклонил');
+    expect(job.partialResult).not.toContain('mystery');
   });
 
   it('503 на опросе → waiting, статус остаётся RUNNING, но причина ЗАПИСАНА в partialResult', async () => {
@@ -452,7 +490,182 @@ describe('AIRouterService — воркер', () => {
     // тот же 400 и сжёг бы попытки без новой информации.
     expect(job.status).toBe('FAILED');
     expect(job.retryCount).toBe(0);
-    expect(job.partialResult).toContain('system_instruction');
+    // Пункт [failure-spoke-to-the-operator] 2026-09-25: `partialResult`
+    // читает ЭКРАН ЧЕЛОВЕКА (paralinguisticsError, autoAnalysisError,
+    // matchNotes), поэтому туда уходит человеческий текст, а машинная
+    // подробность — в лог. Утверждение теста не ослаблено: закрываемся
+    // так же сразу и так же не молча.
+    expect(job.partialResult).toContain('Поставщик модели отклонил');
+    expect(job.partialResult).not.toContain('system_instruction');
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [failure-spoke-to-the-operator]: подробность для оператора уходит в ЛОГ, а не к человеку', async () => {
+    // Половина решения — не показать человеку внутренности. Вторая —
+    // не потерять их: без подробности провал перестаёт быть
+    // диагностируемым, и это такой же дефект, только с другой стороны.
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const logged: string[] = [];
+    (router as unknown as { logger: { warn: (m: string) => void } }).logger = {
+      warn: (m: string) => logged.push(m),
+      log: () => undefined,
+      error: () => undefined,
+    } as never;
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+      maxRetries: 1,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: false, status: 400, statusText: 'Bad Request',
+      json: async () => ({}),
+      text: async () => '{"error":{"message":"Unknown name \\"system_instruction\\""}}',
+    } as unknown as Response);
+
+    await router.submitQueued(3);
+    jest.restoreAllMocks();
+
+    const job = deps.prisma._jobs.get(jobId);
+    expect(job.partialResult).not.toContain('system_instruction');
+    // Именно запись ДВУХАДРЕСНОГО провала: она одна содержит вид
+    // провала рядом с подробностью. Без этой точности проверка
+    // удовлетворяется соседним логом «failed to submit», который писался
+    // и до этого пункта, — и тогда она проверяет не то, что утверждает.
+    const twoAudience = logged.filter((m) => m.includes('провалена: provider-rejected:'));
+    expect(twoAudience).toHaveLength(1);
+    expect(twoAudience[0]).toContain('system_instruction');
+    expect(twoAudience[0]).toContain(jobId);
+  });
+
+  // ── Пункт [freeze-stopped-only-the-hands] 2026-09-25 ──
+  //
+  // Заморозка обещает человеку «изменения недоступны», а держалась
+  // только на HTTP-слое: фоновая отправка задач про неё не знала и
+  // тратила деньги на проект, который оператор уже остановил.
+  it('КЛЮЧЕВОЙ ТЕСТ [freeze-stopped-only-the-hands]: проект заморожен после постановки — провайдеру НЕ отправляем', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      projectId: 'project-1',
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+      maxRetries: 3,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    // Заморозка произошла между постановкой и выборкой воркером.
+    deps.prisma._freeze.at = new Date('2026-09-25T10:00:00Z');
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    const res = await router.submitQueued(3);
+    const calls = fetchSpy.mock.calls.length;
+    jest.restoreAllMocks();
+
+    expect(calls).toBe(0);
+    expect(res.submitted).toBe(0);
+    expect(res.failed).toBe(1);
+
+    const job = deps.prisma._jobs.get(jobId);
+    // Окончательно, не рекью: заморозка не снимется от повторной
+    // попытки, и воркер не должен возвращаться к задаче до исчерпания
+    // попыток — тот же вывод, что у отозванного согласия рядом.
+    expect(job.status).toBe('FAILED');
+    expect(job.retryCount).toBe(0);
+    // Человеку — причина словами, а не пустое «не получилось».
+    expect(job.partialResult).toContain('проект заморожен оператором');
+  });
+
+  it('ОБРАТНАЯ ПРОБА: незамороженный проект отправляется как раньше', async () => {
+    // Без неё тест выше проходил бы и в мире, где отправка сломана
+    // вообще: «ничего не ушло» тогда означало бы не заморозку.
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      projectId: 'project-1',
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+      maxRetries: 3,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    deps.prisma._freeze.at = null;
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true, status: 200, statusText: 'OK',
+      json: async () => ({ id: 'int-1', status: 'in_progress' }),
+      text: async () => JSON.stringify({ id: 'int-1', status: 'in_progress' }),
+    } as unknown as Response);
+    const res = await router.submitQueued(3);
+    jest.restoreAllMocks();
+    expect(res.submitted).toBe(1);
+    expect(res.failed).toBe(0);
+  });
+
+  // ── Пункт [revoked-then-sent] 2026-09-06 ──
+  //
+  // Согласие проверялось один раз, при постановке в очередь. Отправка
+  // провайдеру происходит позже — lease очереди пятнадцать минут, и
+  // каждая неудачная попытка возвращает задачу в очередь заново. Всё
+  // это время человек мог нажать «отозвать», а экран отзыва обещает
+  // ему БЕЗУСЛОВНО: «новых запросов от вашего имени больше не будет».
+  it('КЛЮЧЕВОЙ ТЕСТ [revoked-then-sent]: согласие отозвано после постановки — провайдеру НЕ отправляем', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'media-public-review',
+      userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'v' } }],
+      maxRetries: 3,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    // Отзыв произошёл между постановкой и выборкой воркером.
+    deps.consent.hasActiveConsent = jest.fn(async () => false);
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    const res = await router.submitQueued(3);
+    const calls = fetchSpy.mock.calls.length;
+    jest.restoreAllMocks();
+
+    // Главное утверждение пункта: к провайдеру не ушло НИЧЕГО.
+    expect(calls).toBe(0);
+    expect(res.submitted).toBe(0);
+    expect(res.failed).toBe(1);
+
+    const job = deps.prisma._jobs.get(jobId);
+    // Окончательно, не рекью: отозванное согласие не станет активным от
+    // повторной попытки, а воркер иначе возвращался бы к задаче до
+    // исчерпания попыток.
+    expect(job.status).toBe('FAILED');
+    expect(job.retryCount).toBe(0);
+    expect(job.partialResult).toContain('согласие на внешний AI отозвано');
+  });
+
+  it('[revoked-then-sent]: отозвано разрешение на аудио — запрос с аудио тоже не уходит', async () => {
+    const deps = makeDeps();
+    const router = makeRouter(deps);
+    const { jobId } = await router.enqueue({
+      userId: USER,
+      taskType: 'paralinguistics',
+      userPrompt: [{ type: 'media', ref: { source: 'blob', pathname: 'audio/x.m4a', mimeType: 'audio/mp4' } }],
+      maxRetries: 3,
+    });
+    deps.prisma.$queryRaw = jest.fn(async (_s: TemplateStringsArray): Promise<Array<{ id: string }>> => [{ id: jobId }]);
+    // Общее согласие на AI на месте — отозвано именно разрешение на
+    // выход аудио наружу. Одно не эквивалентно другому, и проверять
+    // нужно оба.
+    deps.consent.assertAudioMayLeaveDevice = jest.fn(async () => {
+      throw new ForbiddenException('запись разговоров запрещена настройками приватности');
+    });
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    const res = await router.submitQueued(3);
+    const calls = fetchSpy.mock.calls.length;
+    jest.restoreAllMocks();
+
+    expect(calls).toBe(0);
+    expect(res.failed).toBe(1);
+    expect(deps.prisma._jobs.get(jobId).partialResult).toContain('аудио');
   });
 
   it('503 на постановке → рекью новой постановкой, причина записана в partialResult', async () => {
@@ -494,8 +707,19 @@ describe('AIRouterService — воркер', () => {
     const res = await router.reapExpired();
 
     expect(res.reaped).toBe(2);
-    expect(deps.prisma._jobs.get('q1').partialResult).toContain('воркер');
-    expect(deps.prisma._jobs.get('r1').partialResult).toContain('потолок ожидания');
+    // Пункт [failure-spoke-to-the-operator] 2026-09-25: различать два
+    // случая по-прежнему обязательно — но человеку они объясняются его
+    // словами («не начался» / «не завершился за отведённое время»), а
+    // «воркер» и «lease» уходят в лог. Проверяется именно РАЗЛИЧИЕ, а
+    // не наличие внутренних слов.
+    const queuedText = deps.prisma._jobs.get('q1').partialResult as string;
+    const runningText = deps.prisma._jobs.get('r1').partialResult as string;
+    expect(queuedText).toContain('не начался');
+    expect(runningText).toContain('не завершился за отведённое время');
+    expect(queuedText).not.toBe(runningText);
+    for (const text of [queuedText, runningText]) {
+      expect(text).not.toMatch(/lease|pg_cron|EXTERNAL_INTERACTION/i);
+    }
   });
 });
 

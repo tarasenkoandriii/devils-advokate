@@ -17,12 +17,17 @@ function matchesCondition(record: any, cond: any): boolean {
   return defined.every(([key, value]) => record[key] === value);
 }
 
-function createFakePrisma() {
+function createFakePrisma(privacyProcessingMode: string = 'BALANCED') {
   const records: any[] = [];
   let idCounter = 0;
 
   return {
     _records: records,
+    // Аудит согласий 2026-09-03: режим приватности — не согласие, и
+    // проверяется по пользователю, поэтому мок обязан его знать.
+    user: {
+      findUniqueOrThrow: async ({ where }: any) => ({ id: where.id, privacyProcessingMode }),
+    },
     consentRecord: {
       findFirst: async ({ where }: any) => {
         const matches = records.filter((r) => {
@@ -146,6 +151,47 @@ describe('ConsentService', () => {
 
     expect(await service.hasActiveConsent('u1', 'LOCATION' as any, 'p1')).toBe(false);
     expect(await service.hasActiveConsent('u1', 'LOCATION' as any, 'p2')).toBe(false);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (аудит 2026-09-03): MAXIMUM_PRIVACY запрещает живую расшифровку даже при выданном согласии', async () => {
+    // Живая расшифровка стримит звук провайдеру напрямую из браузера и
+    // потому не проходила через общую проверку выпуска аудио — вместе с
+    // ней терялся режим приватности, который согласием не обходится.
+    const prisma = createFakePrisma('MAXIMUM_PRIVACY');
+    const service = new ConsentService(prisma as any);
+    await service.grant({ userId: 'u1', consentType: 'THIRD_PARTY_AUDIO_RECORDING' as any, version: 'v1', source: 'onboarding' });
+
+    expect(await service.hasActiveConsent('u1', 'THIRD_PARTY_AUDIO_RECORDING' as any)).toBe(true);
+    await expect(service.assertRealtimeAudioAllowed('u1')).rejects.toThrow(/MAXIMUM_PRIVACY/);
+  });
+
+  it('в обычном режиме живая расшифровка требует именно THIRD_PARTY_AUDIO_RECORDING и ничего сверх него', async () => {
+    const prisma = createFakePrisma('BALANCED');
+    const service = new ConsentService(prisma as any);
+
+    // Пункт [consent-revocation] 2026-09-04, попутная находка. Здесь
+    // стояло `.rejects.toThrow(/THIRD_PARTY_AUDIO_RECORDING/)` — проверка
+    // ТЕКСТА исключения на присутствие идентификатора. Проект от этого
+    // сознательно ушёл: `requireConsent()` бросает фразу на языке
+    // человека, а машинную часть кладёт в детали (`code`, `consentType`)
+    // — ровно затем, чтобы текст перестал быть негласным контрактом (см.
+    // подробный разбор в самом requireConsent). Тест продолжал требовать
+    // прежний контракт после того, как тот был убран, и пройти уже не
+    // мог: `message` у ForbiddenException с объектом — это русская фраза,
+    // идентификатора в ней нет.
+    //
+    // Проверяется теперь то, что контрактом и является: устойчивый код и
+    // тип согласия в деталях. Текст намеренно НЕ проверяется — иначе он
+    // снова станет тем, что нельзя переписать.
+    await expect(service.assertRealtimeAudioAllowed('u1')).rejects.toMatchObject({
+      response: { code: 'CONSENT_REQUIRED', consentType: 'THIRD_PARTY_AUDIO_RECORDING' },
+    });
+
+    // Ни EPHEMERAL_SERVER (на нашем сервере файла нет), ни RECORDING (тем
+    // же токеном пользуется голосовой ввод квиза) здесь не требуются — и
+    // это проверяется буквально: одного согласия достаточно.
+    await service.grant({ userId: 'u1', consentType: 'THIRD_PARTY_AUDIO_RECORDING' as any, version: 'v1', source: 'onboarding' });
+    await expect(service.assertRealtimeAudioAllowed('u1')).resolves.toBeUndefined();
   });
 
   it('согласие для одного пользователя не действует для другого', async () => {

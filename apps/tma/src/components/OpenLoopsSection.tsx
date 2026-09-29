@@ -10,7 +10,9 @@
 
 import { useEffect, useState } from 'react';
 import { getOpenLoopsSummary } from '../lib/features';
+import { activatable } from '../lib/a11y';
 import { OpenLoopsSummary } from '../lib/types';
+import { SectionLoadError } from './SectionLoadError';
 
 interface OpenLoopsSectionProps {
   projectId: string;
@@ -20,15 +22,21 @@ export function OpenLoopsSection({ projectId }: OpenLoopsSectionProps) {
   const [summary, setSummary] = useState<OpenLoopsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  // Аудит 2026-09-03: сбой загрузки давал ту же картину, что «открытых
+  // вопросов нет» — секция просто исчезала. Здесь это особенно неверно:
+  // человек идёт на разговор, считая, что закрыл всё.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     getOpenLoopsSummary(projectId)
-      .then(setSummary)
-      .catch(() => setSummary(null))
+      .then((s) => { setSummary(s); setFailed(false); })
+      .catch(() => { setSummary(null); setFailed(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  if (loading || !summary) return null;
+  if (loading) return null;
+  if (failed) return <SectionLoadError what="сводку открытых вопросов" hint="открытых вопросов не осталось" />;
+  if (!summary) return null;
 
   const total =
     summary.unansweredQuestionsCount +
@@ -40,7 +48,13 @@ export function OpenLoopsSection({ projectId }: OpenLoopsSectionProps) {
 
   return (
     <section className="open-loops-section">
-      <div className="open-loops-section__summary" onClick={() => setExpanded((v) => !v)}>
+      {/* Пункт [announce-failures] 2026-09-04: было `onClick` на голом
+          div — мышью раскрывается, с клавиатуры недостижимо. */}
+      <div
+        className="open-loops-section__summary"
+        aria-expanded={expanded}
+        {...activatable(() => setExpanded((v) => !v))}
+      >
         {summary.unansweredQuestionsCount > 0 && (
           <span>{summary.unansweredQuestionsCount} неотвеченных вопроса</span>
         )}

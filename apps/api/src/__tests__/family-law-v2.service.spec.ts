@@ -261,7 +261,37 @@ describe('FamilyLawV2Service', () => {
 
     const draft = await service.getSettlementProtocolDraft('u1', config.id);
 
-    expect(draft.text).toContain('фінансові дані обох сторін');
+    expect(draft.text).toContain('финансовые данные обеих сторон');
+  });
+
+  // Пункт [draft-spoke-machine] 2026-09-24 — та же проверка, что в ДТП.
+  it('getSettlementProtocolDraft не подставляет машинные константы ролей сторон', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id });
+    prisma._seedParty({ configId: config.id, role: 'SPOUSE', displayName: 'Мария Л.' });
+    const service = makeService(prisma);
+
+    const draft = await service.getSettlementProtocolDraft('u1', config.id);
+
+    expect(draft.text).not.toMatch(/SPOUSE|\bSELF\b/);
+    expect(draft.text).toContain('супруг(а) (Мария Л.)');
+  });
+
+  // `assetType` — свободный текст самого человека, а не перечисление:
+  // он обязан попасть в документ ДОСЛОВНО, без «перевода» словарём.
+  it('getSettlementProtocolDraft переносит название актива дословно, как его ввёл человек', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id });
+    await prisma.familyLawAsset.create({
+      data: { configId: config.id, assetType: 'дача в Пуще-Водице', estimatedValue: null, currency: null },
+    });
+    const service = makeService(prisma);
+
+    const draft = await service.getSettlementProtocolDraft('u1', config.id);
+
+    expect(draft.text).toContain('дача в Пуще-Водице');
   });
 
   it('acceptance-тест: crossConsultationCheck делегує в СПІЛЬНИЙ CriteriaComparisonService (той самий, що DTP)', async () => {

@@ -34,7 +34,7 @@ export default function ProjectsPage() {
       )}
 
       {loading && <p>Загрузка…</p>}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       {!loading && !error && items.length === 0 && <p>Пока нет ни одного проекта.</p>}
 

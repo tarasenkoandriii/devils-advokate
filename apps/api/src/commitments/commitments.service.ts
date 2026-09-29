@@ -13,22 +13,26 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsEnum, IsISO8601, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { CommitmentOwner, CommitmentStatus } from '@prisma/client';
 
-export interface CreateCommitmentInput {
-  personId: string;
-  owner: CommitmentOwner;
-  description: string;
-  dueDate?: string;
-  extractedFromConversationId?: string;
-  extractedFromSegmentId?: string;
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class CreateCommitmentInput {
+  @IsString() @MinLength(1) @MaxLength(100) personId!: string;
+  @IsEnum(CommitmentOwner) owner!: CommitmentOwner;
+  @IsString() @MinLength(1) @MaxLength(1000) description!: string;
+  @IsOptional() @IsISO8601() dueDate?: string;
+  @IsOptional() @IsString() @MaxLength(100) extractedFromConversationId?: string;
+  @IsOptional() @IsString() @MaxLength(100) extractedFromSegmentId?: string;
 }
 
-export interface UpdateCommitmentInput {
-  description?: string;
-  dueDate?: string | null;
-  status?: CommitmentStatus;
+export class UpdateCommitmentInput {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(1000) description?: string;
+  @IsOptional() @IsISO8601() dueDate?: string | null;
+  @IsOptional() @IsEnum(CommitmentStatus) status?: CommitmentStatus;
 }
 
 @Injectable()

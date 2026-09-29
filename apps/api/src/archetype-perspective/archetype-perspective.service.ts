@@ -35,6 +35,13 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArchetypeType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
+import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
+
+/** Пункт [partial-basis] 2026-09-04 — лимиты были законны, молчание о
+ * них нет. */
+const TOP_ARGUMENTS_LIMIT = 5;
+const PRECEDENTS_LIMIT = 5;
 
 const TASK_TYPE = 'archetype-perspective';
 
@@ -110,13 +117,17 @@ export class ArchetypePerspectiveService {
     // прицельно показать слабости именно ЕГО аргументации.
     // project-level (targetPersonId=null) — тот же фильтр, что уже
     // применялся в OutcomeForecastingService/DecisionOutcomeService.
-    const topArguments = await this.prisma.argument.findMany({
-      where: focusOnOwnPositionWeaknesses
-        ? { projectId, targetPersonId: null, stance: 'PRO' }
-        : { projectId },
-      orderBy: { weight: 'desc' },
-      take: 5,
-    });
+    // Пункт [partial-basis] 2026-09-04: тот же срез, что и у
+    // прецедентов, — «ключевые аргументы» это пять самых весомых, а не
+    // все. Счёт по тому же условию, иначе доля будет о другом множестве.
+    const argumentsWhere = focusOnOwnPositionWeaknesses
+      ? { projectId, targetPersonId: null, stance: 'PRO' as const }
+      : { projectId };
+    const [topArguments, argumentsTotal] = await Promise.all([
+      this.prisma.argument.findMany({ where: argumentsWhere, orderBy: [{ weight: 'desc' }, { id: 'desc' }], take: TOP_ARGUMENTS_LIMIT }),
+      this.prisma.argument.count({ where: argumentsWhere }),
+    ]);
+    const argumentsBasis = partialBasis('аргументы', topArguments.length, argumentsTotal, 'weight');
     const argumentsSummary =
       topArguments.length > 0
         ? topArguments.map((a: { text: string; stance: string }) => `(${a.stance}) ${a.text}`).join('\n')
@@ -127,13 +138,17 @@ export class ArchetypePerspectiveService {
     const perspectiveContext =
       archetypeType === 'REAL_PERSON'
         ? await this.buildRealPersonContext(userId, projectId, targetPersonId as string)
-        : { label: archetypeType === 'CUSTOM' ? (customArchetypeDescription as string) : ARCHETYPE_DESCRIPTIONS[archetypeType], extra: '' };
+        : {
+            label: archetypeType === 'CUSTOM' ? (customArchetypeDescription as string) : ARCHETYPE_DESCRIPTIONS[archetypeType],
+            extra: '',
+            bases: [] as PartialBasis[],
+          };
 
     const userPrompt = focusOnOwnPositionWeaknesses
       ? [
           `Ситуация: ${project.question}`,
           project.goal ? `Цель пользователя: ${project.goal}` : '',
-          `Аргументы, которые пользователь построил В СВОЮ ПОЛЬЗУ:\n${argumentsSummary}`,
+          `Аргументы, которые пользователь построил В СВОЮ ПОЛЬЗУ${promptBasisNote(argumentsBasis)}:\n${argumentsSummary}`,
           perspectiveContext.extra,
           `С точки зрения: ${perspectiveContext.label} — найди СЛАБЫЕ МЕСТА в этой аргументации пользователя так, как их увидел бы именно этот человек/наблюдатель, не сам пользователь. Типичная слепая зона — пользователь переоценивает силу своих аргументов, покажи, где это происходит.`,
           'Ответь СТРОГО валидным JSON-объектом вида {"reaction": string}. Без пояснений вне JSON.',
@@ -143,7 +158,7 @@ export class ArchetypePerspectiveService {
       : [
           `Ситуация: ${project.question}`,
           project.goal ? `Цель пользователя: ${project.goal}` : '',
-          `Ключевые аргументы, уже собранные пользователем:\n${argumentsSummary}`,
+          `Ключевые аргументы, уже собранные пользователем${promptBasisNote(argumentsBasis)}:\n${argumentsSummary}`,
           perspectiveContext.extra,
           `Дай короткую реакцию/вопрос/предупреждение на эту ситуацию с точки зрения: ${perspectiveContext.label}. Это не "правильный ответ", а расширение слепых зон пользователя — покажи, на что обратил бы внимание именно этот человек/наблюдатель.`,
           'Ответь СТРОГО валидным JSON-объектом вида {"reaction": string}. Без пояснений вне JSON.',
@@ -189,7 +204,7 @@ export class ArchetypePerspectiveService {
 
     const raw: RawArchetypeReaction = JSON.parse(result.text);
 
-    return this.prisma.archetypePerspective.create({
+    const created = await this.prisma.archetypePerspective.create({
       data: {
         projectId,
         archetypeType,
@@ -200,6 +215,13 @@ export class ArchetypePerspectiveService {
         generatedByInferenceId: result.aiInferenceId,
       },
     });
+
+    // Пункт [partial-basis] 2026-09-04: основание сообщается вместе со
+    // СВЕЖИМ ответом. В базе его нет — колонки под него не существует, и
+    // заводить ручную миграцию ради подписи под текстом не стали; в
+    // списке сохранённых разборов этого поля не будет, и экран говорит
+    // об этом прямо, а не делает вид, что помнит.
+    return { ...created, basisNote: humanBasisNote([argumentsBasis, ...perspectiveContext.bases]) };
   }
 
   /** Пункт 46 — собирает контекст для REAL_PERSON из уже существующих
@@ -212,33 +234,45 @@ export class ArchetypePerspectiveService {
       throw new NotFoundException(`Person ${personId} not found in project ${projectId}`);
     }
 
-    const [traits, relationships, precedents] = await Promise.all([
+    const [traits, relationships, precedents, precedentsTotal] = await Promise.all([
       this.prisma.personCommunicationTrait.findMany({ where: { personId } }),
       this.prisma.relationship.findMany({ where: { OR: [{ personAId: personId }, { personBId: personId }] } }),
-      this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: 5, orderBy: { createdAt: 'desc' } }),
+      this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: PRECEDENTS_LIMIT, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }),
+      this.prisma.behaviorPrecedent.count({ where: { personId } }),
     ]);
+    const precedentsBasis = partialBasis('прецеденты поведения', precedents.length, precedentsTotal, 'recent');
 
-    const traitsText = traits
-      .map((t: { traitType: string; value: string }) => `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`)
-      .join('; ');
+    // Пункт [inference-as-observation] 2026-09-05: черты профиля и
+    // прецеденты созданы моделью по расшифровкам — раньше уходили как
+    // наблюдение. Связи оставлены как есть: их вводит человек руками.
+    const traitsText = derivedList(
+      traits.map((t: { traitType: string; value: string; observedFrom: string | null }) => ({
+        text: `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`,
+        source: t.observedFrom,
+      })),
+    );
     const relationshipsText = relationships
       .map((r: { label: string }) => r.label)
       .join('; ');
-    const precedentsText = precedents
-      .map((p: { precedentDescription: string }) => p.precedentDescription)
-      .join('; ');
+    const precedentsText = derivedList(
+      precedents.map((p: { precedentDescription: string; sourceDescription: string | null }) => ({
+        text: p.precedentDescription,
+        source: p.sourceDescription,
+      })),
+    );
 
     const parts = [`реального человека по имени ${link.person.displayName ?? 'без имени'}`];
     const extraLines = [
-      traitsText ? `Наблюдаемый коммуникационный профиль этого человека: ${traitsText}.` : '',
+      traitsText ? `Коммуникационный профиль этого человека, собранный разбором расшифровок: ${traitsText}.` : '',
       relationshipsText ? `Известные связи этого человека: ${relationshipsText}.` : '',
-      precedentsText ? `Известные прецеденты поведения: ${precedentsText}.` : '',
+      precedentsText ? `Прецеденты поведения, найденные разбором расшифровок${promptBasisNote(precedentsBasis)}: ${precedentsText}.` : '',
       !traitsText && !relationshipsText && !precedentsText
         ? 'О нём известно немного — не выдумывай подробностей, дай более общую, осторожную реакцию.'
         : '',
+      hasDerived(traits, precedents) ? DERIVED_CONTEXT_INSTRUCTION : '',
     ].filter(Boolean);
 
-    return { label: parts[0], extra: extraLines.join('\n') };
+    return { label: parts[0], extra: extraLines.join('\n'), bases: [precedentsBasis] };
   }
 
   async list(userId: string, projectId: string) {

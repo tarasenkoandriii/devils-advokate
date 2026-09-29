@@ -19,6 +19,10 @@ node_modules/
 **/.next/
 out/
 **/out/
+# Создаётся самим `next dev` при первом запуске (в том числе внутри
+# докер-контейнера, поверх примонтированной папки) — артефакт, не исходник.
+next-env.d.ts
+**/next-env.d.ts
 
 # NestJS / TypeScript
 dist/
@@ -45,3 +49,7 @@ yarn-error.log*
 
 # Тестовое покрытие
 coverage/
+
+# Docker dev-стенд (DOCKER.md): реальные значения — локальные, шаблон
+# .env.docker.example коммитится.
+.env.docker

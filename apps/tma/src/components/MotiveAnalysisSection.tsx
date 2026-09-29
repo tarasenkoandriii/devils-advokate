@@ -8,9 +8,14 @@
 // мотив" как факт.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { analyzeMotives, confirmSuggestedStatus, listMotiveHypotheses } from '../lib/features';
+import { AnalysisBasisNote } from './AnalysisBasisNote';
+import { levelWording } from '../lib/confidence';
 import { MotiveHypothesis, PersonStatus } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
+import { PersonResearchConsent, consentOrError } from './PersonResearchConsent';
 
 interface MotiveAnalysisSectionProps {
   projectId: string;
@@ -27,16 +32,23 @@ interface MotiveAnalysisSectionProps {
 
 export function MotiveAnalysisSection({ projectId, personId, currentStatus, onStatusConfirmed }: MotiveAnalysisSectionProps) {
   const [hypotheses, setHypotheses] = useState<MotiveHypothesis[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [consentNeeded, setConsentNeeded] = useState(false);
+  // Пункт [partial-basis] 2026-09-04: на чём построен ЭТОТ разбор.
+  const [basisNote, setBasisNote] = useState<string | null>(null);
 
   useEffect(() => {
     listMotiveHypotheses(projectId, personId)
-      .then(setHypotheses)
-      .catch(() => setHypotheses([]))
+      .then((v) => { setHypotheses(v); setNotLoaded(false); })
+      .catch(() => { setHypotheses([]); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId, personId]);
 
@@ -44,12 +56,18 @@ export function MotiveAnalysisSection({ projectId, personId, currentStatus, onSt
     setAnalyzing(true);
     setError(null);
     try {
-      const created = await analyzeMotives(projectId, personId);
+      const { hypotheses: created, basisNote: basis } = await analyzeMotives(projectId, personId);
       setHypotheses((prev) => [...created, ...prev]);
+      setBasisNote(basis);
       haptic('success');
     } catch (err) {
       haptic('error');
-      setError(err instanceof Error ? err.message : 'Не удалось построить гипотезы о мотивах');
+      // Пункт [consent-that-could-not-be-given] 2026-09-24: разбор
+      // мотивов — предмет которого человек, а не вопрос пользователя, —
+      // требует отдельного согласия, и спросить его надо здесь же.
+      const outcome = consentOrError(err, 'Не удалось построить гипотезы о мотивах');
+      if ('consentNeeded' in outcome) setConsentNeeded(true);
+      else setError(outcome.message);
     } finally {
       setAnalyzing(false);
     }
@@ -61,8 +79,8 @@ export function MotiveAnalysisSection({ projectId, personId, currentStatus, onSt
       await confirmSuggestedStatus(projectId, personId);
       onStatusConfirmed();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось подтвердить статус');
     } finally {
       setConfirming(false);
     }
@@ -74,6 +92,7 @@ export function MotiveAnalysisSection({ projectId, personId, currentStatus, onSt
 
   return (
     <section className="motive-analysis-section">
+      {notLoaded && <NotLoadedNotice what="гипотезы о мотивах" />}
       <h3>Возможные мотивы</h3>
       <p className="conversations-section__hint">
         🟡 Альтернативные гипотезы на основе уже известного о человеке, не установленный факт о его целях. Поиск по
@@ -94,14 +113,19 @@ export function MotiveAnalysisSection({ projectId, personId, currentStatus, onSt
         </div>
       )}
 
+      <AnalysisBasisNote note={basisNote} />
+
       {hypotheses.length > 0 && (
         <ul className="motive-analysis-section__list">
           {hypotheses.map((h) => (
             <li key={h.id} className="motive-analysis-section__item">
               <span className={`motive-analysis-section__confidence motive-analysis-section__confidence--${h.confidence.toLowerCase()}`}>
-                {h.confidence === 'LOW' && 'Низкая уверенность'}
-                {h.confidence === 'MEDIUM' && 'Средняя уверенность'}
-                {h.confidence === 'HIGH' && 'Высокая уверенность'}
+                {/* Пункт [unmeasured-confidence] 2026-09-05: степень
+                    уверенности возвращает сама модель. Без указания
+                    источника «высокая уверенность» читается как
+                    заключение продукта о том, насколько гипотеза о
+                    мотивах человека надёжна. */}
+                {levelWording(h.confidence)}
               </span>
               <span>{h.explanation}</span>
               <span className="motive-analysis-section__note">На основании: {h.supportingFactsSummary}</span>
@@ -112,7 +136,13 @@ export function MotiveAnalysisSection({ projectId, personId, currentStatus, onSt
         </ul>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
+      {consentNeeded && (
+        <PersonResearchConsent
+          source="motive-analysis-section"
+          onGranted={() => { setConsentNeeded(false); void handleAnalyze(); }}
+        />
+      )}
       <button type="button" onClick={handleAnalyze} disabled={analyzing}>
         {analyzing ? 'Анализируем…' : 'Построить гипотезы о мотивах'}
       </button>

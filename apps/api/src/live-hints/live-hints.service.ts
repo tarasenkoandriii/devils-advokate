@@ -178,7 +178,7 @@ export class LiveHintsService {
 
     const config = await this.prisma.interviewPoolConfig.findUnique({ where: { projectId } });
     if (!config) {
-      throw new BadRequestException(`InterviewPoolConfig for project ${projectId} not found`);
+      throw new BadRequestException(`Подбор персонала для этого проекта не настроен`);
     }
 
     const [candidateQuestions, alreadySuggestedIds] = await Promise.all([

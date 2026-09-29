@@ -77,7 +77,7 @@ async function run() {
       text: async () =>
         '<html><head><style>.a{color:red}</style><script>alert(1)</script></head><body><h1>Заголовок</h1><p>Текст статьи про бюджет.</p></body></html>',
     });
-    const text = await fetchUrlText('https://example.com/article');
+    const { text } = await fetchUrlText('https://example.com/article');
     assertEqual(text.includes('Заголовок'), true, 'видимый текст извлечён');
     assertEqual(text.includes('Текст статьи про бюджет'), true, 'текст параграфа извлечён');
     assertEqual(text.includes('alert(1)'), false, 'содержимое <script> отброшено');
@@ -119,8 +119,16 @@ async function run() {
       headers: { get: () => null },
       text: async () => `<p>${longText}</p>`,
     });
-    const text = await fetchUrlText('https://example.com/long');
+    /** ДОПОЛНЕН, Пункт [stored-text-cut] 2026-09-06. Тест проверял, что
+     * текст обрезан, — и на этом останавливался. Обрезка была верной, а
+     * вот МОЛЧАНИЕ о ней — нет: вызывающий получал строку и не мог
+     * узнать, целая она или начало страницы. Теперь загрузчик отдаёт
+     * отчёт, и тест требует, чтобы отчёт говорил правду. */
+    const { text, intake } = await fetchUrlText('https://example.com/long');
     assertEqual(text.length <= 8000, true, 'текст обрезан до предела, не отправляется в AI-промпт целиком');
+    assertEqual(intake.used, text.length, 'отчёт называет, сколько вошло');
+    assertEqual(intake.total > intake.used, true, 'и сколько было всего — иначе обрезка снова молчаливая');
+    assertEqual(intake.limit, 8000, 'потолок назван рядом с числами');
   });
 
   for (const [name, fn] of scenarios) {

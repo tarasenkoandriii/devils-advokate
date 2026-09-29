@@ -69,7 +69,7 @@ export class PromptRegistryService {
     await this.assertOperator(userId);
     const version = await this.findOrThrow(id);
     if (version.status !== PromptVersionStatus.DRAFT) {
-      throw new BadRequestException(`PromptVersion ${id} must be DRAFT to promote to TESTING (current: ${version.status})`);
+      throw new BadRequestException(`Повысить до TESTING можно только черновик; сейчас версия в статусе ${version.status}`);
     }
     return this.prisma.promptVersion.update({ where: { id }, data: { status: PromptVersionStatus.TESTING } });
   }
@@ -82,7 +82,7 @@ export class PromptRegistryService {
     await this.assertOperator(userId);
     const version = await this.findOrThrow(id);
     if (version.status !== PromptVersionStatus.TESTING) {
-      throw new BadRequestException(`PromptVersion ${id} must be TESTING to promote to ACTIVE (current: ${version.status})`);
+      throw new BadRequestException(`Повысить до ACTIVE можно только версию в статусе TESTING; сейчас ${version.status}`);
     }
 
     const lastRun = await this.prisma.evaluationRun.findFirst({
@@ -92,10 +92,10 @@ export class PromptRegistryService {
     });
 
     if (!lastRun) {
-      throw new BadRequestException(`PromptVersion ${id} has no EvaluationRun — evaluation is required, not optional`);
+      throw new BadRequestException(`У этой версии нет ни одного прогона оценки — оценка обязательна, а не по желанию`);
     }
     if (!lastRun.releaseGate) {
-      throw new BadRequestException(`EvaluationRun ${lastRun.id} has no ReleaseGate decision yet — run is not complete`);
+      throw new BadRequestException(`Прогон оценки ещё не получил решения релизного гейта — он не завершён`);
     }
     if (!lastRun.releaseGate.passed) {
       const failedMetrics = lastRun.results.filter((r: any) => !r.passed).map((r: any) => `${r.evaluationMetric.name}=${r.value}`);
@@ -143,14 +143,14 @@ export class PromptRegistryService {
       where: { promptId, status: PromptVersionStatus.ACTIVE },
     });
     if (!current) {
-      throw new BadRequestException(`No ACTIVE PromptVersion for promptId=${promptId} to roll back from`);
+      throw new BadRequestException(`У этого промпта нет активной версии — откатывать не с чего`);
     }
     const previous = await this.prisma.promptVersion.findFirst({
       where: { promptId, status: PromptVersionStatus.DEPRECATED },
       orderBy: { updatedAt: 'desc' },
     });
     if (!previous) {
-      throw new BadRequestException(`No previous DEPRECATED PromptVersion for promptId=${promptId} to roll back to`);
+      throw new BadRequestException(`У этого промпта нет предыдущей выведенной версии — откатывать не к чему`);
     }
 
     await this.prisma.promptVersion.update({ where: { id: current.id }, data: { status: PromptVersionStatus.ROLLBACK } });

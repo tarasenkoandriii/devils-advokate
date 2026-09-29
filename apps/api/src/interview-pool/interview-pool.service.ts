@@ -2,10 +2,12 @@
 
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../common/unique-violation';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { CandidateStage } from '@prisma/client';
 import { ExtractedPoolConfigDraft } from './interview-pool-onboarding.service';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
+import { assertConsentActive } from './consent-revocation';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
 const QUESTIONNAIRE_TASK_TYPE = 'interview-pool-questionnaire-draft';
@@ -56,42 +58,58 @@ export class InterviewPoolService {
 
     const existing = await this.prisma.interviewPoolConfig.findUnique({ where: { projectId } });
     if (existing) {
-      throw new BadRequestException(`InterviewPoolConfig for project ${projectId} already exists`);
+      throw new BadRequestException(`Подбор персонала для этого проекта уже настроен`);
     }
 
-    return this.prisma.interviewPoolConfig.create({
-      data: {
-        projectId,
-        jobTitle: draft.jobTitle,
-        extendedDescription: draft.extendedDescription,
-        salaryRange: draft.salaryRange ?? undefined,
-        employmentLoad: draft.employmentLoad ?? undefined,
-        workArrangement: draft.workArrangement ?? undefined,
-        officeLocation: draft.officeLocation ?? undefined,
-        employmentFormat: draft.employmentFormat ?? undefined,
-        perks: draft.perks,
-        genderRequirement: draft.genderRequirement,
-        ageRequirement: draft.ageRequirement,
-        minAge: draft.minAge ?? undefined,
-        maxAge: draft.maxAge ?? undefined,
-        isPhysicallyDemanding: draft.isPhysicallyDemanding,
-        interviewStages: {
-          create: draft.interviewStages.map((s) => ({
-            name: s.name,
-            orderIndex: s.orderIndex,
-            isTestAssignment: s.isTestAssignment,
-            interviewerRole: s.interviewerRole ?? undefined,
-          })),
+    // Пункт [check-then-create] 2026-09-04: проверка выше остаётся, но
+    // она НЕ гарантия — между ней и вставкой есть окно, и два
+    // одновременных нажатия (двойной тап, повтор при плохой связи)
+    // проходили её оба. `projectId` уникален, поэтому второй вызов падал
+    // с P2002, и человек читал внутреннюю ошибку сервера вместо того же
+    // «уже настроено», что и при обычном повторе. Гонку здесь не
+    // исключить без блокировки, но ответ обязан быть один и тот же
+    // независимо от того, кто успел раньше.
+    try {
+      // `return await`, а не `return`: без await промис уходит из
+      // try/catch, и отказ базы летит мимо обработчика — ошибка
+      // была бы «поймана» только на бумаге.
+      return await this.prisma.interviewPoolConfig.create({
+        data: {
+          projectId,
+          jobTitle: draft.jobTitle,
+          extendedDescription: draft.extendedDescription,
+          salaryRange: draft.salaryRange ?? undefined,
+          employmentLoad: draft.employmentLoad ?? undefined,
+          workArrangement: draft.workArrangement ?? undefined,
+          officeLocation: draft.officeLocation ?? undefined,
+          employmentFormat: draft.employmentFormat ?? undefined,
+          perks: draft.perks,
+          genderRequirement: draft.genderRequirement,
+          ageRequirement: draft.ageRequirement,
+          minAge: draft.minAge ?? undefined,
+          maxAge: draft.maxAge ?? undefined,
+          isPhysicallyDemanding: draft.isPhysicallyDemanding,
+          interviewStages: {
+            create: draft.interviewStages.map((s) => ({
+              name: s.name,
+              orderIndex: s.orderIndex,
+              isTestAssignment: s.isTestAssignment,
+              interviewerRole: s.interviewerRole ?? undefined,
+            })),
+          },
+          // §2.6a ТЗ — persist разом з конфігом (не під час самого
+          // онбордінгу, того configId ще не існувало) — chicken-egg,
+          // вирішений тим самим способом, що major-purchase.
+          complianceFlags: {
+            create: draft.complianceFlags.map((c) => ({ category: c.category, quotedText: c.quotedText })),
+          },
         },
-        // §2.6a ТЗ — persist разом з конфігом (не під час самого
-        // онбордінгу, того configId ще не існувало) — chicken-egg,
-        // вирішений тим самим способом, що major-purchase.
-        complianceFlags: {
-          create: draft.complianceFlags.map((c) => ({ category: c.category, quotedText: c.quotedText })),
-        },
-      },
-      include: { interviewStages: { orderBy: { orderIndex: 'asc' } }, complianceFlags: true },
-    });
+        include: { interviewStages: { orderBy: { orderIndex: 'asc' } }, complianceFlags: true },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new BadRequestException(`Подбор персонала для этого проекта уже настроен`);
+      throw err;
+    }
   }
 
   async getConfig(userId: string, projectId: string) {
@@ -191,20 +209,59 @@ export class InterviewPoolService {
    * пул мав іншу jobTitle — historyDisclaimer заповнюється точним
    * текстом попередньої вакансії, ДЕТЕРМІНОВАНО (порівняння рядків),
    * не AI-оцінка "наскільки вакансії схожі". */
-  async addCandidate(userId: string, projectId: string, candidateProfileId: string, reuseHistory: boolean) {
+  async addCandidate(userId: string, projectId: string, candidateProfileId: string, reuseHistory: boolean, consentReconfirmed = false) {
     await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
+    // Проверка доступа обязательна и до проверки согласия: чужой
+    // кандидат не должен отличаться по ответу от своего с отозванным
+    // согласием.
     await this.assertAccessibleCandidate(userId, candidateProfileId);
 
     const existing = await this.prisma.candidatePipelineStatus.findUnique({
       where: { projectId_candidateProfileId: { projectId, candidateProfileId } },
     });
     if (existing) {
-      throw new BadRequestException(`Candidate ${candidateProfileId} already in this pool`);
+      throw new BadRequestException(`Этот кандидат уже добавлен в пул`);
     }
 
-    const status = await this.prisma.candidatePipelineStatus.create({
-      data: { projectId, candidateProfileId, stage: CandidateStage.SCHEDULED, reuseHistory },
-    });
+    // А-6 / А-10 (аудит 2026-09-03): согласие кандидата — правило, а не
+    // особенность одного маршрута. Раньше повторное согласие спрашивал только
+    // отдельный эндпоинт «добавить существующего», а обычное добавление в пул
+    // проходило мимо проверки — то есть обойти её можно было соседней кнопкой.
+    // Пункт [revocation-not-one-rule] 2026-09-06: через общее правило, а
+    // не чтением флага здесь — иначе оно снова разъедется, как разъехался
+    // текст во втором адресном месте.
+    await assertConsentActive(this.prisma, candidateProfileId);
+    const elsewhere = await this.prisma.candidatePipelineStatus.findMany({ where: { candidateProfileId, projectId: { not: projectId } }, select: { id: true } });
+    if (elsewhere.length > 0 && !consentReconfirmed) {
+      throw new ForbiddenException(
+        'Кандидат уже рассматривается в другом проекте (другая вакансия или заказчик) — нужно новое подтверждение его согласия рассматриваться здесь (candidateConsentReconfirmed).',
+      );
+    }
+
+    // ── Пункт [same-answer-either-way] 2026-09-24 ──
+    //
+    // Здесь замысел ОБРАТЕН идемпотентному: повтор — ошибка, и проверка
+    // выше говорит о ней внятно («Этот кандидат уже добавлен в пул»). Но
+    // между той проверкой и этой вставкой проходит время, второй такой
+    // же вызов её проскакивал, упирался в `@@unique([projectId,
+    // candidateProfileId])` — и вместо внятного сообщения человек
+    // получал пятисотку.
+    //
+    // И самое неприятное: лекарство ([check-then-create] 2026-09-04)
+    // применено В ЭТОМ ЖЕ ФАЙЛЕ — `isUniqueViolation` ловит дубль
+    // конфига пула строкой много выше. То есть правило было не просто «не
+    // везде в проекте», а не везде В ОДНОМ ФАЙЛЕ, где его автор уже
+    // держал в руках. Никакая дисциплина этого не ловит — ловит только
+    // правило, которое обходит дерево само.
+    let status;
+    try {
+      status = await this.prisma.candidatePipelineStatus.create({
+        data: { projectId, candidateProfileId, stage: CandidateStage.SCHEDULED, reuseHistory },
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      throw new BadRequestException(`Этот кандидат уже добавлен в пул`);
+    }
 
     let historyDisclaimer: string | undefined;
     if (reuseHistory) {

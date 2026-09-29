@@ -74,7 +74,7 @@ export default function MediaReviewQueuePage() {
           <div className="domain-budget__currency"><strong>{summary.discrepancySignals}</strong><span>расхождений</span></div>
         </div>
       )}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <section className="domain-panel">
         <h3>Добавить видео</h3>

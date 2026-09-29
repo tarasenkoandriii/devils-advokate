@@ -61,9 +61,15 @@ export class ConsentController {
     });
   }
 
+  /** Пункт [consent-revocation] 2026-09-04: возвращалось `{ revoked: true }`
+   * независимо от того, было ли что отзывать и что при этом произошло.
+   * Теперь — отчёт: сколько записей отозвано, что сделано СВЕРХ пометки
+   * (закрыты публичные ссылки, удалён голосовой отпечаток) и чего отзыв
+   * НЕ отменяет. Последнее важнее прочего: «только на будущее» —
+   * законный ответ, но человек должен услышать его словами, а не
+   * додумать. */
   @Delete(':type')
   async revoke(@CurrentUser() userId: string, @Param('type') type: ConsentType) {
-    await this.consent.revoke(userId, type);
-    return { revoked: true };
+    return this.consent.revoke(userId, type);
   }
 }

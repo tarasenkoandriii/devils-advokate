@@ -21,20 +21,32 @@
 
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { FactScope, FactSourceType } from '@prisma/client';
+import { FactStatus } from '@prisma/client';
 
-export interface CreatePersonFactInput {
-  content: string;
-  sourceType: FactSourceType;
-  scope?: FactScope;
-  projectId?: string;
-  confidence?: number;
-  source?: {
-    fileRef?: string;
-    url?: string;
-    hasGeoTag?: boolean;
-    metadataStripped?: boolean;
-  };
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class PersonFactSourceInput {
+  @IsOptional() @IsString() @MaxLength(2000) fileRef?: string;
+  @IsOptional() @IsString() @MaxLength(2000) url?: string;
+  @IsOptional() @IsBoolean() hasGeoTag?: boolean;
+  @IsOptional() @IsBoolean() metadataStripped?: boolean;
+}
+
+export class CreatePersonFactInput {
+  @IsString() @MinLength(1) @MaxLength(4000) content!: string;
+  @IsEnum(FactSourceType) sourceType!: FactSourceType;
+  @IsOptional() @IsEnum(FactScope) scope?: FactScope;
+  @IsOptional() @IsString() @MaxLength(100) projectId?: string;
+  // Уверенность — доля, а не «сколько не жалко»: значение вне 0..1
+  // молча искажало бы всё, что по ней считается.
+  @IsOptional() @IsNumber() @Min(0) @Max(1) confidence?: number;
+  // Вложенный объект требует @ValidateNested + @Type: без них
+  // class-validator внутрь не заглядывает вообще.
+  @IsOptional() @ValidateNested() @Type(() => PersonFactSourceInput) source?: PersonFactSourceInput;
 }
 
 @Injectable()
@@ -97,6 +109,66 @@ export class PersonFactsService {
       include: { sources: true },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /** Пункт [no-correction] 2026-09-05 — запись о человеке можно
+   * подтвердить, оспорить, признать неактуальной и удалить.
+   *
+   * НАЙДЕНО ИЗМЕРЕНИЕМ. У `PersonFact` было ровно два действия: создать
+   * и прочитать. Ни исправить, ни удалить, ни оспорить — при том что:
+   *
+   *  • `FactStatus` в схеме знает DISPUTED и EXPIRED, и ТРИ сервиса на
+   *    них ветвятся (`EvidenceGapService` объявляет факт
+   *    «противоречивым», `SourceConflictService` и `StaleFactService`
+   *    исключают истёкшие). Выставить эти состояния не мог никто:
+   *    поиск по всей кодовой базе не находит ни одной записи в это поле.
+   *    Ветки существовали, срабатывать не могли никогда.
+   *  • `lastVerifiedAt` не записывался НИГДЕ. Значит «давно не
+   *    подтверждался» считалось от даты создания и навсегда: продукт
+   *    звал перепроверить факт и не давал способа сказать, что
+   *    перепроверил. Предупреждение, которое нельзя снять, перестают
+   *    читать — и вместе с ним перестают читать те, которые снять
+   *    стоило бы.
+   *
+   * ЧЕГО ЭТО НЕ ДЕЛАЕТ, и это сказано человеку на экране: удаление факта
+   * не убирает выводы, уже построенные с его участием. Черты профиля и
+   * прецеденты ссылаются на источник ТЕКСТОМ (архитектурное решение
+   * §3.11, не недосмотр) — связать их с конкретным фактом нечем.
+   * Обещать обратное было бы враньём того же рода, что разобрано в
+   * пункте [candidate-rights]. */
+  async confirm(userId: string, personId: string, factId: string) {
+    await this.assertOwnedFact(userId, personId, factId);
+    return this.prisma.personFact.update({
+      where: { id: factId },
+      // Подтверждение — это ещё и возврат из «оспорено»: человек
+      // проверил и говорит, что всё-таки так.
+      data: { lastVerifiedAt: new Date(), status: FactStatus.ACTIVE },
+      include: { sources: true },
+    });
+  }
+
+  async setStatus(userId: string, personId: string, factId: string, status: FactStatus) {
+    await this.assertOwnedFact(userId, personId, factId);
+    return this.prisma.personFact.update({
+      where: { id: factId },
+      data: { status },
+      include: { sources: true },
+    });
+  }
+
+  async remove(userId: string, personId: string, factId: string): Promise<{ deleted: true }> {
+    await this.assertOwnedFact(userId, personId, factId);
+    await this.prisma.personFact.delete({ where: { id: factId } });
+    return { deleted: true };
+  }
+
+  private async assertOwnedFact(userId: string, personId: string, factId: string) {
+    await this.assertOwnedPerson(userId, personId);
+    const fact = await this.prisma.personFact.findFirst({ where: { id: factId, personId } });
+    if (!fact) {
+      throw new NotFoundException(`PersonFact ${factId} not found`);
+    }
+    return fact;
   }
 
   private async assertOwnedPerson(userId: string, personId: string) {

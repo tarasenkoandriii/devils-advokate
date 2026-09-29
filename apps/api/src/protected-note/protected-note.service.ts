@@ -21,20 +21,27 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ProtectedNoteType } from '@prisma/client';
 
-export interface CreateProtectedNoteInput {
-  type: ProtectedNoteType;
-  content: string;
-  triggerCondition?: string; // осмысленно только для FALLBACK_PLAN
-  planOrder?: number; // осмысленно только для FALLBACK_PLAN
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class CreateProtectedNoteInput {
+  @IsEnum(ProtectedNoteType) type!: ProtectedNoteType;
+  @IsString() @MinLength(1) @MaxLength(4000) content!: string;
+  // осмысленно только для FALLBACK_PLAN
+  @IsOptional() @IsString() @MaxLength(1000) triggerCondition?: string;
+  // осмысленно только для FALLBACK_PLAN
+  @IsOptional() @IsInt() @Min(1) @Max(100) planOrder?: number;
 }
 
-export interface UpdateProtectedNoteInput {
-  content?: string;
-  triggerCondition?: string | null;
-  planOrder?: number | null;
+export class UpdateProtectedNoteInput {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(4000) content?: string;
+  // null здесь осмыслен — это очистка поля, а не «не трогать».
+  @IsOptional() @IsString() @MaxLength(1000) triggerCondition?: string | null;
+  @IsOptional() @IsInt() @Min(1) @Max(100) planOrder?: number | null;
 }
 
 @Injectable()
@@ -68,9 +75,28 @@ export class ProtectedNoteService {
 
   async update(userId: string, noteId: string, input: UpdateProtectedNoteInput) {
     await this.findOwnedNote(userId, noteId);
+    // Пункт [outside-input] 2026-09-04: было `data: input` — тело
+    // запроса целиком уходило в UPDATE. Тип `UpdateProtectedNoteInput` —
+    // ИНТЕРФЕЙС: он существует только на этапе компиляции, а
+    // ValidationPipe в проекте работает без `whitelist` (обоснование —
+    // в create-app.ts) и лишние поля не отбрасывает. То есть в теле
+    // можно было прислать любой скалярный столбец модели — например
+    // `projectId` чужого проекта, — и заметка уезжала туда: проверка
+    // владения выше подтверждает право на СТАРУЮ заметку, а не на новое
+    // место. Перечисление полей поимённо закрывает это независимо от
+    // настроек pipe'а — то же решение, что уже принято в create()
+    // несколькими строками выше.
+    //
+    // `undefined` для Prisma означает «не трогать поле», поэтому
+    // частичное обновление работает как прежде; `null` в
+    // triggerCondition/planOrder приходит осмысленно — это очистка.
     return this.prisma.protectedNote.update({
       where: { id: noteId },
-      data: input,
+      data: {
+        content: input.content,
+        triggerCondition: input.triggerCondition,
+        planOrder: input.planOrder,
+      },
     });
   }
 

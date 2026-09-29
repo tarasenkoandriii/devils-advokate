@@ -9,6 +9,7 @@
 // question+arguments, здесь готовый текст протокола).
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { generateProtocol, listProtocols, safeSharePreflight, safeShareConfirm } from '../lib/features';
 import { haptic, shareViaTelegram } from '../lib/telegram';
 import { Protocol } from '../lib/types';
@@ -21,6 +22,10 @@ type ShareState = 'idle' | 'scanning' | 'preview' | 'blocked' | 'error';
 
 export function ProtocolSection({ projectId }: ProtocolSectionProps) {
   const [protocols, setProtocols] = useState<Protocol[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +39,8 @@ export function ProtocolSection({ projectId }: ProtocolSectionProps) {
 
   const reload = useCallback(() => {
     return listProtocols(projectId)
-      .then(setProtocols)
-      .catch(() => setProtocols([]));
+      .then((v) => { setProtocols(v); setNotLoaded(false); })
+      .catch(() => { setProtocols([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
@@ -101,6 +106,7 @@ export function ProtocolSection({ projectId }: ProtocolSectionProps) {
 
   return (
     <section className="protocol-section">
+      {notLoaded && <NotLoadedNotice what="прошлые протоколы" />}
       <h3>Протокол по итогам</h3>
       <p className="conversations-section__hint">
         Лёгкая версия соглашения — без юридической силы, для подтверждения второй стороной прямо в Telegram.
@@ -116,7 +122,7 @@ export function ProtocolSection({ projectId }: ProtocolSectionProps) {
                   {shareState === 'scanning' && <p className="conversations-section__hint">Проверяем…</p>}
                   {shareState === 'blocked' && (
                     <>
-                      <p className="generation-error">Отправка отклонена проверкой безопасности содержимого.</p>
+                      <p role="alert" className="generation-error">Отправка отклонена проверкой безопасности содержимого.</p>
                       <button type="button" onClick={handleCancelShare}>
                         Закрыть
                       </button>
@@ -124,7 +130,7 @@ export function ProtocolSection({ projectId }: ProtocolSectionProps) {
                   )}
                   {shareState === 'error' && (
                     <>
-                      <p className="generation-error">{shareError}</p>
+                      <p role="alert" className="generation-error">{shareError}</p>
                       <button type="button" onClick={handleCancelShare}>
                         Закрыть
                       </button>
@@ -158,7 +164,7 @@ export function ProtocolSection({ projectId }: ProtocolSectionProps) {
         </ul>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <button type="button" onClick={handleGenerate} disabled={generating}>
         {generating ? 'Составляем…' : 'Составить протокол'}
       </button>

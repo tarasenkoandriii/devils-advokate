@@ -38,5 +38,5 @@ export function AiErrorNotice({ error, onConsentGranted }: { error: unknown; onC
   // 503 «нет модели» и 429 «лимит» теперь доезжают со своим текстом
   // (см. common/ai-error-passthrough.ts на бэкенде) — показываем его,
   // он объясняет, что делать, лучше любой нашей подстановки.
-  return <p className="generation-error">{message}</p>;
+  return <p role="alert" className="generation-error">{message}</p>;
 }

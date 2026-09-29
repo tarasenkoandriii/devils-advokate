@@ -11,11 +11,18 @@
 // File-параметров нигде в этом файле, в отличие от, например,
 // PersonFactsService/PhotoVerificationService.
 
-import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+
+/** Сколько раз пересчитывать номер версии на занятом номере. Три —
+ * потому что параллельных правок одного материала одним человеком
+ * бывает две-три, а не двадцать; предел нужен, чтобы потеря разбора не
+ * превратилась в зависший запрос. */
+const VERSION_INSERT_ATTEMPTS = 3;
+import { isUniqueViolation } from '../common/unique-violation';
 
 const TASK_TYPE = 'working-material-critique';
 
@@ -45,6 +52,44 @@ const DEFAULT_SYSTEM_PROMPT =
 
 @Injectable()
 export class WorkingMaterialsService {
+  private readonly logger = new Logger(WorkingMaterialsService.name);
+
+  /** Вставить версию, пересчитав номер, если его занял параллельный
+   * вызов. Пункт [check-then-create-2] 2026-09-27.
+   *
+   * Попыток ограниченное число: бесконечный цикл на занятом номере
+   * превратил бы потерю разбора в зависший запрос, а это хуже. Если не
+   * удалось и после них — отказ пробрасывается как есть, потому что
+   * выдумывать номер дальше значит гадать. */
+  private async insertVersion(
+    workingMaterialId: string,
+    firstTry: number,
+    payload: { extractedText: string; critique: string; editPrompt: string; generatedByInferenceId: string | null },
+  ) {
+    let versionNumber = firstTry;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.prisma.materialVersion.create({
+          data: { workingMaterialId, versionNumber, ...payload },
+        });
+      } catch (err) {
+        if (!isUniqueViolation(err) || attempt >= VERSION_INSERT_ATTEMPTS) throw err;
+        const last = await this.prisma.materialVersion.findFirst({
+          where: { workingMaterialId },
+          orderBy: { versionNumber: 'desc' },
+        });
+        const next = (last?.versionNumber ?? 0) + 1;
+        // Номер обязан вырасти: иначе следующая попытка повторит ту же
+        // вставку и тот же отказ, и цикл крутился бы до предела впустую.
+        versionNumber = next > versionNumber ? next : versionNumber + 1;
+        this.logger.warn(
+          `Версия материала ${workingMaterialId}: номер ${firstTry} занят параллельной правкой, ` +
+            `разбор сохраняется под номером ${versionNumber} (попытка ${attempt + 1} из ${VERSION_INSERT_ATTEMPTS})`,
+        );
+      }
+    }
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
@@ -121,15 +166,23 @@ export class WorkingMaterialsService {
     }
 
     const raw: RawCritique = JSON.parse(result.text);
-    const version = await this.prisma.materialVersion.create({
-      data: {
-        workingMaterialId: material.id,
-        versionNumber: nextVersionNumber,
-        extractedText: extractedText.trim(),
-        critique: raw.critique,
-        editPrompt: raw.editPrompt,
-        generatedByInferenceId: result.aiInferenceId,
-      },
+    // Пункт [check-then-create-2] 2026-09-27. Здесь окно между «узнать
+    // номер следующей версии» и «вставить её» — не миллисекунды, а ВЕСЬ
+    // вызов модели: десятки секунд. Две правки одного материала подряд
+    // получали один и тот же номер, и вторая падала на
+    // `@@unique([workingMaterialId, versionNumber])` — после того как
+    // разбор уже сделан и оплачен. Человек терял готовую работу и видел
+    // внутреннюю ошибку.
+    //
+    // `upsert` тут был бы НЕВЕРЕН и опаснее самой гонки: он перезаписал
+    // бы чужую версию её критикой, то есть потерял бы уже сохранённый
+    // разбор молча. Правильный ответ — пересчитать номер и вставить
+    // снова: критика на руках, терять нечего.
+    const version = await this.insertVersion(material.id, nextVersionNumber, {
+      extractedText: extractedText.trim(),
+      critique: raw.critique,
+      editPrompt: raw.editPrompt,
+      generatedByInferenceId: result.aiInferenceId,
     });
 
     return { material, version };

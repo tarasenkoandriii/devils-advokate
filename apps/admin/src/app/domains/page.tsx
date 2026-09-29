@@ -10,30 +10,37 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getDomainsSummary, listAdminMediaReviewQueues } from '../../lib/endpoints';
-import type { DomainSummaryRow, AdminMediaReviewQueue } from '../../lib/types';
+import type { DomainSummaryRow, AdminMediaReviewQueues } from '../../lib/types';
 
-const TITLES: Record<string, string> = { dtp: 'ДТП', 'family-law': 'Семейное право', health: 'Здоровье', 'interview-pool': 'Подбор персонала', investment: 'Инвестиции', 'major-purchase': 'Крупная покупка', 'job-search': 'Поиск работы' };
+// Пункт [coverage-report-outlived-the-product] 2026-09-24: доменов на
+// сервере восемь, здесь их было семь — восьмой рисовался машинным
+// ключом «employer-hiring». Подписи держатся тестом против
+// `DOMAIN_MODES`, чтобы девятый домен не появился на экране латиницей.
+const TITLES: Record<string, string> = { dtp: 'ДТП', 'family-law': 'Семейное право', health: 'Здоровье', 'interview-pool': 'Подбор персонала', investment: 'Инвестиции', 'major-purchase': 'Крупная покупка', 'job-search': 'Поиск работы', 'employer-hiring': 'Наём работодателем' };
 
 export default function DomainsPage() {
   const [rows, setRows] = useState<DomainSummaryRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mediaQueues, setMediaQueues] = useState<AdminMediaReviewQueue[] | null>(null);
+  const [mediaQueues, setMediaQueues] = useState<AdminMediaReviewQueues | null>(null);
   useEffect(() => { getDomainsSummary().then(setRows).catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить')); }, []);
   useEffect(() => { listAdminMediaReviewQueues().then(setMediaQueues).catch(() => undefined); }, []);
 
+  // Пункт [ceiling-hid-inside-a-total] 2026-09-24: здесь этот экран
+  // СКЛАДЫВАЛ полученные очереди в итоги, а сервер отдавал их с
+  // необъявленным потолком в 200 строк. Итог по срезу, подписанный как
+  // итог по всему, — уверенно показанное неверное число: при девятистах
+  // очередях оператор читал «200» и долю разобранных среди последних
+  // двухсот. Теперь итоги считает база по всем строкам, и экран их
+  // ПОКАЗЫВАЕТ, а не выводит заново.
   const media = mediaQueues
-    ? mediaQueues.reduce(
-        (acc, q) => {
-          acc.queues += 1;
-          acc.items += q.totalItems;
-          acc.done += q.byStatus?.DONE ?? 0;
-          acc.processing += q.byStatus?.PROCESSING ?? 0;
-          acc.awaiting += q.byStatus?.AWAITING_UPLOAD ?? 0;
-          acc.stuck += q.stuckProcessing;
-          return acc;
-        },
-        { queues: 0, items: 0, done: 0, processing: 0, awaiting: 0, stuck: 0 },
-      )
+    ? {
+        queues: mediaQueues.totals.queues,
+        items: mediaQueues.totals.items,
+        done: mediaQueues.totals.byStatus?.DONE ?? 0,
+        processing: mediaQueues.totals.byStatus?.PROCESSING ?? 0,
+        awaiting: mediaQueues.totals.byStatus?.AWAITING_UPLOAD ?? 0,
+        stuck: mediaQueues.totals.stuckProcessing,
+      }
     : null;
   if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;
   return (

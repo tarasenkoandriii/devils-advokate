@@ -43,6 +43,7 @@ import { DoNotSayService } from '../do-not-say/do-not-say.service';
 import { StaleFactService } from '../stale-fact/stale-fact.service';
 import { ConversationAgendaService } from '../conversation-agenda/conversation-agenda.service';
 import { ProtectedNoteService } from '../protected-note/protected-note.service';
+import { partialBasis, shownBasisNote } from '../common/partial-basis';
 
 const TOP_ARGUMENTS_LIMIT = 5;
 
@@ -63,6 +64,7 @@ export class ConversationCardService {
       objective,
       boundaries,
       topArguments,
+      argumentsTotal,
       openingScript,
       closingScript,
       selfRiskWarnings,
@@ -74,9 +76,13 @@ export class ConversationCardService {
       this.prisma.negotiationBoundaries.findUnique({ where: { projectId } }),
       this.prisma.argument.findMany({
         where: { projectId },
-        orderBy: { weight: 'desc' },
+        orderBy: [{ weight: 'desc' }, { id: 'desc' }],
         take: TOP_ARGUMENTS_LIMIT,
       }),
+      // Пункт [shown-not-all] 2026-09-05: сколько их всего. Без этого
+      // числа «Ключевые аргументы» на карточке — пять из скольких
+      // угодно, и человек уносит пятёрку в разговор как весь свой набор.
+      this.prisma.argument.count({ where: { projectId } }),
       this.prisma.conversationScript.findFirst({
         where: { projectId, type: ConversationScriptType.OPENING },
         orderBy: { createdAt: 'desc' },
@@ -96,6 +102,12 @@ export class ConversationCardService {
       objective,
       boundaries,
       topArguments,
+      // Приписка появляется, только если усечение реально было: у
+      // большинства проектов аргументов меньше пяти, и говорить там не о
+      // чем (пункт [partial-basis]).
+      topArgumentsNote: shownBasisNote([
+        partialBasis('аргументы', topArguments.length, argumentsTotal, 'weight'),
+      ]),
       doNotSay: objective?.doNotSay ?? [], // ручной список пользователя — см. комментарий в шапке файла
       selfRiskWarnings, // AI-детекция из прошлых разговоров, §3.53/§3.17 — отдельно от doNotSay выше
       staleFacts, // §3.57 — детерминированная выборка по lastVerifiedAt, без AI-вызова

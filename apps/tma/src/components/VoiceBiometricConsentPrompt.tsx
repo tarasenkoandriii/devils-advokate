@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import { grantConsent } from '../lib/features';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 const CONSENT_VERSION = 'v1';
 
@@ -31,8 +32,12 @@ export function VoiceBiometricConsentPrompt({ onGranted, onCancel }: VoiceBiomet
       await grantConsent({ consentType: 'VOICE_BIOMETRIC', version: CONSENT_VERSION, source: 'onboarding-voice-enrollment' });
       haptic('success');
       onGranted();
-    } catch {
-      haptic('error');
+    } catch (err) {
+      // Пункт [one-buzz-was-the-whole-answer] 2026-09-24. Здесь
+      // стояла одна вибрация. Экран согласия — худшее место для
+      // такого молчания: человек нажал «согласен», запрос упал, и
+      // он уходит, не зная, записано согласие или нет.
+      reportFailure(err, 'Не удалось записать согласие на голосовой отпечаток');
     } finally {
       setGranting(false);
     }

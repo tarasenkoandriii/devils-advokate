@@ -26,6 +26,8 @@ import {
 } from '../lib/features';
 import { MaterialChatSession, MaterialChatVoiceReplyJob } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
+import { NotLoadedNotice } from './NotLoadedNotice';
 
 /** Потолок опроса статуса голосовой реплики (аудит 2026-09-02). */
 const VOICE_REPLY_POLL_MAX_MS = 3 * 60 * 1000;
@@ -43,6 +45,7 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notLoaded, setNotLoaded] = useState(false);
 
   const [recording, setRecording] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<'idle' | 'uploading' | 'transcribing'>('idle');
@@ -81,8 +84,13 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
   async function loadSessions() {
     try {
       setSessions(await listMaterialChatSessions(projectId, workingMaterialId));
+      setNotLoaded(false);
     } catch {
+      // [failure-looks-empty] 2026-09-05: список прошлых разборов
+      // исчезал молча — человек начинал новый, считая, что прошлых не
+      // было.
       setSessions([]);
+      setNotLoaded(true);
     }
   }
 
@@ -116,8 +124,8 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
       // Резюмирование — последнее сообщение могло звучать раньше, не проигрываем повторно.
       const existing = full.messages ?? [];
       lastPlayedMessageIdRef.current = existing.length > 0 ? existing[existing.length - 1].id : null;
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось открыть разбор материала');
     }
   }
 
@@ -144,8 +152,8 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
       const ended = await endMaterialChatSession(activeSession.id);
       setActiveSession((prev) => (prev ? { ...prev, status: ended.status, endedAt: ended.endedAt } : prev));
       await loadSessions();
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось завершить разбор материала');
     }
   }
 
@@ -204,9 +212,9 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
       let job: MaterialChatVoiceReplyJob;
       try {
         job = await getMaterialChatVoiceReplyStatus(sessionId, jobId);
-      } catch {
+      } catch (err) {
         setVoiceStatus('idle');
-        haptic('error');
+        reportFailure(err, 'Не удалось получить голосовой ответ');
         return;
       }
       if (job.status === 'PENDING' || job.status === 'PROCESSING') {
@@ -234,8 +242,8 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
         const full = await getMaterialChatSession(sessionId);
         setActiveSession(full);
         haptic('success');
-      } catch {
-        haptic('error');
+      } catch (err) {
+        reportFailure(err, 'Не удалось открыть разбор материала');
       } finally {
         setVoiceStatus('idle');
       }
@@ -259,6 +267,8 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
         конкретного вида. Первоисточник материала не передаётся — только уже сохранённые критика и текущий промпт.
       </p>
 
+      {!activeSession && notLoaded && <NotLoadedNotice what="прошлые сессии разбора" />}
+
       {!activeSession && (
         <>
           {sessions.length > 0 && (
@@ -266,7 +276,7 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
               {sessions.map((s) => (
                 <li key={s.id}>
                   <button type="button" onClick={() => handleOpenSession(s.id)}>
-                    Сессия от {new Date(s.createdAt).toLocaleString()} ({s.status === 'ACTIVE' ? 'активна' : 'завершена'})
+                    Сессия от {new Date(s.createdAt).toLocaleString('ru-RU')} ({s.status === 'ACTIVE' ? 'активна' : 'завершена'})
                   </button>
                 </li>
               ))}
@@ -300,7 +310,7 @@ export function MaterialChatSection({ projectId, workingMaterialId }: MaterialCh
             ))}
           </ul>
 
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
 
           {activeSession.status === 'ACTIVE' ? (
             <div className="conversations-section__add">

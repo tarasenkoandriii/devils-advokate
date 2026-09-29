@@ -9,15 +9,19 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { browseLibrary } from '../../lib/public-api';
 import { LibraryEntry } from '../../lib/types';
+import { SectionLoadError } from '../../components/SectionLoadError';
 
 export default function LibraryPage() {
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  // Аудит 2026-09-03: «Пока ничего не опубликовано» — утверждение о
+  // содержимом библиотеки, а не о нашей связи с сервером.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     browseLibrary()
       .then(setEntries)
-      .catch(() => setEntries([]))
+      .catch(() => { setEntries([]); setFailed(true); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -30,7 +34,9 @@ export default function LibraryPage() {
         Готовые наборы аргументов по типовым решениям, поделённые другими пользователями.
       </p>
 
-      {entries.length === 0 ? (
+      {failed ? (
+        <SectionLoadError what="библиотеку разборов" hint="в ней пусто" />
+      ) : entries.length === 0 ? (
         <p className="conversations-section__hint">Пока ничего не опубликовано.</p>
       ) : (
         <ul className="library-page__list">

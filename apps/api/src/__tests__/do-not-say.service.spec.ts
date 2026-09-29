@@ -12,7 +12,13 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Сверка «половины операции» 2026-09-04: находка и её основание
+    // пишутся одной транзакцией, поэтому фейк её поддерживает. Он
+    // выполняет колбэк на себе же — отката у in-memory фейка нет, и
+    // притворяться, что есть, было бы хуже отсутствия: тест держит
+    // ФАКТ вызова в транзакции (см. atomicity-spec), а не её семантику.
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedConversation(c: any) { conversations.set(c.id, c); },
     _seedTranscript(t: any) { transcripts.set(t.id, t); },
@@ -89,6 +95,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 class FakeAIRouterService {
@@ -193,7 +200,7 @@ async function run() {
     ]);
     const svc = new DoNotSayService(prisma as any, fakeRouter as any);
 
-    const created = await svc.detect(USER_ID, CONV_ID);
+    const { points: created } = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created.length, 1, 'количество созданных предупреждений');
     assertEqual(prisma._getSignals()[0].signalType, 'SELF_RISK', 'signalType создан правильный');
     assertEqual(prisma._getSignals()[0].riskCategory, 'LEVERAGE', 'riskCategory сохранён');
@@ -209,7 +216,7 @@ async function run() {
     const svc = new DoNotSayService(prisma as any, fakeRouter as any);
     await svc.detect(USER_ID, CONV_ID);
 
-    const list = await svc.list(USER_ID, CONV_ID);
+    const { points: list } = await svc.list(USER_ID, CONV_ID);
     assertEqual(list.length, 1, 'количество в list()');
     assertEqual((list[0] as any).why, 'Может обостриться при повторении.', 'why восстановлен');
     assertEqual((list[0] as any).saferAlternative, 'Мне важно, чтобы это больше не повторялось.', 'saferAlternative восстановлен');

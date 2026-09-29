@@ -22,12 +22,14 @@
 // применялся в Turning Points/Do Not Say: один промпт со списком всех
 // фактов с их id, ответ — список найденных конфликтных пар.
 
+import { personLevelFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { FactStatus, SourceConflict } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled, filled } from '../common/claim-substance';
 
 const TASK_TYPE = 'source-conflict-detection';
 
@@ -39,7 +41,7 @@ interface RawConflict {
   clarifyingQuestion: string;
 }
 
-function isValidConflictsPayload(text: string): boolean {
+export function isValidConflictsPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
@@ -47,10 +49,13 @@ function isValidConflictsPayload(text: string): boolean {
       (item) =>
         typeof item.factAId === 'string' &&
         typeof item.factBId === 'string' &&
-        typeof item.conflictDescription === 'string' &&
+        // Пункт [finding-without-substance] 2026-09-25: противоречие,
+        // которое не названо, и уточняющий вопрос, которого нет.
+        allFilled(item, ['conflictDescription', 'clarifyingQuestion']) &&
         Array.isArray(item.possibleExplanations) &&
-        item.possibleExplanations.every((e: unknown) => typeof e === 'string') &&
-        typeof item.clarifyingQuestion === 'string',
+        // Сам список может быть пуст — объяснений может не быть. Пустая
+        // строка ВНУТРИ списка объяснением не является.
+        item.possibleExplanations.every((e: unknown) => filled(e)),
     );
   } catch {
     return false;
@@ -70,8 +75,10 @@ export class SourceConflictService {
   async detect(userId: string, personId: string) {
     await this.findOwnedPerson(userId, personId);
 
+    // Пункт [scope-not-applied] 2026-09-06 — сверка фактов между собой
+    // идёт на уровне человека, проектного среза тут нет по задаче.
     const facts = await this.prisma.personFact.findMany({
-      where: { personId, status: { not: FactStatus.EXPIRED } },
+      where: { personId, status: { not: FactStatus.EXPIRED }, ...personLevelFactsScopeWhere() },
     });
     if (facts.length < 2) {
       throw new BadRequestException(

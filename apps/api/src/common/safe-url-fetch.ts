@@ -16,6 +16,8 @@
 // этом проходе. Базовый, не исчерпывающий барьер — лучше, чем ничего,
 // не выдаётся за полную защиту.
 
+import { takeSource, type SourceIntake } from './source-intake';
+
 const BLOCKED_HOSTNAMES = new Set(['localhost', '0.0.0.0', '::1']);
 
 // Приватные/служебные IPv4-диапазоны — RFC 1918 + loopback + link-local
@@ -113,10 +115,22 @@ function extractTextFromHtml(html: string): string {
     .trim();
 }
 
-/** Скачивает URL и возвращает извлечённый текст, обрезанный до
- * разумной длины. Бросает UnsafeUrlError/UrlFetchError — вызывающий
- * код решает, как их превращать в HTTP-ответ. */
-export async function fetchUrlText(rawUrl: string, maxTextLength = MAX_EXTRACTED_TEXT_LENGTH): Promise<string> {
+/** Скачивает URL и возвращает извлечённый текст ВМЕСТЕ С ОТЧЁТОМ О
+ * ТОМ, СКОЛЬКО ЕГО ВОШЛО. Бросает UnsafeUrlError/UrlFetchError —
+ * вызывающий код решает, как их превращать в HTTP-ответ.
+ *
+ * Пункт [stored-text-cut] 2026-09-06: раньше функция возвращала ОДНУ
+ * СТРОКУ, обрезанную в последней строчке тела, и ни один из девяти
+ * вызывающих не мог узнать, обрезана она или нет. Страница компании,
+ * объявление о вакансии, источник для проверки факта — продукт читал
+ * первые N знаков и говорил о них как обо всей странице. Механизм
+ * честного отчёта в проекте есть с пункта [input-truncated]
+ * (`takeSource`/`SourceIntake`); к границе загрузки он применён не
+ * был. */
+export async function fetchUrlText(
+  rawUrl: string,
+  maxTextLength = MAX_EXTRACTED_TEXT_LENGTH,
+): Promise<{ text: string; intake: SourceIntake }> {
   if (!isUrlSafeToFetch(rawUrl)) {
     throw new UnsafeUrlError(rawUrl);
   }
@@ -156,5 +170,5 @@ export async function fetchUrlText(rawUrl: string, maxTextLength = MAX_EXTRACTED
     throw new UrlFetchError(`Не удалось извлечь текст из ${rawUrl} — возможно, страница не текстовая (изображение/видео/защищённый контент)`);
   }
 
-  return text.slice(0, Math.max(1, maxTextLength));
+  return takeSource(text, Math.max(1, maxTextLength));
 }

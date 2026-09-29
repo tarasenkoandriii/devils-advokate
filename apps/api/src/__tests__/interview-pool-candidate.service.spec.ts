@@ -65,6 +65,14 @@ function createFakePrisma() {
     },
     candidatePipelineStatus: {
       findUnique: async ({ where }: any) => statuses.find((s) => s.id === where.id) ?? null,
+      // Приёмка 38 (аудит 2026-09-03): поштучный шеринг ищет проект
+      // кандидата, чтобы записать чеклист отправки в аудит.
+      findFirst: async ({ where }: any) => statuses.find((s) => s.candidateProfileId === where.candidateProfileId) ?? null,
+      update: async ({ where, data }: any) => {
+        const idx = statuses.findIndex((s) => s.id === where.id);
+        statuses[idx] = { ...statuses[idx], ...data };
+        return statuses[idx];
+      },
       findMany: async ({ where, select }: any) => {
         const rows = statuses.filter((s) => s.projectId === where.projectId);
         return select ? rows.map((s) => ({ candidateProfileId: s.candidateProfileId })) : rows;
@@ -108,7 +116,9 @@ function createFakePrisma() {
 }
 
 function makeService(prisma: any) {
-  return new InterviewPoolCandidateService(prisma as any);
+  // Пункт [job-domain-v2] А-6: сервис пишет отзыв согласия в аудит.
+  const audit = { record: async () => ({}) };
+  return new InterviewPoolCandidateService(prisma as any, audit as any);
 }
 
 describe('InterviewPoolCandidateService', () => {
@@ -214,6 +224,35 @@ describe('InterviewPoolCandidateService', () => {
     expect(preview[0]).toEqual({ shareId: expect.any(String), displayName: 'Кандидат', resumeText: 'CV текст', accepted: false });
     expect(Object.keys(preview[0])).not.toContain('pipelineStatuses');
     expect(Object.keys(preview[0])).not.toContain('relevanceEntries');
+  });
+
+  // ── Пункт [term-never-ends] 2026-09-06 ──
+  //
+  // Предпросмотр пакета судил о сроке по `shares[0]`. Сегодня это верно
+  // — пакет создаётся одним `createMany` с общим `expiresAt`, — но верно
+  // ПО СОВПАДЕНИЮ: строки отдельные, поле у каждой своё, и продление
+  // одной ссылки из пакета сделало бы проверку ложной, ничего при этом
+  // не сломав заметно. Правило, которое держится на том, что значения
+  // сейчас равны, — не правило.
+  it('КЛЮЧЕВОЙ ТЕСТ [term-never-ends]: просроченная строка пакета не проходит, даже если она не первая', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const consented: string[] = [];
+    for (const name of ['Перший', 'Другий']) {
+      const c = prisma._seedCandidate({ ownerUserId: 'u1', displayName: name, resumeText: 'CV' });
+      prisma._seedStatus({ projectId: project.id, candidateProfileId: c.id });
+      consented.push(c.id);
+    }
+    const service = makeService(prisma);
+    const { deepLink } = await service.shareAllInPool('u1', project.id, consented);
+    const token = deepLink.split('share_')[1];
+
+    const rows = prisma._getShares();
+    expect(rows.length).toBe(2);
+    // Истекла ВТОРАЯ — первая по-прежнему жива.
+    rows[rows.length - 1].expiresAt = new Date(Date.now() - 1000);
+
+    await expect(service.previewShare(token)).rejects.toThrow(BadRequestException);
   });
 
   it('acceptDate — явна дія отримувача, створює НОВИЙ CandidateProfile (копію), не live-посилання', async () => {

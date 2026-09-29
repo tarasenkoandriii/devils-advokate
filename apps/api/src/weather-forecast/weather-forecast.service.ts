@@ -14,13 +14,16 @@
 
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertProjectOwnership } from '../common/project-ownership';
 import { SecretsService } from '../secrets/secrets.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
-import { geocodeCity, getForecast, type Coordinates, type ForecastResult } from './open-meteo-client';
+import { geocodeCity, getForecast, forecastHasData, noForecastDataReason, type Coordinates, type ForecastResult } from './open-meteo-client';
 import { getWindyForecast } from './windy-client';
 import { ConsentType, WeatherRecommendation } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { LOCATION_PURPOSES } from '../consent/location-purposes';
+import { instantUtc } from '../common/server-time';
 
 const TASK_TYPE = 'weather-recommendation';
 const WINDY_API_KEY_REF = 'WINDY_API_KEY';
@@ -106,7 +109,7 @@ export class WeatherForecastService {
     longitude: number,
     engineId?: string,
   ) {
-    await this.consent.requireConsent(userId, ConsentType.LOCATION);
+    await this.consent.requireConsent(userId, ConsentType.LOCATION, undefined, LOCATION_PURPOSES.WEATHER);
     const scheduled = await this.assertOwnedScheduledConversation(userId, scheduledConversationId);
 
     // cityLabel НЕ ПРОСТАВЛЯЕТСЯ здесь намеренно — см. обоснование в
@@ -127,6 +130,27 @@ export class WeatherForecastService {
       throw new BadGatewayException(err instanceof Error ? err.message : 'Не удалось получить прогноз погоды');
     });
 
+    // Пункт [forecast-without-source] 2026-09-06 — БЕЗ ДАННЫХ СОВЕТА НЕ
+    // БУДЕТ. Раньше пустой ответ сервиса превращался в строку «нет
+    // данных», уходил в промпт как описание погоды, и модель выдавала
+    // «проводить / перенести» с обоснованием. Человек читал это как
+    // вывод о своей встрече. Модель здесь больше не вызывается вовсе:
+    // платить за вывод из ничего незачем, и сам вывод не нужен.
+    if (!forecastHasData(forecast)) {
+      return this.prisma.weatherForecast.create({
+        data: {
+          scheduledConversationId: scheduled.id,
+          cityLabel,
+          temperatureCelsius: null,
+          condition: null,
+          source: forecast.source,
+          recommendation: null,
+          recommendationReason: noForecastDataReason(forecast.source),
+          generatedByInferenceId: null,
+        },
+      });
+    }
+
     const { recommendation, reason, aiInferenceId } = await this.computeRecommendation(
       userId,
       scheduled.projectId,
@@ -141,6 +165,7 @@ export class WeatherForecastService {
         cityLabel,
         temperatureCelsius: forecast.temperatureCelsius,
         condition: forecast.condition,
+        source: forecast.source,
         recommendation,
         recommendationReason: reason,
         generatedByInferenceId: aiInferenceId,
@@ -156,13 +181,24 @@ export class WeatherForecastService {
     userId: string,
     projectId: string,
     targetDate: Date,
-    forecast: { condition: string; temperatureCelsius: number | null },
+    // Пункт [forecast-without-source] 2026-09-06: сюда попадает только
+    // прогноз С ХОТЬ КАКИМИ-ТО данными — полностью пустой отсекается
+    // вызывающим. Но «хоть какие-то» бывают и половинчатыми: сервис
+    // отдал температуру и не отдал описание. Тогда промпт так и
+    // говорит, а не подставляет пустую строку вместо погоды.
+    forecast: { condition: string | null; temperatureCelsius: number | null },
     engineId?: string,
   ): Promise<{ recommendation: WeatherRecommendation; reason: string; aiInferenceId: string | null }> {
-    const userPrompt = [
-      `Дата и время разговора: ${targetDate.toISOString()}`,
-      `Погода: ${forecast.condition}${forecast.temperatureCelsius !== null ? `, ${forecast.temperatureCelsius}°C` : ''}`,
-    ].join('\n');
+    const temp = forecast.temperatureCelsius !== null ? `${forecast.temperatureCelsius}°C` : null;
+    const weatherLine =
+      forecast.condition !== null
+        ? `Погода: ${forecast.condition}${temp ? `, ${temp}` : ''}`
+        : `Погода: описание сервис не дал, известна только температура ${temp}. Не достраивай описание — его нет.`;
+    // Пункт [server-said-which-day] 2026-09-24: полный ISO честен, но
+    // модель, пересказывая его человеку, роняет «Z» — и «01:00 UTC»
+    // становится «в час ночи», хотя у человека было четыре утра. Зона
+    // названа словами.
+    const userPrompt = [`Дата и время разговора: ${instantUtc(targetDate)}`, weatherLine].join('\n');
 
     const activePrompt = await this.prisma.promptVersion.findFirst({
       where: { promptId: TASK_TYPE, status: 'ACTIVE' },
@@ -221,6 +257,12 @@ export class WeatherForecastService {
   // Любая ошибка на любом шаге — тихий null, форма создания работает
   // как прежде.
   async previewForScheduling(userId: string, projectId: string, targetDate: Date, engineId?: string) {
+    // Аудит 2026-09-03 (сверка доступа): единственный маршрут домена, где
+    // projectId из URL принимался без проверки владения. Чужого он не
+    // читал и не писал (город берётся из своего профиля), но тратил
+    // AI-вызов на произвольный чужой id — и оставался единственным
+    // исключением из правила «projectId проверяется всегда».
+    await assertProjectOwnership(this.prisma, userId, projectId);
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { city: true } });
     if (!user?.city) return null; // честно — нет сохранённого профильного города, нечего проверять
 
@@ -230,6 +272,21 @@ export class WeatherForecastService {
     const forecast = await this.getForecastWithFallback(coords, targetDate).catch(() => null);
     if (!forecast) return null;
 
+    // Пункт [forecast-without-source] 2026-09-06: предпросмотр честен
+    // так же, как сохраняемый прогноз. Мягкое предупреждение в форме
+    // создания встречи — тоже совет, и из пустого ответа сервиса его
+    // делать нельзя.
+    if (!forecastHasData(forecast)) {
+      return {
+        cityLabel: user.city,
+        temperatureCelsius: null,
+        condition: null,
+        source: forecast.source,
+        recommendation: null,
+        recommendationReason: noForecastDataReason(forecast.source),
+      };
+    }
+
     const computed = await this.computeRecommendation(userId, projectId, targetDate, forecast, engineId).catch(() => null);
     if (!computed) return null;
 
@@ -237,6 +294,7 @@ export class WeatherForecastService {
       cityLabel: user.city,
       temperatureCelsius: forecast.temperatureCelsius,
       condition: forecast.condition,
+      source: forecast.source,
       recommendation: computed.recommendation,
       recommendationReason: computed.reason,
     };

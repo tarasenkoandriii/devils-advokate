@@ -3,6 +3,13 @@
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import { listUsers, restrictUser, blockUser, getUserDetail } from '../../../lib/endpoints';
 import type { AdminUserRow, AdminUserDetail } from '../../../lib/types';
+import { ErrorBanner } from '../../../components/ErrorBanner';
+// Пункт [decision-basis] 2026-09-04 — проверка основания живёт отдельным
+// модулем, чтобы сверка вызывала ЕЁ, а не свою копию (мутация показала,
+// что копия не ловит подмену настоящей функции).
+import { hasReason } from '../../../lib/moderation-reason';
+import { OperatorTraceNotice } from '../../../components/OperatorTraceNotice';
+import { operatorScreenActions } from '../../../lib/operator-screens';
 
 export default function UsersPage() {
   const [users, setUsers] = useState<AdminUserRow[] | null>(null);
@@ -84,7 +91,12 @@ export default function UsersPage() {
     }
   }
 
-  if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;
+  // Пункт [decision-basis] 2026-09-04: раньше здесь стоял ранний
+  // `return` — ЛЮБАЯ ошибка (в том числе неудавшееся ограничение)
+  // заменяла собой всю страницу. Оператор терял список, фильтры и
+  // раскрытые детали и не мог посмотреть, применилось ли действие;
+  // вернуться было можно только перезагрузкой. Теперь баннер над
+  // таблицей, и его можно закрыть.
 
   return (
     <div className="page">
@@ -96,6 +108,13 @@ export default function UsersPage() {
         читать данные. «Заблокировать» — отклоняет вход целиком, включая отдельный вход в эту
         же админку, если у пользователя есть права оператора.
       </p>
+      {/* Пункт [operator-left-a-trace-unsaid] 2026-09-25: подсказки у полей
+          ниже говорят про ПРИЧИНУ — её человек читает в отказе доступа,
+          это другой канал. Здесь — что остаётся в журнале и что человек
+          увидит у себя в Центре приватности. */}
+      <OperatorTraceNotice actions={operatorScreenActions('app/moderation/users/page.tsx')} />
+
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
       <div className="card" style={{ marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center' }}>
         <input
@@ -167,7 +186,7 @@ export default function UsersPage() {
                   <td>
                     {!u.isRestricted && (
                       <input
-                        placeholder="причина, если будете ограничивать"
+                        placeholder="причина — обязательна, её увидит человек"
                         style={{ width: '100%' }}
                         value={noteDrafts[u.id] ?? ''}
                         onChange={(e) => setNoteDrafts((prev) => ({ ...prev, [u.id]: e.target.value }))}
@@ -175,8 +194,12 @@ export default function UsersPage() {
                     )}
                   </td>
                   <td>
+                    {/* Причина обязательна — и сказано об этом ДО
+                        нажатия, а не отказом сервера после. */}
                     <button
                       className={u.isRestricted ? 'btn btn-primary' : 'btn btn-danger'}
+                      disabled={!u.isRestricted && !hasReason(noteDrafts[u.id])}
+                      title={!u.isRestricted && !hasReason(noteDrafts[u.id]) ? 'Сначала укажите причину — её увидит и журнал, и сам человек' : undefined}
                       onClick={() => toggleRestrict(u)}
                     >
                       {u.isRestricted ? 'Снять ограничение' : 'Ограничить'}
@@ -190,7 +213,7 @@ export default function UsersPage() {
                   <td>
                     {!u.isBlocked && (
                       <input
-                        placeholder="причина, если будете блокировать"
+                        placeholder="причина — обязательна, её увидит человек"
                         style={{ width: '100%' }}
                         value={blockNoteDrafts[u.id] ?? ''}
                         onChange={(e) => setBlockNoteDrafts((prev) => ({ ...prev, [u.id]: e.target.value }))}
@@ -200,6 +223,8 @@ export default function UsersPage() {
                   <td>
                     <button
                       className={u.isBlocked ? 'btn btn-primary' : 'btn btn-danger'}
+                      disabled={!u.isBlocked && !hasReason(blockNoteDrafts[u.id])}
+                      title={!u.isBlocked && !hasReason(blockNoteDrafts[u.id]) ? 'Сначала укажите причину — её увидит и журнал, и сам человек' : undefined}
                       onClick={() => toggleBlock(u)}
                     >
                       {u.isBlocked ? 'Разблокировать' : 'Заблокировать'}

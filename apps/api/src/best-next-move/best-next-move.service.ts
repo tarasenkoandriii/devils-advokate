@@ -32,6 +32,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConversationProcessingStatus } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled } from '../common/claim-substance';
 
 const TASK_TYPE = 'best-next-move-detection';
 
@@ -44,16 +45,16 @@ interface RawRecommendation {
   whatCouldChange?: string;
 }
 
-function isValidRecommendationPayload(text: string): boolean {
+export function isValidRecommendationPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     return (
       typeof parsed === 'object' &&
       parsed !== null &&
-      typeof parsed.bestAction === 'string' &&
-      typeof parsed.alternative === 'string' &&
-      typeof parsed.avoid === 'string' &&
-      typeof parsed.why === 'string'
+      // Пункт [finding-without-substance] 2026-09-25: совет, альтернатива,
+      // «чего избегать» и обоснование — четыре поля, которые человек
+      // взвешивает. Пустое «чего избегать» читается как «избегать нечего».
+      allFilled(parsed, ['bestAction', 'alternative', 'avoid', 'why'])
     );
   } catch {
     return false;
@@ -84,7 +85,7 @@ export class BestNextMoveService {
 
     const segments = conversation.transcript?.segments ?? [];
     if (segments.length === 0) {
-      throw new BadRequestException(`Conversation ${conversationId} has no transcript segments to analyze`);
+      throw new BadRequestException(`Разбор невозможен: у этого разговора нет расшифровки. Это не значит, что находок нет — их не искали.`);
     }
 
     const objective = await this.prisma.decisionObjective.findUnique({

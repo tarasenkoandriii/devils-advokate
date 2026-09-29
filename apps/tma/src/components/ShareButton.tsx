@@ -95,7 +95,7 @@ export function ShareButton({ question, arguments: args, projectId }: ShareButto
   if (state === 'blocked') {
     return (
       <div className="safe-share-preview">
-        <p className="generation-error">
+        <p role="alert" className="generation-error">
           Отправка отклонена проверкой безопасности содержимого. Переформулируйте текст.
         </p>
         <div className="safe-share-preview__actions">
@@ -110,7 +110,7 @@ export function ShareButton({ question, arguments: args, projectId }: ShareButto
   if (state === 'error') {
     return (
       <div className="safe-share-preview">
-        <p className="generation-error">{error}</p>
+        <p role="alert" className="generation-error">{error}</p>
         <div className="safe-share-preview__actions">
           <button type="button" onClick={handleCancel}>
             Закрыть

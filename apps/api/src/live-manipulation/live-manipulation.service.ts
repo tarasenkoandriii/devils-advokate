@@ -16,11 +16,14 @@
 // сжимается до одной "самой важной".
 
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
+import { hasPersonVerdict, NO_PERSON_VERDICT_RULE } from '../common/no-person-verdict';
+import { MAX_LIVE_WINDOW_CHARS, assertWithinLimit } from '../ai-router/prompt-limits';
 import { LiveManipulationFlag } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled } from '../common/claim-substance';
 
 const TASK_TYPE = 'live-manipulation-detection';
 
@@ -30,14 +33,18 @@ interface RawFlag {
   confidence?: number;
 }
 
-function isValidFlagsPayload(text: string): boolean {
+/** Пункт [same-line-not-drawn] 2026-09-24 — как и у полного разбора,
+ * проверялась только форма. Вторая линия теперь общая. */
+export function isValidFlagsPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
+    if (hasPersonVerdict(text)) return false;
     return parsed.every(
       (item) =>
-        typeof item.technique === 'string' &&
-        typeof item.description === 'string' &&
+        // Пункт [finding-without-substance] 2026-09-25: в живом режиме
+        // описание и есть вся находка — перечитать нечего.
+        allFilled(item, ['technique', 'description']) &&
         (item.confidence === undefined || typeof item.confidence === 'number'),
     );
   } catch {
@@ -45,8 +52,12 @@ function isValidFlagsPayload(text: string): boolean {
   }
 }
 
-const SYSTEM_PROMPT =
-  'Тебе дан ПОСЛЕДНИЙ фрагмент транскрипта живого разговора (не весь разговор, только недавнее окно, без указания говорящего построчно — сплошной текст). Найди в этом фрагменте использование манипулятивных приёмов аргументации: переход на личности, подмена тезиса, ложная дилемма, whataboutism, апелляция к эмоциям вместо сути, давление на срочность. Для каждого найденного приёма укажи: technique — короткое название на русском, description — конкретно, в чём проявился приём в этом фрагменте, confidence — 0..1, честная оценка уверенности (live-детекция на неполном контексте менее надёжна, чем анализ полной записи — не завышай уверенность). Если приёмов нет — верни пустой массив []. Ответь СТРОГО валидным JSON-массивом объектов вида {"technique": string, "description": string, "confidence": number}. Без пояснений вне JSON.';
+export const SYSTEM_PROMPT =
+  'Тебе дан ПОСЛЕДНИЙ фрагмент транскрипта живого разговора (не весь разговор, только недавнее окно, без указания говорящего построчно — сплошной текст). Найди в этом фрагменте использование манипулятивных приёмов аргументации: переход на личности, подмена тезиса, ложная дилемма, whataboutism, апелляция к эмоциям вместо сути, давление на срочность. Для каждого найденного приёма укажи: technique — короткое название на русском, description — конкретно, в чём проявился приём в этом фрагменте, confidence — 0..1, честная оценка уверенности (live-детекция на неполном контексте менее надёжна, чем анализ полной записи — не завышай уверенность). Если приёмов нет — верни пустой массив []. Ответь СТРОГО валидным JSON-массивом объектов вида {"technique": string, "description": string, "confidence": number}. Без пояснений вне JSON. ' +
+  // Пункт [same-line-not-drawn] 2026-09-24: живой детектор — тот же
+  // разбор чужих слов, только на неполном контексте, то есть граница
+  // здесь нужна не меньше, а больше.
+  NO_PERSON_VERDICT_RULE;
 
 @Injectable()
 export class LiveManipulationService {
@@ -62,6 +73,10 @@ export class LiveManipulationService {
     if (!transcriptWindow.trim()) {
       throw new BadRequestException('transcriptWindow не может быть пустым');
     }
+    // Аудит границ ввода 2026-09-03: окно живого цикла — последние минуты
+    // разговора, а не архив. Клиент вызывает цикл сам, каждые 15–45 секунд,
+    // и содержимое окна задаёт тоже он.
+    assertWithinLimit(transcriptWindow, MAX_LIVE_WINDOW_CHARS, 'Окно транскрипта');
     await assertProjectOwnership(this.prisma, userId, projectId);
 
     const activePrompt = await this.prisma.promptVersion.findFirst({

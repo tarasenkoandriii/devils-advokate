@@ -79,7 +79,10 @@ describe('AuditLogService', () => {
 
     await expect(service.list('regular')).rejects.toThrow(ForbiddenException);
     const result = await service.list('op1');
-    expect(result.length).toBe(1);
+    expect(result.items.length).toBe(1);
+    // Сверка чтений без потолка 2026-09-04: список приходит с честным
+    // флагом — «показано всё» это тоже утверждение, и оно проверяется.
+    expect(result.hasMore).toBe(false);
   });
 
   it('list() фільтрує за resource/resourceId', async () => {
@@ -91,7 +94,7 @@ describe('AuditLogService', () => {
 
     const userEvents = await service.list('op1', { resource: 'User' });
 
-    expect(userEvents.length).toBe(1);
-    expect(userEvents[0].resource).toBe('User');
+    expect(userEvents.items.length).toBe(1);
+    expect(userEvents.items[0].resource).toBe('User');
   });
 });

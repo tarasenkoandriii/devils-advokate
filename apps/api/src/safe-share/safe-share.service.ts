@@ -19,14 +19,20 @@
 
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { ContentScanService } from '../content-scan/content-scan.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ScanTargetType } from '@prisma/client';
 
-export interface PreflightInput {
-  text: string;
-  contentType: string;
-  projectId?: string;
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class PreflightInput {
+  // Текст уходит в сканирование содержимого, то есть в платный вызов —
+  // потолок тот же, что у длинных пользовательских текстов проекта.
+  @IsString() @MinLength(1) @MaxLength(60_000) text!: string;
+  @IsString() @MaxLength(100) contentType!: string;
+  @IsOptional() @IsString() @MaxLength(100) projectId?: string;
 }
 
 export interface PreflightResult {
@@ -84,7 +90,7 @@ export class SafeShareService {
       throw new NotFoundException(`Safe share action ${safeShareActionId} not found`);
     }
     if (action.sentAt) {
-      throw new BadRequestException('This Safe Share action was already confirmed');
+      throw new BadRequestException('Это действие Safe Share уже подтверждено — повторное подтверждение ничего не меняет');
     }
 
     const scanResult = await this.prisma.contentScanResult.findFirst({

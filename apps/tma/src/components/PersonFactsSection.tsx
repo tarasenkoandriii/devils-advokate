@@ -18,12 +18,15 @@
 // какой файл имелся в виду", не путь загрузки.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import type { ChangeEvent } from 'react';
 import { createPersonFact, listPersonFacts } from '../lib/features';
 import { checkExifForGeoTag, stripExifMetadata } from '../lib/exif-check';
 import { FactSourceType, PersonFact } from '../lib/types';
 import { haptic } from '../lib/telegram';
 import { PhotoVerificationSection } from './PhotoVerificationSection';
+import { factSourceLabel, factStatusLabel, isGuess } from '../lib/fact-provenance';
+import { confirmPersonFact, setPersonFactStatus, deletePersonFact } from '../lib/features';
 
 interface PersonFactsSectionProps {
   personId: string;
@@ -38,6 +41,10 @@ const SOURCE_TYPE_OPTIONS: { value: FactSourceType; label: string }[] = [
 
 export function PersonFactsSection({ personId, projectId }: PersonFactsSectionProps) {
   const [facts, setFacts] = useState<PersonFact[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [content, setContent] = useState('');
@@ -47,11 +54,16 @@ export function PersonFactsSection({ personId, projectId }: PersonFactsSectionPr
   const [checkingExif, setCheckingExif] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Пункт [no-correction] 2026-09-05: над какой записью идёт действие и
+  // какая ждёт подтверждения удаления. Удаление — единственное
+  // необратимое из четырёх, поэтому спрашивается отдельно.
+  const [busyFactId, setBusyFactId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     return listPersonFacts(personId)
-      .then(setFacts)
-      .catch(() => setFacts([]));
+      .then((v) => { setFacts(v); setNotLoaded(false); })
+      .catch(() => { setFacts([]); setNotLoaded(true); });
   }, [personId]);
 
   useEffect(() => {
@@ -109,17 +121,88 @@ export function PersonFactsSection({ personId, projectId }: PersonFactsSectionPr
     }
   }
 
+  async function runOnFact(factId: string, action: () => Promise<unknown>, failure: string) {
+    setBusyFactId(factId);
+    setError(null);
+    try {
+      await action();
+      await reload();
+      haptic('success');
+    } catch (err) {
+      haptic('error');
+      setError(err instanceof Error ? err.message : failure);
+    } finally {
+      setBusyFactId(null);
+      setConfirmDeleteId(null);
+    }
+  }
+
   if (loading) return null;
 
   return (
     <section className="person-facts-section">
+      {notLoaded && <NotLoadedNotice what="личные факты" />}
       <h3>Факты</h3>
 
       {facts.length > 0 && (
         <ul className="person-facts-section__list">
           {facts.map((f) => (
             <li key={f.id} className="person-facts-section__item">
+              {/* Пункт [source-collapse] 2026-09-05: происхождение
+                  показывается ТАМ ЖЕ, где текст факта. Человек выбирал
+                  его при вводе и больше никогда не видел — через неделю
+                  собственная догадка читалась как установленное. */}
+              <span className="person-facts-section__source">{factSourceLabel(f.sourceType)}</span>
               <span>{f.content}</span>
+              {factStatusLabel(f.status) && (
+                <span className="person-facts-section__status">{factStatusLabel(f.status)}</span>
+              )}
+              {isGuess(f.sourceType) && (
+                <span className="person-facts-section__source-note">
+                  Это ваше предположение. В разборы оно идёт с этой пометкой — как догадка, не как факт.
+                </span>
+              )}
+              {/* Пункт [no-correction] 2026-09-05: до этого захода у
+                  записи о человеке было ровно два действия — создать и
+                  прочитать. Ни подтвердить, ни оспорить, ни удалить,
+                  при том что схема знала DISPUTED и EXPIRED и три
+                  сервиса на них ветвились. */}
+              <span className="person-facts-section__actions">
+                <button type="button" disabled={busyFactId === f.id}
+                  onClick={() => runOnFact(f.id, () => confirmPersonFact(personId, f.id), 'Не удалось подтвердить факт')}>
+                  Подтвердить
+                </button>
+                {f.status !== 'DISPUTED' && (
+                  <button type="button" disabled={busyFactId === f.id}
+                    onClick={() => runOnFact(f.id, () => setPersonFactStatus(personId, f.id, 'DISPUTED'), 'Не удалось отметить факт как неверный')}>
+                    Это неверно
+                  </button>
+                )}
+                {f.status !== 'EXPIRED' && (
+                  <button type="button" disabled={busyFactId === f.id}
+                    onClick={() => runOnFact(f.id, () => setPersonFactStatus(personId, f.id, 'EXPIRED'), 'Не удалось отметить факт как неактуальный')}>
+                    Больше не актуально
+                  </button>
+                )}
+                {confirmDeleteId === f.id ? (
+                  <>
+                    {/* Единственное необратимое действие из четырёх —
+                        поэтому спрашивается отдельно, и сказано, чего
+                        удаление НЕ делает. */}
+                    <span className="person-facts-section__source-note">
+                      Удалить запись? Выводы, уже построенные с её участием — черты профиля, прецеденты, — останутся:
+                      они ссылаются на источник текстом, и связать их с этой записью нечем.
+                    </span>
+                    <button type="button" disabled={busyFactId === f.id}
+                      onClick={() => runOnFact(f.id, () => deletePersonFact(personId, f.id), 'Не удалось удалить факт')}>
+                      Да, удалить
+                    </button>
+                    <button type="button" onClick={() => setConfirmDeleteId(null)}>Отмена</button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setConfirmDeleteId(f.id)}>Удалить</button>
+                )}
+              </span>
               {f.sources.map((s) => (
                 <span key={s.id} className="person-facts-section__source-note">
                   {s.hasGeoTag === true && !s.metadataStripped && '⚠️ в исходном файле были координаты съёмки'}
@@ -169,7 +252,7 @@ export function PersonFactsSection({ personId, projectId }: PersonFactsSectionPr
         )}
         {geoCheck?.metadataStripped && <p className="conversations-section__hint">✓ Метаданные очищены.</p>}
 
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
         <div className="conversations-section__add-actions">
           <button type="button" onClick={handleSubmit} disabled={submitting || !content.trim()}>
             {submitting ? 'Сохраняем…' : 'Сохранить факт'}

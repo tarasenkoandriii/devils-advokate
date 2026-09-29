@@ -14,6 +14,9 @@ class RecordOutcomeDto {
 class LogEscalationCategoryDto {
   sessionId!: string;
   category!: EscalationCategory;
+  // Пункт [project-log-v2] — кого именно слушает пользователь, знает только
+  // он сам; поле необязательное, см. schema.prisma над EscalationCategoryEvent.
+  personId?: string | null;
 }
 
 @Controller()
@@ -59,6 +62,6 @@ export class DecisionOutcomeController {
     @Param('projectId') projectId: string,
     @Body() dto: LogEscalationCategoryDto,
   ) {
-    return this.decisionOutcome.logEscalationCategory(userId, projectId, dto.sessionId, dto.category);
+    return this.decisionOutcome.logEscalationCategory(userId, projectId, dto.sessionId, dto.category, dto.personId ?? null);
   }
 }

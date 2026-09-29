@@ -11,11 +11,13 @@
 // (v3-фичи, §3.8/§3.9/§3.11 ТЗ) — опирается на то, что уже есть:
 // PersonFact этого человека (с учётом FactScope, §4.2), не более.
 
+import { projectFactsScopeWhere } from '../common/fact-scope';
 import { Injectable, NotFoundException, BadGatewayException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { factsBlockWithInstruction } from '../common/fact-provenance';
 
 const TASK_TYPE = 'steelman';
 
@@ -58,24 +60,23 @@ export class SteelmanService {
     }
 
     const facts = await this.prisma.personFact.findMany({
-      where: {
-        personId,
-        status: 'ACTIVE',
-        OR: [{ scope: 'PROJECT', projectId }, { scope: 'PERSON_GLOBAL' }],
-      },
+      // Пункт [scope-not-applied] 2026-09-06: правило было здесь — и
+      // только здесь. Вынесено в общий помощник, чтобы у него не
+      // завелось второй версии.
+      where: { personId, status: 'ACTIVE', ...projectFactsScopeWhere(projectId) },
     });
 
     const personLabel = link.person.displayName ?? 'фигурант';
     const factsSummary =
       facts.length > 0
-        ? facts.map((f) => `- ${f.content}`).join('\n')
+        ? factsBlockWithInstruction(facts)
         : '(известных фактов об этом человеке пока нет)';
 
     const userPrompt = [
       `Ситуация: ${project.question}`,
       project.goal ? `Цель пользователя: ${project.goal}` : '',
       `Построй сильнейшую версию позиции человека "${personLabel}" в этой ситуации — не ищи в ней слабые места, а объясни, почему эта позиция может быть разумной с его точки зрения.`,
-      `Известные факты об этом человеке:\n${factsSummary}`,
+      `Факты об этом человеке, каждый с указанием происхождения:\n${factsSummary}`,
       'Ответь СТРОГО валидным JSON-объектом вида {"strongestArgument": string, "reasonableness": string, "whatUserMayMiss": string}. Без пояснений вне JSON.',
     ]
       .filter(Boolean)

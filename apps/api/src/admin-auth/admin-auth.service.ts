@@ -103,7 +103,7 @@ export class AdminAuthService {
     // заблокировал аккаунт» давала бы неверный результат — заблокированный
     // пользователь продолжал бы заходить.
     if (user.isBlocked) {
-      throw new UnauthorizedException('Account is blocked');
+      throw new UnauthorizedException('Доступ к аккаунту закрыт решением модерации. Решение можно оспорить — напишите в поддержку; запись о нём сохраняется.');
     }
 
     const token = randomBytes(32).toString('hex');
@@ -150,7 +150,7 @@ export class AdminAuthService {
       parsed = validateTelegramLoginWidgetPayload(payload, { botToken });
     } catch (err) {
       if (err instanceof TelegramLoginWidgetInvalidError) {
-        throw new UnauthorizedException('Invalid Telegram Login Widget payload');
+        throw new UnauthorizedException('Данные входа Telegram не прошли проверку');
       }
       throw err;
     }
@@ -179,7 +179,7 @@ export class AdminAuthService {
     // лишати заблокованому користувачу жодного шляху, навіть без
     // реального доступу до вкладок.
     if (user.isBlocked) {
-      throw new UnauthorizedException('Account is blocked');
+      throw new UnauthorizedException('Доступ к аккаунту закрыт решением модерации. Решение можно оспорить — напишите в поддержку; запись о нём сохраняется.');
     }
 
     const token = randomBytes(32).toString('hex');
@@ -219,7 +219,7 @@ export class AdminAuthService {
     // но честно проверяем на случай удалённого между сессией и запросом
     // пользователя, не молча падаем на undefined-деструктуризации.
     if (!user) {
-      throw new UnauthorizedException('User not found for this admin session');
+      throw new UnauthorizedException('Пользователь этой сессии не найден — войдите заново');
     }
     return {
       userId,

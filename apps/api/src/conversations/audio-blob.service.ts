@@ -266,19 +266,15 @@ export class AudioBlobService {
     }
   }
 
-  /** Удалить файл разговора и снять ссылку одним действием. Порядок
-   * важен: сначала физическое удаление, потом обнуление полей —
-   * инвариант «pathname в БД ⇒ файл ещё существует» должен нарушаться
-   * только в сторону «поле пустое, а файл остался» (это чинится
-   * чисткой стора), а не наоборот. */
-  async releaseConversationAudio(conversationId: string, pathname: string | null): Promise<void> {
-    if (!pathname) return;
-    await this.deleteByPathname(pathname);
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: { audioBlobPathname: null, audioBlobBytes: null },
-    });
-  }
+  // Аудит 2026-09-03: здесь был releaseConversationAudio() — «удалить файл
+  // и снять ссылку одним действием». Его не вызывал НИ ОДИН путь
+  // продуктового кода: освобождением аудио с самого начала занимается
+  // ConversationsService.releaseMediaConsumer(), и делает это в обратном,
+  // безопасном порядке — сначала атомарно забирает право на удаление
+  // (обнуляет ссылку условным UPDATE), потом удаляет байты. Метод-дубль с
+  // более слабым порядком, покрытый тестами, — приглашение однажды взять
+  // именно его и получить гонку двух потребителей на один файл. Удалён,
+  // а не оставлен «на всякий случай»: живой путь один, и он выше.
 
   private async findOwnedConversation(userId: string, conversationId: string) {
     const conversation = await this.prisma.conversation.findUnique({

@@ -33,12 +33,14 @@
 // проекта разом, встроенный в ConversationCardService.get() —
 // карточка и есть тот самый проактивный пре-разговорный экран (§3.44).
 
-import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { chunkSegments, chunkedAnalysisNotice, estimateMinutes } from '../common/transcript-chunks';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SelfRiskCategory } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled } from '../common/claim-substance';
 
 const TASK_TYPE = 'do-not-say-detection';
 
@@ -49,7 +51,7 @@ interface RawDoNotSayItem {
   saferAlternative: string;
 }
 
-function isValidDoNotSayPayload(text: string): boolean {
+export function isValidDoNotSayPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
@@ -57,8 +59,10 @@ function isValidDoNotSayPayload(text: string): boolean {
       (item) =>
         typeof item.segmentId === 'string' &&
         (item.riskCategory === 'ESCALATION' || item.riskCategory === 'LEVERAGE') &&
-        typeof item.why === 'string' &&
-        typeof item.saferAlternative === 'string',
+        // Пункт [finding-without-substance] 2026-09-25: «совет без причины»
+        // запрещён комментарием ниже по потоку, но проверялся там только для
+        // выдуманного сегмента. Пустое why давало ровно такой совет.
+        allFilled(item, ['why', 'saferAlternative']),
     );
   } catch {
     return false;
@@ -70,6 +74,8 @@ const DEFAULT_SYSTEM_PROMPT =
 
 @Injectable()
 export class DoNotSayService {
+  private readonly logger = new Logger(DoNotSayService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
@@ -99,21 +105,43 @@ export class DoNotSayService {
       orderBy: { createdAt: 'desc' },
     });
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
-    const userPrompt = selfSegments.map((s: any) => `[${s.id}] ${s.text}`).join('\n');
+    // Сверка «ссылка на реплику» 2026-09-04: здесь реплики уходят модели
+    // с НАСТОЯЩИМ id, а не с коротким номером, — и это решение, а не
+    // недосмотр. Номер экономил бы 25 символов на реплику, но ответ
+    // модели хранится дословно в `AIInference.output` и перечитывается
+    // позже (`list()` восстанавливает из него описание находки, сопоставляя
+    // ссылку с сигналом). Номер осмыслен только относительно того списка
+    // реплик, который был в ТОМ вызове: после повторной расшифровки или
+    // добавления реплик та же цифра указала бы на другую фразу — и
+    // объяснение молча приехало бы к чужим словам. Переписывать же
+    // сохранённый ответ модели «исправленным» нельзя: это запись о том,
+    // что модель сказала на самом деле. Экономия взята там, где ссылка
+    // разрешается один раз и хранится уже разрешённой (доменные разборы).
+    // Сверка длинных разговоров 2026-09-04: находка этого детектора живёт
+    // внутри одной реплики самого пользователя, поэтому разбивка её не
+    // портит (граница разобрана в transcript-chunks.ts).
+    const renderLine = (s: any) => `[${s.id}] ${s.text}`;
+    const chunks = chunkSegments(selfSegments as any[], renderLine);
+    const totalChars = (selfSegments as any[]).reduce((n: number, s: any) => n + s.text.length, 0);
 
-    let result;
+    const rawItems: Array<RawDoNotSayItem & { inferenceId: string }> = [];
     try {
-      result = await this.aiRouter.execute({
-        userId,
-        projectId: conversation.projectId,
-        taskType: TASK_TYPE,
-        promptVersionId: activePrompt?.id,
-        systemPrompt,
-        userPrompt,
-        jsonMode: true,
-        maxTokens: 1500,
-        validateOutput: isValidDoNotSayPayload,
-      });
+      for (const chunk of chunks) {
+        const result = await this.aiRouter.execute({
+          userId,
+          projectId: conversation.projectId,
+          taskType: TASK_TYPE,
+          promptVersionId: activePrompt?.id,
+          systemPrompt,
+          userPrompt: chunk.map(renderLine).join('\n'),
+          jsonMode: true,
+          maxTokens: 1500,
+          validateOutput: isValidDoNotSayPayload,
+        });
+        for (const item of JSON.parse(result.text) as RawDoNotSayItem[]) {
+          rawItems.push({ ...item, inferenceId: result.aiInferenceId });
+        }
+      }
     } catch (err) {
       rethrowClientVisibleAiError(err); // [ai-errors]: 403/429 и «нет модели» идут наружу как есть
       if (err instanceof AIRouterContentBlockedError) {
@@ -124,36 +152,87 @@ export class DoNotSayService {
       );
     }
 
-    const rawItems: RawDoNotSayItem[] = JSON.parse(result.text);
     const segmentById = new Map(selfSegments.map((s: any) => [s.id, s]));
+
+    // Сверка молчаливых пропусков 2026-09-04: выдуманный моделью id
+
+    // реплики означает потерянную находку, и раньше она исчезала
+
+    // молча. `ParalinguisticsService` такие случаи СЧИТАЕТ и пишет
+
+    // предупреждение — приём в проекте был, просто не везде. Число в
+
+    // логе не заменяет находку, но делает потерю видимой тому, кто
+
+    // разбирается, почему находок меньше ожидаемого.
+
+    let invented = 0;
 
     const created: Array<ConversationSignal & { segment: (typeof allSegments)[number]; why: string; saferAlternative: string }> = [];
     for (const item of rawItems) {
       const segment: any = segmentById.get(item.segmentId);
-      if (!segment) continue; // AI сослался на несуществующий/чужой сегмент — пропускаем, не падаем на всём батче
+      if (!segment) {
+        invented++;
+        continue;
+      } // AI сослался на несуществующий/чужой сегмент — пропускаем, не падаем на всём батче
 
-      const signal = await this.prisma.conversationSignal.create({
-        data: {
-          signalType: ConversationSignalType.SELF_RISK,
-          transcriptSegmentId: segment.id,
-          participantId: segment.participantId,
-          riskCategory: item.riskCategory as SelfRiskCategory,
-        },
-      });
-      await this.prisma.conversationSignalEvidence.create({
-        data: { conversationSignalId: signal.id, aiInferenceId: result.aiInferenceId },
+      // Сверка «половины операции» 2026-09-04: находка и её основание —
+      // одна запись, а не две. Здесь находка о самом пользователе («это
+      // лучше не говорить»), и без основания она превращается в совет без
+      // причины — ровно то, чего продукт обещает не делать.
+      const signal = await this.prisma.$transaction(async (tx) => {
+        const s = await tx.conversationSignal.create({
+          data: {
+            signalType: ConversationSignalType.SELF_RISK,
+            transcriptSegmentId: segment.id,
+            participantId: segment.participantId,
+            riskCategory: item.riskCategory as SelfRiskCategory,
+          },
+        });
+        await tx.conversationSignalEvidence.create({
+          data: { conversationSignalId: s.id, aiInferenceId: item.inferenceId },
+        });
+        return s;
       });
       created.push({ ...signal, segment, why: item.why, saferAlternative: item.saferAlternative });
     }
 
-    return created;
+    // Тот же приём, что уже стоит у `ParalinguisticsService`: пропуск с
+
+    // подсчётом и одним предупреждением. Число не заменяет потерянную
+
+    // находку, но делает потерю видимой — иначе «находок меньше» и
+
+    // «находок нет» выглядят одинаково.
+
+    if (invented > 0) {
+
+      this.logger.warn(
+
+        `DoNotSay для разговора ${conversationId}: модель сослалась на ${invented} несуществующих реплик — эти находки не сохранены`,
+
+      );
+
+    }
+
+
+    return { points: created, notice: chunkedAnalysisNotice(chunks.length, estimateMinutes(totalChars)) };
   }
 
   async list(userId: string, conversationId: string) {
     const conversation = await this.findOwnedConversationWithTranscript(userId, conversationId);
-    const segmentIds = (conversation.transcript?.segments ?? []).map((s: any) => s.id);
-    if (segmentIds.length === 0) return [];
-    return this.querySignals(segmentIds);
+    const all = conversation.transcript?.segments ?? [];
+    const segmentIds = all.map((s: any) => s.id);
+    // Сверка длинных разговоров 2026-09-04: разбор шёл по репликам САМОГО
+    // пользователя, значит и подпись считается по ним же — иначе число
+    // частей в подписи не совпало бы с тем, как разбор шёл на самом деле.
+    const selfSegments = all.filter((s: any) => s.participant?.isSelf === true);
+    const notice = chunkedAnalysisNotice(
+      chunkSegments(selfSegments, (s: any) => `[${s.id}] ${s.text}`).length,
+      estimateMinutes(selfSegments.reduce((n: number, s: any) => n + s.text.length, 0)),
+    );
+    if (segmentIds.length === 0) return { points: [], notice: null };
+    return { points: await this.querySignals(segmentIds), notice };
   }
 
   /** §3.17/§3.53 ТЗ: "проактивно, до следующего разговора" — все

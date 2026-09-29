@@ -13,6 +13,7 @@
 // разговоры впереди, какие прошли и есть ли для них разбор) сохранена.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   createScheduledConversation,
   linkScheduledConversation,
@@ -23,9 +24,11 @@ import {
 } from '../lib/features';
 import { Conversation, ProjectPersonLink, ScheduledConversation, WeatherForecastPreview } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 import { VenueRecommendationSection } from './VenueRecommendationSection';
 import { WeatherForecastSection } from './WeatherForecastSection';
 import { SchedulerAdviceSection } from './SchedulerAdviceSection';
+import { ReminderNote } from './ReminderNote';
 
 interface SchedulerSectionProps {
   projectId: string;
@@ -39,6 +42,10 @@ const REMINDER_OPTIONS = [
 
 export function SchedulerSection({ projectId }: SchedulerSectionProps) {
   const [scheduled, setScheduled] = useState<ScheduledConversation[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [people, setPeople] = useState<ProjectPersonLink[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,15 +62,15 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
 
   const reload = useCallback(() => {
     return listScheduledConversations(projectId)
-      .then(setScheduled)
-      .catch(() => setScheduled([]));
+      .then((v) => { setScheduled(v); setNotLoaded(false); })
+      .catch(() => { setScheduled([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
     void Promise.all([
       reload(),
-      listPeople(projectId).then(setPeople).catch(() => setPeople([])),
-      listConversations(projectId).then(setConversations).catch(() => setConversations([])),
+      listPeople(projectId).then((v) => { setPeople(v); setNotLoaded(false); }).catch(() => { setPeople([]); setNotLoaded(true); }),
+      listConversations(projectId).then((v) => { setConversations(v); setNotLoaded(false); }).catch(() => { setConversations([]); setNotLoaded(true); }),
     ]).finally(() => setLoading(false));
   }, [reload, projectId]);
 
@@ -120,8 +127,8 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
       setLinkingId(null);
       setLinkChoice('');
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось привязать разговор');
     }
   }
 
@@ -133,6 +140,7 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
 
   return (
     <section className="scheduler-section">
+      {notLoaded && <NotLoadedNotice what="запланированные встречи, людей и разговоры проекта" />}
       <h3>Планировщик разговоров</h3>
 
       <SchedulerAdviceSection projectId={projectId} />
@@ -145,11 +153,13 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
               <li key={s.id} className="scheduler-list__item">
                 <span>{new Date(s.scheduledAt).toLocaleString('ru-RU')}</span>
                 {s.person && <span> — {s.person.displayName ?? 'Без имени'}</span>}
-                {s.sparringReminderMinutesBefore && (
-                  <span className="scheduler-list__note">
-                    {s.sparringReminderSentAt ? '✓ напоминание о спарринге отправлено' : 'напоминание о спарринге запланировано'}
-                  </span>
-                )}
+                {/* Пункт [promised-arrival] 2026-09-05: здесь стояло
+                    «напоминание о спарринге запланировано» — и стояло
+                    даже тогда, когда момент напоминания давно прошёл, а
+                    оно не ушло. Утверждение о будущем держится на
+                    pg_cron, настроенном владельцем вручную: не настроен
+                    — не приходит ничего, а экран продолжает обещать. */}
+                {s.sparringReminderMinutesBefore != null && <ReminderNote scheduled={s} />}
                 <VenueRecommendationSection scheduledConversationId={s.id} />
                 <WeatherForecastSection scheduledConversationId={s.id} />
               </li>
@@ -205,9 +215,20 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
         </label>
         {weatherPreview && weatherPreview.recommendation === 'RECONSIDER' && (
           <p className="scheduler-weather-warning">
-            🟡 На эту дату в {weatherPreview.cityLabel} — {weatherPreview.condition}
+            🟡 На эту дату в {weatherPreview.cityLabel} — {weatherPreview.condition ?? 'описание погоды сервис не дал'}
             {weatherPreview.temperatureCelsius !== null && `, ${Math.round(weatherPreview.temperatureCelsius)}°C`}.{' '}
             {weatherPreview.recommendationReason}
+          </p>
+        )}
+        {/* Пункт [forecast-without-source] 2026-09-06: молчание этого
+            предупреждения читается как «с погодой всё в порядке». Когда
+            сервис прогнозов данных не дал, это не так — мы просто не
+            знаем, и сказать об этом дешевле, чем дать человеку принять
+            тишину за проверку. */}
+        {weatherPreview && weatherPreview.recommendation === null && (
+          <p className="scheduler-weather-warning">
+            Прогноз на эту дату получить не удалось: {weatherPreview.recommendationReason} Это не значит, что с погодой всё в
+            порядке — значит, что она нам неизвестна.
           </p>
         )}
         {people.length > 0 && (
@@ -233,7 +254,7 @@ export function SchedulerSection({ projectId }: SchedulerSectionProps) {
             ))}
           </select>
         </label>
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
         <div className="conversations-section__add-actions">
           <button type="button" onClick={handleCreate} disabled={creating || !scheduledAtInput}>
             {creating ? 'Планируем…' : 'Запланировать разговор'}

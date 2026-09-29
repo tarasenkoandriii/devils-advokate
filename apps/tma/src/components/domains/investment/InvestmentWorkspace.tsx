@@ -34,7 +34,7 @@ function OpportunityCard({ o, cfg, spec }: { o: Opportunity; cfg: InvConfig; spe
       </button>
       {open && (
         <div className="dtp-card__body">
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <h4>Что говорил советник</h4>
           {data && data.meetings.length === 0 && <p className="dtp-muted">Встреч пока нет. Запишите разговор с советником — разбор покажет, что именно обещано по каждому критерию.</p>}
           {data?.meetings.map((m) => <ConsultationCard key={m.id} c={m} criteria={cfg.criteria} routes={routes} onChanged={bump} />)}
@@ -74,7 +74,7 @@ export function InvestmentWorkspace({ config, manifest, projectId }: { config: I
       )}
       {tab === 'opportunities' && (
         <section className="dtp-section">
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           {data && data.length === 0 && <p className="card-section__empty">Предложений пока нет.</p>}
           {data?.map((o) => <OpportunityCard key={o.id} o={o} cfg={config} spec={spec} />)}
           {adding ? <EntityForm fields={spec.fields} submitLabel="Добавить предложение" onCancel={() => setAdding(false)} onSubmit={async (v) => { await domainApi.postJson(spec.createRoute(config.id), v); setAdding(false); setTick((t) => t + 1); }} />

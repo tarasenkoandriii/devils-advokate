@@ -11,6 +11,7 @@
 
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { ApiExceptionFilter } from '../common/api-exception.filter';
+import { MANUAL_MIGRATIONS, enumMigrations, latestManualMigration } from '../admin-db-state/manual-migrations';
 
 function runFilter(exception: unknown): { status: number; body: any } {
   const filter = new ApiExceptionFilter();
@@ -85,5 +86,48 @@ describe('ApiExceptionFilter — инфраструктурные ошибки P
 
     expect(status).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
     expect(body.error.message).toBe('Internal server error');
+  });
+});
+
+// Пункт [latest-migration-was-from-memory] 2026-09-24. Реестр миграций
+// проверялся отдельной спекой, но САМО СООБЩЕНИЕ — ничем: подмена
+// `enumMigrations()` на `MANUAL_MIGRATIONS` в фильтре не ловилась, и
+// оператор получал бы список из девятнадцати файлов вместо двух. Это тот
+// же дефект в миниатюре: проверка написана на функцию, а не на текст,
+// который читает человек.
+describe('ApiExceptionFilter — диагностика неприменённых ручных миграций', () => {
+  const enumError = () =>
+    Object.assign(new Error('invalid input value for enum "ProjectMode": "EMPLOYER_HIRING"'), {
+      code: 'P2010',
+      name: 'PrismaClientKnownRequestError',
+    });
+
+  it('КЛЮЧЕВОЙ ТЕСТ: сообщение об ошибке перечисления называет ТОЛЬКО ALTER TYPE-миграции', () => {
+    const { status, body } = runFilter(enumError());
+    expect(status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+
+    const message: string = body.error.message;
+    const named = MANUAL_MIGRATIONS.filter((m) => message.includes(m.file)).map((m) => m.file).sort();
+    const shouldName = enumMigrations().map((m) => m.file).sort();
+
+    // Прямая проба: все нужные названы.
+    expect(named).toEqual(shouldName);
+    // Обратная проба: их меньше, чем весь реестр. Без неё равенство выше
+    // выполнялось бы и тогда, когда названы все девятнадцать, — лишь бы
+    // enumMigrations() вернула столько же.
+    expect(named.length).toBeLessThan(MANUAL_MIGRATIONS.length);
+    expect(named.length).toBeGreaterThan(1);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ: «последняя миграция» в P2021 — действительно последняя по реестру, а не помнится', () => {
+    const prismaError = Object.assign(new Error('The table `public.users` does not exist'), { code: 'P2021' });
+    const message: string = runFilter(prismaError).body.error.message;
+
+    expect(message).toContain(latestManualMigration());
+    expect(message).toContain(String(MANUAL_MIGRATIONS.length));
+    // Обратная проба: самая ранняя миграция реестра в сообщении НЕ
+    // названа — иначе «последняя» ничего не отбирает.
+    const earliest = [...MANUAL_MIGRATIONS].map((m) => m.file).sort()[0];
+    if (earliest !== latestManualMigration()) expect(message).not.toContain(earliest);
   });
 });

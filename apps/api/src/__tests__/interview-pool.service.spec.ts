@@ -216,6 +216,11 @@ const MINIMAL_DRAFT = {
   complianceFlags: [],
 };
 
+// Пункт [job-domain-v2] А-10 (аудит 2026-09-03): кандидат, уже рассматриваемый
+// в другом проекте, добавляется только с новым подтверждением его согласия —
+// пятым аргументом addCandidate(). Ожидания тестов ниже не изменились
+// (текст дисклеймера, фильтрация повестки); изменился только набор
+// обязательных условий продукта, и подготовка данных это отражает.
 describe('InterviewPoolService', () => {
   it('createConfig фіксує чернетку разом зі stages/complianceFlags, відхиляє повторне створення', async () => {
     const prisma = createFakePrisma();
@@ -274,7 +279,7 @@ describe('InterviewPoolService', () => {
     await service.createConfig('u1', newProject.id, { ...MINIMAL_DRAFT, jobTitle: 'Senior Developer' });
     prisma._seedStatus({ projectId: oldProject.id, candidateProfileId: candidate.id });
 
-    const result = await service.addCandidate('u1', newProject.id, candidate.id, true);
+    const result = await service.addCandidate('u1', newProject.id, candidate.id, true, true);
 
     expect(result.historyDisclaimer).toContain('Junior Developer');
   });
@@ -304,7 +309,7 @@ describe('InterviewPoolService', () => {
     await service.createConfig('u1', newProject.id, { ...MINIMAL_DRAFT, jobTitle: 'Senior Developer' });
     prisma._seedStatus({ projectId: oldProject.id, candidateProfileId: candidate.id });
 
-    const result = await service.addCandidate('u1', newProject.id, candidate.id, false);
+    const result = await service.addCandidate('u1', newProject.id, candidate.id, false, true);
 
     expect(result.historyDisclaimer).toBeUndefined();
   });
@@ -380,7 +385,7 @@ describe('InterviewPoolService', () => {
       completedAt: new Date(),
     });
 
-    await service.addCandidate('u1', newProject.id, candidate.id, true);
+    await service.addCandidate('u1', newProject.id, candidate.id, true, true);
 
     const aiRouter = { execute: async () => ({ text: JSON.stringify([covered.id]) }) };
     const service2 = new InterviewPoolService(prisma as any, aiRouter as any);
@@ -405,7 +410,7 @@ describe('InterviewPoolService', () => {
     const oldStatus = prisma._seedStatus({ projectId: oldProject.id, candidateProfileId: candidate.id });
     prisma._seedStageProgress({ statusId: oldStatus.id, stageDefinitionId: 'stage-x', conversationId: oldConv.id, completedAt: null });
 
-    await service.addCandidate('u1', newProject.id, candidate.id, true);
+    await service.addCandidate('u1', newProject.id, candidate.id, true, true);
 
     let aiCalled = false;
     const aiRouter = { execute: async () => { aiCalled = true; return { text: '[]' }; } };
@@ -432,7 +437,7 @@ describe('InterviewPoolService', () => {
     const oldStatus = prisma._seedStatus({ projectId: oldProject.id, candidateProfileId: candidate.id });
     prisma._seedStageProgress({ statusId: oldStatus.id, stageDefinitionId: 'stage-x', conversationId: oldConv.id, completedAt: new Date() });
 
-    await service.addCandidate('u1', newProject.id, candidate.id, true);
+    await service.addCandidate('u1', newProject.id, candidate.id, true, true);
 
     const aiRouter = { execute: async () => { throw new Error('AI provider timeout'); } };
     const service2 = new InterviewPoolService(prisma as any, aiRouter as any);
@@ -471,5 +476,49 @@ describe('InterviewPoolService', () => {
 
     expect(prisma._getStageProgress().length).toBe(1);
     expect(updated.completedAt).not.toBeNull();
+  });
+});
+
+// ── Пункт [same-answer-either-way] 2026-09-24 ──
+//
+// Четвёртое место, и найдено оно не глазами, а правилом сверки: в ЭТОМ
+// ЖЕ файле лекарство [check-then-create] 2026-09-04 уже применено — оно
+// ловит дубль конфига пула. А на добавление кандидата не распространено.
+// Правило было не просто «не везде в проекте», а не везде в одном файле,
+// где автор держал его в руках.
+describe('InterviewPoolService — [same-answer-either-way] 2026-09-24', () => {
+  it('КЛЮЧЕВОЙ ТЕСТ: гонка при добавлении кандидата даёт то же сообщение, что и обычный дубль', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const candidate = prisma._seedCandidate({ ownerUserId: 'u1', displayName: 'Иван' });
+    const service = makeService(prisma);
+
+    // Перехват через defineProperty: фейковая Prisma — Proxy, который
+    // собирает делегат модели заново на каждом обращении, и обычное
+    // присваивание поля молча пропадает — тест выглядел бы рабочим, не
+    // проверяя ничего.
+    const делегат = (prisma as any).candidatePipelineStatus;
+    let бросили = false;
+    Object.defineProperty(prisma, 'candidatePipelineStatus', {
+      configurable: true,
+      value: {
+        ...делегат,
+        // конкурент успел записать между проверкой и вставкой
+        findUnique: async () => null,
+        create: async () => {
+          бросили = true;
+          throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+        },
+      },
+    });
+
+    const err = await service.addCandidate('u1', project.id, candidate.id, false).catch((e: unknown) => e);
+    delete (prisma as any).candidatePipelineStatus;
+
+    expect(бросили).toBe(true); // перехват сработал, иначе тест пуст
+    expect(err).toBeInstanceOf(BadRequestException);
+    // Ровно тот же текст, что у проверки выше: проигравший гонку читает
+    // то же, что прочитал бы, проиграв её на секунду раньше.
+    expect((err as Error).message).toContain('уже добавлен в пул');
   });
 });

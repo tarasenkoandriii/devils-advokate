@@ -35,6 +35,8 @@ const scenarios: Array<[string, () => void]> = [
   }],
   ['payload с недопустимыми символами отбрасывается целиком', () => {
     assertEqual(sanitizeStartPayload('jobs_landing__google-ads'), 'jobs_landing__google-ads', 'допустимые символы сохраняются');
+    // Пункт [job-domain-v2] §8.5 — третий источник (работодатель) проходит тем же фильтром
+    assertEqual(sanitizeStartPayload('employer_landing__fb'), 'employer_landing__fb', 'источник работодателя с кампанией');
     // Зачистка была бы хуже: «google/ads» стало бы «googleads», а
     // «яндекс» — пустой кампанией, то есть данными, которые считают
     // не то.

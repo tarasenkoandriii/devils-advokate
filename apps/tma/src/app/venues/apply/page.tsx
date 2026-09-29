@@ -14,6 +14,7 @@ import {
 } from '../../../lib/features';
 import { PlaceSearchCandidate, VenueAutofillData } from '../../../lib/types';
 import { useBackButton } from '../../../hooks/useBackButton';
+import { MyVenueApplications } from '../../../components/MyVenueApplications';
 import { haptic } from '../../../lib/telegram';
 
 export default function VenueApplyPage() {
@@ -87,7 +88,16 @@ export default function VenueApplyPage() {
     return (
       <main className="page">
         <h2>Заявка отправлена</h2>
-        <p className="conversations-section__hint">Заявка проходит модерацию — появится в каталоге после одобрения.</p>
+        {/* Пункт [own-submission] 2026-09-04: раньше здесь обещание
+            заканчивалось — «появится в каталоге после одобрения», и,
+            уйдя со страницы, человек терял и его: вернуться к своей
+            заявке было некуда, хотя список своих заявок на сервере был
+            всё это время. */}
+        <p className="conversations-section__hint">
+          Заявка ушла на модерацию. Решение по ней — ниже, на этой же странице; она останется здесь и после того, как
+          вы её закроете.
+        </p>
+        <MyVenueApplications />
       </main>
     );
   }
@@ -99,6 +109,8 @@ export default function VenueApplyPage() {
         Найдите своё заведение через поиск — данные (адрес, телефон, часы работы) подгрузятся автоматически, вы
         сможете их поправить перед отправкой на модерацию.
       </p>
+
+      <MyVenueApplications />
 
       {!candidates && (
         <div className="conversations-section__add">
@@ -148,7 +160,7 @@ export default function VenueApplyPage() {
             Телефон
             <input value={form.phone ?? ''} onChange={(e) => setForm({ ...form, phone: e.target.value || null })} />
           </label>
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <div className="conversations-section__add-actions">
             <button type="button" onClick={handleSubmit} disabled={submitting || !form.name.trim() || !form.address.trim()}>
               {submitting ? 'Отправляем…' : 'Отправить на модерацию'}

@@ -15,6 +15,7 @@
 // отправлено на сервер), пусть и ненадолго.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import type { ChangeEvent } from 'react';
 import { grantConsent, listPhotoVerifications, uploadPhotoForVerification } from '../lib/features';
 import { PhotoVerification } from '../lib/types';
@@ -28,16 +29,21 @@ const CONSENT_VERSION = 'v1';
 
 export function PhotoVerificationSection({ personFactId }: PhotoVerificationSectionProps) {
   const [verifications, setVerifications] = useState<PhotoVerification[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [consentGranted, setConsentGranted] = useState(false);
   const [grantingConsent, setGrantingConsent] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [publicCopyNote, setPublicCopyNote] = useState<string | null>(null);
 
   useEffect(() => {
     listPhotoVerifications(personFactId)
-      .then(setVerifications)
-      .catch(() => setVerifications([]))
+      .then((v) => { setVerifications(v); setNotLoaded(false); })
+      .catch(() => { setVerifications([]); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [personFactId]);
 
@@ -63,8 +69,13 @@ export function PhotoVerificationSection({ personFactId }: PhotoVerificationSect
     setUploading(true);
     setError(null);
     try {
-      const results = await uploadPhotoForVerification(personFactId, file);
+      const { verifications: results, publicCopy } = await uploadPhotoForVerification(personFactId, file);
       setVerifications((prev) => [...results, ...prev]);
+      // Пункт [delete-says-done] 2026-09-06: обещание ниже по экрану
+      // безусловное — «ссылка удаляется сразу после завершения
+      // поиска». Если удалить не удалось, человек узнаёт об этом
+      // здесь, а не остаётся с обещанием вместо факта.
+      setPublicCopyNote(publicCopy.removed ? null : publicCopy.note);
       haptic('success');
     } catch (err) {
       haptic('error');
@@ -78,6 +89,7 @@ export function PhotoVerificationSection({ personFactId }: PhotoVerificationSect
 
   return (
     <section className="photo-verification-section">
+      {notLoaded && <NotLoadedNotice what="прошлые проверки фото" />}
       <h3>Проверка фото реверс-поиском</h3>
 
       {verifications.length > 0 && (
@@ -112,7 +124,8 @@ export function PhotoVerificationSection({ personFactId }: PhotoVerificationSect
           <p>
             Для реверс-поиска это конкретное фото будет НЕНАДОЛГО РАЗМЕЩЕНО ПУБЛИЧНО В ИНТЕРНЕТЕ по ссылке
             (не просто отправлено на наш сервер) — в это время его технически сможет открыть кто угодно,
-            у кого окажется ссылка. Ссылка удаляется сразу после завершения поиска.
+            у кого окажется ссылка. Ссылка удаляется сразу после завершения поиска — а если удалить не
+            удастся, мы скажем об этом прямо здесь, а не промолчим.
           </p>
           <p>Согласие можно отозвать в любой момент в настройках приватности.</p>
           {error && <p className="consent-gate__error">{error}</p>}
@@ -122,7 +135,8 @@ export function PhotoVerificationSection({ personFactId }: PhotoVerificationSect
         </div>
       ) : (
         <div className="conversations-section__add">
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
+      {publicCopyNote && <p role="alert" className="generation-error">{publicCopyNote}</p>}
           <label>
             Выберите фото для проверки
             <input type="file" accept="image/*" onChange={handleFileSelected} disabled={uploading} />

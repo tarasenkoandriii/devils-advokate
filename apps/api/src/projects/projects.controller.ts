@@ -66,7 +66,8 @@ export class ProjectsController {
 
   @Delete(':id')
   async remove(@CurrentUser() userId: string, @Param('id') id: string) {
-    await this.projects.remove(userId, id);
-    return { deleted: true };
+    // Сверка удаления проекта 2026-09-04: ответ теперь содержит и список
+    // того, что переживает удаление, — как у удаления аккаунта.
+    return this.projects.remove(userId, id);
   }
 }

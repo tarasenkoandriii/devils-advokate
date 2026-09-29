@@ -33,6 +33,10 @@ function createFakePrisma() {
           .sort((a, b) => b.occurredAt - a.occurredAt);
         return take ? matching.slice(0, take) : matching;
       },
+      // Пункт [shown-not-all] 2026-09-05: фейк умеет count — повестка
+      // считает целое, чтобы сказать модели, что видит не весь архив.
+      count: async ({ where }: any) =>
+        conversations.filter((c) => c.projectId === where.projectId && where.status.in.includes(c.status)).length,
     },
     promptVersion: {
       findFirst: async () => null,
@@ -145,6 +149,38 @@ async function run() {
     await svc.generate(USER_ID, PROJECT_ID);
     const matches = (fakeRouter.lastRequest.userPrompt.match(/Разговор \d+/g) ?? []).length;
     assertEqual(matches <= 5, true, 'в промпт попало не больше 5 прошлых разговоров');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [server-said-which-day]: порядок разговоров назван верно, а не наугад', async () => {
+    // Дату из промпта убрали (сервер не знает календаря человека), и
+    // вместо неё модель получает ПОРЯДОК. Неверно названное направление
+    // хуже отсутствия даты: модель станет рассуждать «раньше — позже»
+    // задом наперёд. Поэтому проверяется не наличие подписи, а
+    // совпадение подписи с настоящим порядком выборки.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
+    prisma._seedConversation({
+      id: 'conv-old', projectId: PROJECT_ID, status: 'TRANSCRIBED', occurredAt: new Date('2026-01-01T10:00:00Z'),
+      transcript: { segments: [{ text: 'Самый ранний разговор' }] },
+    });
+    prisma._seedConversation({
+      id: 'conv-new', projectId: PROJECT_ID, status: 'TRANSCRIBED', occurredAt: new Date('2026-09-01T10:00:00Z'),
+      transcript: { segments: [{ text: 'Самый недавний разговор' }] },
+    });
+    const fakeRouter = new FakeAIRouterService();
+    fakeRouter.responseText = '[]';
+    const svc = new ConversationAgendaService(prisma as any, fakeRouter as any);
+
+    await svc.generate(USER_ID, PROJECT_ID);
+    const prompt: string = fakeRouter.lastRequest.userPrompt;
+    const first = prompt.indexOf('Самый недавний разговор');
+    const second = prompt.indexOf('Самый ранний разговор');
+    assertEqual(first >= 0 && second >= 0, true, 'оба разговора попали в промпт');
+    assertEqual(first < second, true, 'выборка идёт от недавнего к раннему');
+    // И подпись у ПЕРВОГО совпадает с этим направлением.
+    const head = prompt.slice(0, first);
+    assertEqual(head.includes('1 из 2, 1 — самый недавний'), true, 'направление названо так же, как отсортировано');
+    assertEqual(head.includes('самый ранний'), false, 'направление не названо наоборот');
   });
 
   test('generate() создаёт НОВУЮ запись при повторном вызове, не мутирует старую', async () => {

@@ -59,7 +59,7 @@ export async function extractTextFromImage(base64Content: string, apiKey: string
     throw new OcrError(`Vision API error: ${data.responses[0].error.message ?? 'unknown'}`);
   }
   if (typeof annotation !== 'string' || annotation.trim().length === 0) {
-    throw new OcrError('Vision API не розпізнав жодного тексту на зображенні');
+    throw new OcrError('Vision API не распознал на изображении ни одного текста');
   }
   return annotation;
 }

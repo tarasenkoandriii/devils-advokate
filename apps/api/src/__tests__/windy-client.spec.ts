@@ -85,13 +85,16 @@ describe('windy-client (аудит/расширение периметра по�
     expect(result.condition).toBe('ясно'); // 5% облачности на среднем элементе
   });
 
-  it('весь ряд облачности отсутствует и weatherWarnings=0 — честное "нет данных", не выдумывает "ясно"', async () => {
+  it('весь ряд облачности отсутствует и weatherWarnings=0 — честное «данных нет» (null), не выдумывает "ясно"', async () => {
     (global as any).fetch = jest.fn(async () => ({
       ok: true,
       json: async () => windyResponse({ 'weatherwarnings-surface': [0, 0, 0] }), // облачность вообще не запрошена/не пришла
     }));
     const result = await getWindyForecast('key', COORDS, TARGET_DATE);
-    expect(result.condition).toBe('нет данных');
+    /** ПЕРЕПИСАН, Пункт [forecast-without-source] 2026-09-06: смысл
+     * («не выдумывает "ясно"») сохранён, пустота теперь null — строка
+     * «нет данных» доходила до промпта как описание погоды. */
+    expect(result.condition).toBeNull();
   });
 
   it('бросает WindyError при не-ok HTTP ответе, тело ответа попадает в сообщение', async () => {
@@ -105,9 +108,9 @@ describe('windy-client (аудит/расширение периметра по�
     await expect(getWindyForecast('key', COORDS, TARGET_DATE)).rejects.toThrow(WindyError);
   });
 
-  it('пустой ts[] — честный "нет данных", не падает', async () => {
+  it('пустой ts[] — честное «данных нет» (null), не падает', async () => {
     (global as any).fetch = jest.fn(async () => ({ ok: true, json: async () => ({ ts: [], units: {} }) }));
     const result = await getWindyForecast('key', COORDS, TARGET_DATE);
-    expect(result).toEqual({ temperatureCelsius: null, condition: 'нет данных' });
+    expect(result).toEqual({ temperatureCelsius: null, condition: null, source: 'windy' });
   });
 });

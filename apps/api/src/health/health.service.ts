@@ -7,8 +7,12 @@
 // [interview-pool], де був виняток для фізично важкої праці, і
 // Пункту [investment], де Fact Check API мав окремий дозволений шлях).
 
+import { intakeNote, type SourceIntake } from '../common/source-intake';
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../common/unique-violation';
+import { numberedTranscript, resolveSegmentRef } from '../common/transcript-prompt';
+import { normalizeCurrency } from '../common/money';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { extractTextFromImage, OcrError } from '../common/vision-ocr-client';
@@ -18,6 +22,7 @@ import { ConsentType, HealthCriterionCategory } from '@prisma/client';
 import { assertOwnedHealthProject } from './health-access';
 import { ExtractedHealthConfigDraft } from './health-onboarding.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled, substanceSite } from '../common/claim-substance';
 
 const BREAKDOWN_TASK_TYPE = 'health-consultation-breakdown';
 
@@ -43,12 +48,22 @@ interface RawBreakdown {
   criteriaBreakdown: CriterionStatement[];
 }
 
-function isValidBreakdown(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidBreakdown(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.criteriaBreakdown)) return false;
     return parsed.criteriaBreakdown.every(
-      (c: any) => typeof c?.criterionId === 'string' && typeof c?.whatWasSaid === 'string',
+      // Пункт [finding-without-substance-2] 2026-09-26: `criterionId`
+      // пустым не совпадёт ни с одним критерием домена, а вот
+      // `whatWasSaid` сохраняется как есть — разбор существует ради этой
+      // строки. Одна из ЧЕТЫРЁХ идентичных копий (dtp, health,
+      // family-law, investment); реестр — `common/claim-substance.ts`.
+      (c: any) =>
+        typeof c?.criterionId === 'string' &&
+        allFilled(c, substanceSite('isValidBreakdown').required.map((f) => f.field)),
     );
   } catch {
     return false;
@@ -60,7 +75,7 @@ function isValidBreakdown(text: string): boolean {
 // аналізів (§2.1 критерій 2 non-device CDS).
 const BREAKDOWN_SYSTEM_PROMPT =
   'Тебе дано транскрипт консультації з лікарем/спеціалістом та перелік критеріїв, важливих для користувача. ' +
-  'Для КОЖНОГО критерію виклади НЕЙТРАЛЬНО, що САМЕ сказав лікар по цьому пункту — whatWasSaid, з sourceSegmentId (id репліки-джерела), якщо застосовно. ' +
+  'Для КОЖНОГО критерію виклади НЕЙТРАЛЬНО, що САМЕ сказав лікар по цьому пункту — whatWasSaid, з sourceSegmentId (НОМЕР репліки-джерела — число у квадратних дужках перед реплікою), якщо застосовно. ' +
   'КРИТИЧНО ВАЖЛИВО: НІКОЛИ не формулюй висновок як "варто робити операцію"/"не варто", "цей лікар правий", "цей метод лікування безпечніший чи кращий", НЕ став оцінку чи бал. ' +
   'ТАКОЖ НІКОЛИ не інтерпретуй результати аналізів/знімків самостійно — фіксуй ЛИШЕ те, що лікар сам сказав про них уголос у розмові, не роби власних медичних висновків з жодних даних. ' +
   'Якщо лікар взагалі не торкнувся критерію — чесно напиши "не піднімалось у розмові", не вигадуй. ' +
@@ -82,33 +97,49 @@ export class HealthService {
 
     const existing = await this.prisma.healthConfig.findUnique({ where: { projectId } });
     if (existing) {
-      throw new BadRequestException(`HealthConfig for project ${projectId} already exists`);
+      throw new BadRequestException(`Медицинский разбор для этого проекта уже настроен`);
     }
     // АУДИТ (повний аудит проєкту): та сама відсутня валідація, що
     // виправлена в investment/family-law/dtp.
     for (const c of draft.criteria) {
       if (!Object.values(HealthCriterionCategory).includes(c.category)) {
-        throw new BadRequestException(`Unknown criterion category: ${c.category}`);
+        throw new BadRequestException(`Неизвестная категория критерия: ${c.category}`);
       }
     }
 
-    return this.prisma.healthConfig.create({
-      data: {
-        projectId,
-        goalDescription: draft.goalDescription,
-        targetBudget: draft.targetBudget ?? undefined,
-        currency: draft.currency ?? undefined,
-        criteria: {
-          create: draft.criteria.map((c) => ({
-            text: c.text,
-            category: c.category,
-            isRequired: c.isRequired,
-            orderIndex: c.orderIndex,
-          })),
+    // Пункт [check-then-create] 2026-09-04: проверка выше остаётся, но
+    // она НЕ гарантия — между ней и вставкой есть окно, и два
+    // одновременных нажатия (двойной тап, повтор при плохой связи)
+    // проходили её оба. `projectId` уникален, поэтому второй вызов падал
+    // с P2002, и человек читал внутреннюю ошибку сервера вместо того же
+    // «уже настроено», что и при обычном повторе. Гонку здесь не
+    // исключить без блокировки, но ответ обязан быть один и тот же
+    // независимо от того, кто успел раньше.
+    try {
+      // `return await`, а не `return`: без await промис уходит из
+      // try/catch, и отказ базы летит мимо обработчика — ошибка
+      // была бы «поймана» только на бумаге.
+      return await this.prisma.healthConfig.create({
+        data: {
+          projectId,
+          goalDescription: draft.goalDescription,
+          targetBudget: draft.targetBudget ?? undefined,
+          currency: draft.currency ?? undefined,
+          criteria: {
+            create: draft.criteria.map((c) => ({
+              text: c.text,
+              category: c.category,
+              isRequired: c.isRequired,
+              orderIndex: c.orderIndex,
+            })),
+          },
         },
-      },
-      include: { criteria: { orderBy: { orderIndex: 'asc' } } },
-    });
+        include: { criteria: { orderBy: { orderIndex: 'asc' } } },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new BadRequestException(`Медицинский разбор для этого проекта уже настроен`);
+      throw err;
+    }
   }
 
   async getConfig(userId: string, projectId: string) {
@@ -148,6 +179,9 @@ export class HealthService {
     conversationId: string | undefined,
     occurredAt: string,
     estimatedCost?: number,
+    // Аудит денег 2026-09-03 — третий домен с тем же полем и той же
+    // историей: в схеме есть, писать было некому.
+    currency?: string | null,
   ) {
     const provider = await this.assertOwnedProvider(userId, providerId);
     if (conversationId) {
@@ -160,7 +194,7 @@ export class HealthService {
       throw new BadRequestException('estimatedCost не может быть отрицательным');
     }
     return this.prisma.healthConsultation.create({
-      data: { providerId, conversationId, occurredAt: new Date(occurredAt), estimatedCost },
+      data: { providerId, conversationId, occurredAt: new Date(occurredAt), estimatedCost, currency: normalizeCurrency(currency) },
     });
   }
 
@@ -183,10 +217,11 @@ export class HealthService {
       }),
     ]);
     if (segments.length === 0) {
-      throw new BadRequestException('Транскрипт цієї консультації ще порожній — нечего аналізувати');
+      throw new BadRequestException('Транскрипт этой консультации ещё пуст — нечего анализировать');
     }
 
-    const transcriptText = segments.map((s: { id: string; text: string }) => `[id=${s.id}] ${s.text}`).join('\n');
+    const transcript = numberedTranscript(segments);
+    const transcriptText = transcript.text;
     const criteriaText = criteria
       .map((c: any) => `[id=${c.id}] (${c.category}) ${c.text}${c.isRequired ? ' (критично)' : ''}`)
       .join('\n');
@@ -212,10 +247,20 @@ export class HealthService {
     }
 
     const parsed: RawBreakdown = JSON.parse(result.text);
+    // Сверка «ссылка на реплику» 2026-09-04: раньше `sourceSegmentId`
+    // сохранялся как есть. Модель могла назвать реплику, которой нет, и
+    // разбор сослался бы на слова, которых собеседник не говорил.
+    // Теперь номер переводится в настоящий id, а несуществующий —
+    // становится «источник не указан»: у утверждения будет честное
+    // отсутствие ссылки вместо выдуманной.
+    const criteriaBreakdown = parsed.criteriaBreakdown.map((b) => ({
+      ...b,
+      sourceSegmentId: resolveSegmentRef(transcript.byRef, b.sourceSegmentId),
+    }));
     return this.prisma.healthConsultation.update({
       where: { id: consultationId },
       data: {
-        criteriaBreakdown: parsed.criteriaBreakdown as any,
+        criteriaBreakdown: criteriaBreakdown as any,
         draftedAt: new Date(),
         // АУДИТ (свіжий прохід одразу після реалізації): якщо
         // консультацію вже раз підтвердили (reviewedAt був
@@ -267,8 +312,9 @@ export class HealthService {
     await this.assertOwnedProvider(userId, providerId);
 
     let sourceText: string;
+    let sourceIntake: SourceIntake;
     try {
-      sourceText = await fetchUrlText(sourceUrl);
+      ({ text: sourceText, intake: sourceIntake } = await fetchUrlText(sourceUrl));
     } catch (err) {
       if (err instanceof UnsafeUrlError || err instanceof UrlFetchError) {
         throw new BadRequestException(err.message);
@@ -276,9 +322,13 @@ export class HealthService {
       throw err;
     }
 
-    return this.prisma.healthSourceReference.create({
+    // Пункт [stored-text-cut] 2026-09-06: если страница вошла не
+    // целиком, человек узнаёт об этом рядом с самим текстом, а не
+    // догадывается по обрыву на полуслове.
+    const created = await this.prisma.healthSourceReference.create({
       data: { providerId, sourceUrl, sourceText },
     });
+    return { ...created, intakeNote: intakeNote(sourceIntake) };
   }
 
   // ── Чернетка OCR результатів аналізів (Пункт [health-lab-ocr], за прямим запитом) ──
@@ -318,7 +368,7 @@ export class HealthService {
       ocrText = await extractTextFromImage(base64Content, apiKey);
     } catch (err) {
       if (err instanceof OcrError) {
-        throw new BadGatewayException(`Не вдалося розпізнати текст: ${err.message}`);
+        throw new BadGatewayException(`Не удалось распознать текст: ${err.message}`);
       }
       throw err;
     }
@@ -359,7 +409,7 @@ export class HealthService {
       where: { config: { project: { ownerId: userId } }, createdAt: { gte: since } },
     });
     if (count >= OCR_DAILY_LIMIT_PER_USER) {
-      throw new ForbiddenException(`Досягнуто денний ліміт розпізнавання документів (${OCR_DAILY_LIMIT_PER_USER}/добу)`);
+      throw new ForbiddenException(`Достигнут суточный лимит распознавания документов (${OCR_DAILY_LIMIT_PER_USER}/сутки)`);
     }
   }
 

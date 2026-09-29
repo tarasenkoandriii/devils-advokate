@@ -6,6 +6,7 @@ function createFakePrisma() {
   const argumentsStore: any[] = [];
   const outcomes: any[] = [];
   const escalationEvents: any[] = [];
+  const projectPeople: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
@@ -16,6 +17,13 @@ function createFakePrisma() {
     _getOutcomes() { return outcomes; },
     _seedEscalationEvent(e: any) { escalationEvents.push({ id: nextId(), createdAt: new Date(), ...e }); },
     _getEscalationEvents() { return escalationEvents; },
+    // Пункт [project-log-v2] — связь «человек ↔ проект» для проверки
+    // выбранного пользователем собеседника.
+    _seedProjectPerson(pp: any) { projectPeople.push(pp); },
+    projectPerson: {
+      findFirst: async ({ where }: any) =>
+        projectPeople.find((pp) => pp.projectId === where.projectId && pp.personId === where.personId) ?? null,
+    },
 
     project: {
       findFirst: async ({ where }: any) => {
@@ -168,7 +176,47 @@ async function run() {
     const svc = new DecisionOutcomeService(prisma as any);
     const summary = await svc.getCalibrationSummary(USER_ID);
     assertEqual(summary.totalRecorded, 0, 'ничего не накоплено');
-    assertEqual(summary.overall.matchRate, 0, 'нет данных — 0, не деление на ноль/NaN');
+    /** ПЕРЕПИСАН, Пункт [rate-on-one-case] 2026-09-06. Тест требовал
+     * `matchRate === 0` при пустой выборке — «0, не деление на ноль».
+     * От NaN он защищал верно, но закреплял двусмысленность: ноль-как-
+     * «не считали» был неотличим от ноля-как-«ни разу не совпало», а
+     * экран печатал и то и другое как «0%». Теперь null — «доля не
+     * имеет права показаться», и это ровно то, что читает экран. */
+    assertEqual(summary.overall.matchRate, null, 'нет данных — null, а не 0 и не NaN');
+    assertEqual(summary.overall.rateShown, false, 'показывать долю нечем');
+    assertEqual(summary.overall.classifiable, 0, 'сравнимых случаев нет');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [rate-on-one-case]: один случай не превращается в «100%» о человеке', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: 'p1', ownerId: USER_ID });
+    prisma._seedOutcome({ projectId: 'p1', predictedLean: 0.5, actualOutcome: 'WENT_WELL' });
+    const svc = new DecisionOutcomeService(prisma as any);
+
+    const summary = await svc.getCalibrationSummary(USER_ID);
+    assertEqual(summary.overall.matchCount, 1, 'совпадение есть — счётчик честный');
+    assertEqual(summary.overall.classifiable, 1, 'сравнимый случай один');
+    assertEqual(summary.overall.rateShown, false, 'доля по одному случаю не показывается');
+    assertEqual(summary.overall.matchRate, null, 'и не считается — null, а не 1');
+    assertEqual(summary.minSample, 3, 'порог сообщается экрану, а не придумывается им');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [rate-on-one-case]: порог категории считает СРАВНИМЫЕ случаи, а не все отмеченные', async () => {
+    const prisma = createFakePrisma();
+    for (const id of ['p1', 'p2', 'p3', 'p4', 'p5']) prisma._seedProject({ id, ownerId: USER_ID });
+    // Пять отмеченных исходов в категории, но сравним только один:
+    // у остальных исход «смешанный» или «слишком рано судить».
+    prisma._seedOutcome({ projectId: 'p1', predictedLean: 0.5, actualOutcome: 'WENT_WELL', category: 'карьера' });
+    prisma._seedOutcome({ projectId: 'p2', predictedLean: 0.5, actualOutcome: 'MIXED', category: 'карьера' });
+    prisma._seedOutcome({ projectId: 'p3', predictedLean: 0.5, actualOutcome: 'TOO_EARLY_TO_TELL', category: 'карьера' });
+    prisma._seedOutcome({ projectId: 'p4', predictedLean: 0, actualOutcome: 'WENT_WELL', category: 'карьера' });
+    prisma._seedOutcome({ projectId: 'p5', predictedLean: null, actualOutcome: 'WENT_WELL', category: 'карьера' });
+    const svc = new DecisionOutcomeService(prisma as any);
+
+    const summary = await svc.getCalibrationSummary(USER_ID);
+    // Прежний фильтр смотрел на list.length (пять) — категория
+    // проходила порог и печаталась как «1 из 1 (100%)».
+    assertEqual(summary.byCategory.length, 0, 'сравним один случай — категория не показывается');
   });
 
   test('getCalibrationSummary() корректно считает совпадения и два направления расхождения', async () => {
@@ -385,6 +433,28 @@ async function run() {
     await svc.logEscalationCategory(USER_ID, 'proj-x', 'sess-1', 'CRITICAL' as any);
     assertEqual(prisma._getEscalationEvents().length, 1, 'событие создано');
     assertEqual(prisma._getEscalationEvents()[0].category, 'CRITICAL', 'категория сохранена как есть');
+    assertEqual(prisma._getEscalationEvents()[0].personId, null, 'без выбранного собеседника — честный null, не «вероятный фигурант» проекта');
+  });
+
+  // Пункт [project-log-v2]: собеседник у события накала — его выбирает
+  // пользователь, и он нужен логу проекта (§3.39), чтобы запись называла
+  // человека. Метрика сглаживания при этом работает и без него.
+  test('logEscalationCategory() сохраняет выбранного собеседника и не принимает человека не из этого проекта', async () => {
+    const { NotFoundException } = await import('@nestjs/common');
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: 'proj-x', ownerId: USER_ID });
+    prisma._seedProjectPerson({ projectId: 'proj-x', personId: 'person-1' });
+    const svc = new DecisionOutcomeService(prisma as any);
+
+    await svc.logEscalationCategory(USER_ID, 'proj-x', 'sess-1', 'HIGH' as any, 'person-1');
+    assertEqual(prisma._getEscalationEvents()[0].personId, 'person-1', 'собеседник сохранён');
+
+    await assertThrowsAsync(
+      () => svc.logEscalationCategory(USER_ID, 'proj-x', 'sess-1', 'HIGH' as any, 'person-чужой'),
+      NotFoundException,
+      'человек не из этого проекта',
+    );
+    assertEqual(prisma._getEscalationEvents().length, 1, 'вторая запись не создана');
   });
 
   for (const [name, fn] of scenarios) {

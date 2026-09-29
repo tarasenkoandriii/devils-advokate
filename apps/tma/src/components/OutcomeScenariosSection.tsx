@@ -8,7 +8,10 @@
 // не вперемешку по времени создания (сортировка уже сделана на backend).
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { confirmOutcomeScenario, generateOutcomeScenarios, listOutcomeScenarios } from '../lib/features';
+import { AnalysisBasisNote } from './AnalysisBasisNote';
+import { levelWording } from '../lib/confidence';
 import { OutcomeScenario, ScenarioType } from '../lib/types';
 import { haptic } from '../lib/telegram';
 
@@ -23,14 +26,17 @@ const SCENARIO_LABELS: Record<ScenarioType, string> = {
   USER_DEFINED: 'Ваш сценарий',
 };
 
-const CONFIDENCE_LABELS: Record<string, string> = {
-  LOW: 'низкая уверенность',
-  MEDIUM: 'средняя уверенность',
-  HIGH: 'высокая уверенность',
-};
+// Пункт [unmeasured-confidence] 2026-09-05: словесная шкала приходит от
+// самой модели, и без источника «высокая уверенность» читается как
+// заключение ПРОДУКТА о надёжности прогноза. Общий текст — в
+// `lib/confidence.ts`.
 
 export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionProps) {
   const [scenarios, setScenarios] = useState<OutcomeScenario[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   async function handleConfirm(scenarioId: string, confirmed: boolean) {
@@ -48,11 +54,13 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
   const [userScenarioInputs, setUserScenarioInputs] = useState<string[]>(['']);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Пункт [partial-basis] 2026-09-04: на чём построен ЭТОТ прогноз.
+  const [basisNote, setBasisNote] = useState<string | null>(null);
 
   useEffect(() => {
     listOutcomeScenarios(projectId)
-      .then(setScenarios)
-      .catch(() => setScenarios([]))
+      .then((v) => { setScenarios(v); setNotLoaded(false); })
+      .catch(() => { setScenarios([]); setNotLoaded(true); })
       .finally(() => setLoading(false));
 
   }, [projectId]);
@@ -70,7 +78,11 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
     setError(null);
     try {
       const descriptions = userScenarioInputs.map((s) => s.trim()).filter(Boolean);
-      await generateOutcomeScenarios(projectId, descriptions);
+      // Пункт [partial-basis] 2026-09-04: свежий ответ несёт основание
+      // прогноза — на всех ли данных он построен. В сохранённом списке
+      // его нет, и приписка сама об этом говорит.
+      const { basisNote: basis } = await generateOutcomeScenarios(projectId, descriptions);
+      setBasisNote(basis);
       const list = await listOutcomeScenarios(projectId);
       setScenarios(list);
       setUserScenarioInputs(['']);
@@ -87,11 +99,14 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
 
   return (
     <section className="outcome-scenarios-section">
+      {notLoaded && <NotLoadedNotice what="сценарии исходов" />}
       <h3>Прогноз по сценариям</h3>
       <p className="conversations-section__hint">
         🟡 Догадка ИИ — грубая, честная оценка возможного развития событий, не предсказание. Сравните сценарии рядом,
         чтобы увидеть спектр исходов, а не одно «правильное» решение.
       </p>
+
+      <AnalysisBasisNote note={basisNote} />
 
       {scenarios.length > 0 && (
         <ul className="outcome-scenarios-list">
@@ -102,7 +117,7 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
                   {s.scenarioType === 'USER_DEFINED' ? s.userDescription : SCENARIO_LABELS[s.scenarioType as ScenarioType]}
                 </span>
                 <span className={`outcome-scenarios-list__confidence outcome-scenarios-list__confidence--${s.confidence.toLowerCase()}`}>
-                  {CONFIDENCE_LABELS[s.confidence]}
+                  {levelWording(s.confidence)}
                 </span>
               </div>
               <p>{s.outcomeDescription}</p>
@@ -137,7 +152,7 @@ export function OutcomeScenariosSection({ projectId }: OutcomeScenariosSectionPr
         <button type="button" onClick={addUserScenarioField}>
           + Добавить ещё сценарий
         </button>
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
         <div className="conversations-section__add-actions">
           <button type="button" onClick={handleGenerate} disabled={generating}>
             {generating ? 'Строим прогноз…' : 'Построить прогноз по сценариям'}

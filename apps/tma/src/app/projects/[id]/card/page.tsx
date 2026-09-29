@@ -17,6 +17,7 @@ import {
 import { ConversationCard, ProtectedNoteType } from '../../../../lib/types';
 import { useBackButton } from '../../../../hooks/useBackButton';
 import { haptic } from '../../../../lib/telegram';
+import { reportFailure } from '../../../../lib/failure-report';
 
 export default function ConversationCardPage() {
   const params = useParams<{ id: string }>();
@@ -101,13 +102,13 @@ export default function ConversationCardPage() {
       await deleteProtectedNote(noteId);
       await loadCard(params.id);
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось удалить заметку');
     }
   }
 
   if (loading) return <main className="page">Загрузка…</main>;
-  if (error) return <main className="page"><p className="generation-error">{error}</p></main>;
+  if (error) return <main className="page"><p role="alert" className="generation-error">{error}</p></main>;
   if (!card) return null;
 
   return (
@@ -132,6 +133,10 @@ export default function ConversationCardPage() {
       </CardSection>
 
       <CardSection title="Ключевые аргументы">
+        {/* Пункт [shown-not-all] 2026-09-05: это ПЯТЬ самых весомых, а не
+            весь набор. Карточку человек уносит в разговор — и уносил
+            пятёрку, считая её своей позицией целиком. */}
+        {card.topArgumentsNote && <p className="analysis-basis-note">{card.topArgumentsNote}</p>}
         {card.topArguments.length > 0 ? (
           <ul className="card-argument-list">
             {card.topArguments.map((a) => (

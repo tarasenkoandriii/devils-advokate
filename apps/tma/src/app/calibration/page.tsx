@@ -12,25 +12,41 @@
 // описывают паттерн в решениях, не диагностируют человека.
 //
 // Пункт 73 (§3.34 ТЗ) добавил блок "Решено положительно" (скользящие
-// окна: сегодня/3 дня/неделя) — честно только одна метрика из двух,
-// описанных в ТЗ. Вторая метрика ("прекращённых/сглаженных
-// конфликтов") заблокирована §3.33 — тем же непостроенным live-
-// индикатором накала, что блокирует пункты 51/52/55/57 общего списка,
-// см. /TODO.md.
+// окна: сегодня/3 дня/неделя). Вторая метрика ТЗ ("сглаженных
+// конфликтов") тогда была заблокирована непостроенным индикатором
+// накала §3.33 — с Пунктом 85 она реально считается из
+// EscalationCategoryEvent (см. DecisionOutcomeService.getSuccessStats),
+// комментарий об этом устарел и исправлен аудитом 2026-09-03.
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCalibrationSummary, getSuccessStats } from '../../lib/features';
 import { CalibrationSummary, SuccessStats } from '../../lib/types';
+import { SectionLoadError } from '../../components/SectionLoadError';
 import { useBackButton } from '../../hooks/useBackButton';
 
+/** Пункт [rate-on-one-case] 2026-09-06 — доля и утверждения о паттерне
+ * показываются только там, где им есть на чём стоять.
+ *
+ * Условие показа было одно: `classifiable !== 0`. После ПЕРВОГО же
+ * отмеченного исхода человек читал о себе «в 1 из 1 случаев (100%)» —
+ * или «(0%)», если исход вышел плохим. Рядом печаталось «В 1 случаях
+ * аргументы склоняли действовать, но исход оказался плохим — риск был
+ * недооценён»: утверждение о ПАТТЕРНЕ его решений по одному случаю.
+ *
+ * Порог решает СЕРВЕР и присылает `rateShown`: экран не придумывает
+ * правило сам, иначе оно разъехалось бы с порогом разбивки по
+ * категориям — который в продукте был всё это время. */
 function StatsBlock({ label, stats }: { label: string; stats: CalibrationSummary['overall'] }) {
-  const classifiable = stats.matchCount + stats.overOptimisticCount + stats.overCautiousCount;
-  if (classifiable === 0) {
+  if (!stats.rateShown) {
     return (
       <div className="calibration-block">
         <p className="steelman-case__label">{label}</p>
-        <p className="conversations-section__hint">Пока недостаточно данных для сравнения (нужны решения со взвешенными аргументами и отмеченным исходом).</p>
+        <p className="conversations-section__hint">
+          {stats.classifiable === 0
+            ? 'Пока недостаточно данных для сравнения (нужны решения со взвешенными аргументами и отмеченным исходом).'
+            : `Сравнимых случаев пока ${stats.classifiable} из ${stats.minSample} нужных. Доля здесь не показана намеренно: по такому числу случаев она сказала бы о случайности, а не о ваших решениях.`}
+        </p>
       </div>
     );
   }
@@ -38,7 +54,7 @@ function StatsBlock({ label, stats }: { label: string; stats: CalibrationSummary
     <div className="calibration-block">
       <p className="steelman-case__label">{label}</p>
       <p>
-        Прогноз совпал с реальным исходом в {stats.matchCount} из {classifiable} случаев ({Math.round(stats.matchRate * 100)}%).
+        Прогноз совпал с реальным исходом в {stats.matchCount} из {stats.classifiable} случаев ({Math.round((stats.matchRate ?? 0) * 100)}%).
       </p>
       {stats.overOptimisticCount > 0 && (
         <p className="calibration-block__note">
@@ -62,10 +78,16 @@ export default function CalibrationPage() {
 
   useBackButton(() => router.push('/'));
 
+  // Аудит 2026-09-03: при сбое загрузки страница показывала «Пока не
+  // отмечено ни одного исхода решения» — утверждение о ПРОШЛОМ
+  // пользователя, которого мы в этот момент не знаем. Хуже пустой
+  // страницы: человек делает вывод о себе по нашей аварии.
+  const [failed, setFailed] = useState(false);
+
   useEffect(() => {
     void Promise.all([
-      getCalibrationSummary().then(setSummary).catch(() => setSummary(null)),
-      getSuccessStats().then(setStats).catch(() => setStats(null)),
+      getCalibrationSummary().then(setSummary).catch(() => { setSummary(null); setFailed(true); }),
+      getSuccessStats().then(setStats).catch(() => { setStats(null); setFailed(true); }),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -104,7 +126,9 @@ export default function CalibrationPage() {
         на самом деле. Отметить исход можно на странице конкретного проекта.
       </p>
 
-      {!summary || summary.totalRecorded === 0 ? (
+      {failed ? (
+        <SectionLoadError what="статистику калибровки" hint="вы не отмечали исходов решений" />
+      ) : !summary || summary.totalRecorded === 0 ? (
         <p className="conversations-section__hint">Пока не отмечено ни одного исхода решения.</p>
       ) : (
         <>

@@ -18,6 +18,7 @@
 // ClosingMessageService (Пункт 72) и CompromiseSheetService
 // (Пункт 70).
 
+import { projectFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -64,7 +65,10 @@ export class SchedulerAdviceService {
     // постфактум в промпте.
     const personalFacts = personIds.length
       ? await this.prisma.personFact.findMany({
-          where: { personId: { in: personIds }, sourceType: FactSourceType.PERSONAL_RECORD, status: 'ACTIVE' },
+          // Пункт [scope-not-applied] 2026-09-06: фильтр по
+          // происхождению здесь был (и был образцом для
+          // [source-collapse]), а по области видимости — нет.
+          where: { personId: { in: personIds }, sourceType: FactSourceType.PERSONAL_RECORD, status: 'ACTIVE', ...projectFactsScopeWhere(projectId) },
           include: { person: true },
         })
       : [];

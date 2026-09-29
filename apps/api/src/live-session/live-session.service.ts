@@ -22,7 +22,6 @@ import { SttService } from '../stt/stt.service';
 import type { SttRealtimeCredentials } from '../stt/stt-provider.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsentService } from '../consent/consent.service';
-import { ConsentType } from '@prisma/client';
 import { assertProjectOwnership } from '../common/project-ownership';
 
 
@@ -55,7 +54,10 @@ export class LiveSessionService {
     expiresInSeconds = 300,
     languageOverride?: string | null,
   ): Promise<SttRealtimeCredentials> {
-    await this.consent.requireConsent(userId, ConsentType.THIRD_PARTY_AUDIO_RECORDING);
+    // Аудит согласий 2026-09-03: одна проверка вместо голого requireConsent
+    // — в ней же режим приватности, который здесь терялся (см. подробный
+    // разбор над самим методом в ConsentService).
+    await this.consent.assertRealtimeAudioAllowed(userId);
 
     // Пункт [stt-multi] 2026-09-02: провайдера выбирает ЯЗЫК, а не
     // константа. Русский и украинский идут в Soniox (у AssemblyAI их

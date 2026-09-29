@@ -20,7 +20,8 @@
 // "дважды, трижды"), только заводит запись для отслеживания. analyze()
 // возвращает ТОЛЬКО темы, реально достигшие порога в этом вызове.
 
-import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { MAX_LIVE_WINDOW_CHARS, assertWithinLimit } from '../ai-router/prompt-limits';
 import { ProbingTopic } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -61,11 +62,22 @@ export class ProbingDetectorService {
     private readonly aiRouter: AIRouterService,
   ) {}
 
-  async analyze(userId: string, projectId: string, transcriptWindow: string, engineId?: string) {
+  async analyze(userId: string, projectId: string, transcriptWindow: string, engineId?: string, personId?: string | null) {
     if (!transcriptWindow.trim()) {
       throw new BadRequestException('transcriptWindow не может быть пустым');
     }
+    // Аудит границ ввода 2026-09-03: окно живого цикла — последние минуты
+    // разговора, а не архив. Клиент вызывает цикл сам, каждые 15–45 секунд,
+    // и содержимое окна задаёт тоже он.
+    assertWithinLimit(transcriptWindow, MAX_LIVE_WINDOW_CHARS, 'Окно транскрипта');
     await assertProjectOwnership(this.prisma, userId, projectId);
+    // Пункт [project-log-v2] — собеседник, если пользователь его выбрал:
+    // без него тема отслеживается и предупреждает как прежде, но в лог
+    // проекта (§3.39) не попадает, потому что назвать в записи некого.
+    if (personId) {
+      const link = await this.prisma.projectPerson.findFirst({ where: { projectId, personId } });
+      if (!link) throw new NotFoundException(`Person ${personId} not found in project ${projectId}`);
+    }
 
     const trackedTopics = await this.prisma.probingTopic.findMany({ where: { projectId } });
     const topicsText = trackedTopics
@@ -115,7 +127,15 @@ export class ProbingDetectorService {
         const newRepeatCount = existing.repeatCount + 1;
         record = await this.prisma.probingTopic.update({
           where: { id: existing.id },
-          data: { repeatCount: newRepeatCount, confidence: this.computeConfidence(newRepeatCount), lastDetectedAt: new Date() },
+          data: {
+            repeatCount: newRepeatCount,
+            confidence: this.computeConfidence(newRepeatCount),
+            lastDetectedAt: new Date(),
+            // Тему, начатую без выбранного собеседника, можно доименовать
+            // позже — но уже названного человека новый вызов не подменяет:
+            // это была бы тихая переатрибуция чужих слов.
+            ...(personId && !(existing as { personId?: string | null }).personId ? { personId } : {}),
+          },
         });
       } else {
         // AI указал matchedTopicId, которого нет в отслеживаемых — честно
@@ -126,6 +146,7 @@ export class ProbingDetectorService {
             topicDescription: signal.topicDescription,
             repeatCount: 1,
             confidence: this.computeConfidence(1),
+            personId: personId ?? null,
           },
         });
       }

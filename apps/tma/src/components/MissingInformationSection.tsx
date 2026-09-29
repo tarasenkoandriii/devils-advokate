@@ -11,6 +11,7 @@
 // незаполненные поля.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { detectMissingInformation, getLatestMissingInformation } from '../lib/features';
 import { MissingInformationCheck } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -21,14 +22,18 @@ interface MissingInformationSectionProps {
 
 export function MissingInformationSection({ projectId }: MissingInformationSectionProps) {
   const [check, setCheck] = useState<MissingInformationCheck | null>(null);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     getLatestMissingInformation(projectId)
-      .then(setCheck)
-      .catch(() => setCheck(null))
+      .then((v) => { setCheck(v); setNotLoaded(false); })
+      .catch(() => { setCheck(null); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -51,6 +56,7 @@ export function MissingInformationSection({ projectId }: MissingInformationSecti
 
   return (
     <section className="missing-information-section">
+      {notLoaded && <NotLoadedNotice what="проверку на недостающие сведения" />}
       <h3>Чего не хватает</h3>
 
       {check && check.questions.length > 0 && (
@@ -62,7 +68,7 @@ export function MissingInformationSection({ projectId }: MissingInformationSecti
       )}
 
       {check && check.questions.length === 0 && (
-        <p className="conversations-section__hint">Ключевой информации хватает — проверено {new Date(check.createdAt).toLocaleString()}.</p>
+        <p className="conversations-section__hint">Ключевой информации хватает — проверено {new Date(check.createdAt).toLocaleString('ru-RU')}.</p>
       )}
 
       {!check && (
@@ -71,7 +77,7 @@ export function MissingInformationSection({ projectId }: MissingInformationSecti
         </p>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <button type="button" onClick={handleDetect} disabled={detecting}>
         {detecting ? 'Проверяем…' : check ? 'Проверить ещё раз' : 'Проверить, чего не хватает'}

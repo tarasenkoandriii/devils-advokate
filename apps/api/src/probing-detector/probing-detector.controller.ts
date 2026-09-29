@@ -7,6 +7,8 @@ import { ProbingDetectorService } from './probing-detector.service';
 class AnalyzeDto {
   transcriptWindow!: string;
   engineId?: string;
+  // Пункт [project-log-v2] — с кем идёт разговор, если пользователь выбрал.
+  personId?: string | null;
 }
 
 @Controller('projects/:projectId/probing-topics')
@@ -21,7 +23,7 @@ export class ProbingDetectorController {
     @Param('projectId') projectId: string,
     @Body() dto: AnalyzeDto,
   ) {
-    return this.probingDetector.analyze(userId, projectId, dto.transcriptWindow, dto?.engineId);
+    return this.probingDetector.analyze(userId, projectId, dto.transcriptWindow, dto?.engineId, dto?.personId ?? null);
   }
 
   @Get()

@@ -1,5 +1,6 @@
 import { CommunicationProfileService } from '../communication-profile/communication-profile.service';
 import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { createFakeConsentService } from './fake-consent';
 
 function createFakePrisma() {
   const people = new Map<string, any>();
@@ -121,14 +122,14 @@ async function run() {
   test('refresh() бросает NotFoundException для чужой персоны', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: 'other-user' });
-    const svc = new CommunicationProfileService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new CommunicationProfileService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.refresh(USER_ID, PERSON_ID), NotFoundException, 'refresh() на чужую персону');
   });
 
   test('refresh() бросает BadRequestException, если нет ни фактов, ни разговоров', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
-    const svc = new CommunicationProfileService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new CommunicationProfileService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.refresh(USER_ID, PERSON_ID), BadRequestException, 'refresh() без данных для наблюдения');
   });
 
@@ -141,7 +142,7 @@ async function run() {
     prisma._seedParticipant({ id: 'part-1', personId: PERSON_ID });
     prisma._seedSegment({ id: 'seg-1', transcriptId: 'transcript-1', participantId: 'part-1', text: 'Дайте мне посчитать цифры перед ответом.' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any);
+    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     await svc.refresh(USER_ID, PERSON_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Работает финансовым директором'), true, 'факт попал в промпт');
@@ -156,7 +157,7 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { traitType: 'RESPONDS_TO_DATA', value: 'Просит конкретные цифры перед решением', observedFrom: 'разговор от 12.03', confidence: 0.8 },
     ]);
-    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any);
+    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     const updated = await svc.refresh(USER_ID, PERSON_ID);
     assertEqual(updated.length, 1, 'один признак создан');
@@ -169,7 +170,7 @@ async function run() {
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
     prisma._seedFact({ personId: PERSON_ID, status: 'ACTIVE', content: 'x' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any);
+    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     fakeRouter.responseText = JSON.stringify([
       { traitType: 'RESPONDS_TO_DATA', value: 'Старое наблюдение', observedFrom: 'разговор 1', confidence: 0.5 },
@@ -190,7 +191,7 @@ async function run() {
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
     prisma._seedFact({ personId: PERSON_ID, status: 'ACTIVE', content: 'x' });
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new CommunicationProfileService(prisma as any, failingRouter as any);
+    const svc = new CommunicationProfileService(prisma as any, failingRouter as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.refresh(USER_ID, PERSON_ID), BadGatewayException, 'refresh() при недоступности провайдера');
   });
 
@@ -202,7 +203,7 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { traitType: 'PREFERS_DIRECTNESS', value: 'Ценит короткие прямые ответы', observedFrom: 'разговор 1' },
     ]);
-    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any);
+    const svc = new CommunicationProfileService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
     await svc.refresh(USER_ID, PERSON_ID);
 
     const profile = await svc.get(USER_ID, PERSON_ID);
@@ -213,7 +214,7 @@ async function run() {
   test('get() бросает NotFoundException для чужой персоны', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: 'other-user' });
-    const svc = new CommunicationProfileService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new CommunicationProfileService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.get(USER_ID, PERSON_ID), NotFoundException, 'get() на чужую персону');
   });
 

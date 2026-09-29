@@ -22,6 +22,7 @@ import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType, VenueRecommendation } from '@prisma/client';
 import { getPlaceDetails, searchNearbyVenues } from './google-places-client';
+import { LOCATION_PURPOSES } from '../consent/location-purposes';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 const TASK_TYPE = 'venue-suitability';
@@ -57,7 +58,7 @@ export class VenueRecommendationService {
     // Пункт 77 (§3.32 ТЗ) — единый геозапрос, та же проверка, что
     // теперь добавлена в OnboardingService.suggestFromLocation() и
     // уже была в WeatherForecastService.generateByGeolocation().
-    await this.consent.requireConsent(userId, ConsentType.LOCATION);
+    await this.consent.requireConsent(userId, ConsentType.LOCATION, undefined, LOCATION_PURPOSES.VENUE_SEARCH);
 
     const scheduled = await this.assertOwnedScheduledConversation(userId, scheduledConversationId);
 

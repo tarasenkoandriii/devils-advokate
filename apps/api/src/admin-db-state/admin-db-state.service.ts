@@ -21,8 +21,14 @@
 // relation cron.job does not exist» в двух секциях и живые данные в
 // остальных, а не пустую страницу.
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { compareCronJobs, CronJobPresence } from './expected-cron-jobs';
+import { MANUAL_MIGRATIONS } from './manual-migrations';
+import { compareSchemaTables, type SchemaTablesDrift } from './schema-tables';
 
 export interface DbStateCronJob {
   jobname: string;
@@ -61,6 +67,34 @@ export interface DbStateAiJobs {
   }>;
 }
 
+/** Пункт [background-jobs] 2026-09-04: сверка «что поставляет репозиторий»
+ * с «что стоит на инстансе». Отдельная секция от cronJobs намеренно —
+ * cronJobs отвечает на вопрос «что там есть», эта на вопрос «чего там
+ * нет», и второй вопрос экран раньше не задавал вообще. */
+export interface DbStateExpectedCron {
+  jobs: CronJobPresence[];
+  missing: string[];
+  mismatched: string[];
+  disabled: string[];
+}
+
+/** Пункт [latest-migration-was-from-memory] 2026-09-24 — состояние
+ * ручных миграций НА ЭТОМ инстансе.
+ *
+ * Три ответа, а не два: применена, не применена и «по схеме не видно».
+ * Третий — честный: часть миграций снимает NOT NULL или меняет внешний
+ * ключ, и по наличию колонки сказать нельзя ничего. Выдать такую за
+ * применённую значило бы успокоить впустую. */
+export type MigrationState = 'applied' | 'missing' | 'not-observable';
+
+export interface DbStateMigration {
+  file: string;
+  state: MigrationState;
+  /** Почему не видно — только для `not-observable`. */
+  why?: string;
+  breaksWhenMissing: string;
+}
+
 export type DbStateSection<T> = T | { error: string };
 
 const RUNS_LIMIT = 60;
@@ -94,18 +128,77 @@ export class AdminDbStateService {
   async getState(operatorUserId: string): Promise<{
     generatedAt: string;
     cronJobs: DbStateSection<DbStateCronJob[]>;
+    expectedCron: DbStateSection<DbStateExpectedCron>;
     cronRuns: DbStateSection<DbStateCronRun[]>;
     httpResponses: DbStateSection<DbStateHttpResponse[]>;
     aiJobs: DbStateSection<DbStateAiJobs>;
+    manualMigrations: DbStateSection<DbStateMigration[]>;
+    // Пункт [deploy-step-did-nothing] 2026-09-26: сверка имён таблиц со
+    // схемой. `VERCEL.md` честно писал, что боевую базу не проверяет
+    // ничто; теперь проверяет — ровно в том объёме, который можно
+    // утверждать точно, и говорит, чего не проверяет.
+    schemaTables: DbStateSection<SchemaTablesDrift>;
   }> {
     await this.assertOperator(operatorUserId);
-    const [cronJobs, cronRuns, httpResponses, aiJobs] = await Promise.all([
+    const [cronJobs, cronRuns, httpResponses, aiJobs, manualMigrations, schemaTables] = await Promise.all([
       this.safe(() => this.fetchCronJobs()),
       this.safe(() => this.fetchCronRuns()),
       this.safe(() => this.fetchHttpResponses()),
       this.safe(() => this.fetchAiJobs()),
+      this.safe(() => this.fetchManualMigrations()),
+      this.safe(() => this.fetchSchemaTables()),
     ]);
-    return { generatedAt: new Date().toISOString(), cronJobs, cronRuns, httpResponses, aiJobs };
+    // Сверка возможна только если список джоб прочитался. Если cron.job
+    // недоступна (локальная БД без pg_cron), честнее повторить ту же
+    // ошибку, чем показать все семь джоб как «отсутствуют»: «не смогли
+    // посмотреть» и «там пусто» — разные утверждения.
+    const expectedCron: DbStateSection<DbStateExpectedCron> = Array.isArray(cronJobs)
+      ? compareCronJobs(cronJobs)
+      : cronJobs;
+    return { generatedAt: new Date().toISOString(), cronJobs, expectedCron, cronRuns, httpResponses, aiJobs, manualMigrations, schemaTables };
+  }
+
+  /** Пункт [latest-migration-was-from-memory] 2026-09-24. Проба по
+   * схеме: колонка из `information_schema`, значение перечисления из
+   * `pg_enum`. Оба запроса — по каталогу базы, без чтения данных
+   * пользователей. */
+  private async fetchManualMigrations(): Promise<DbStateMigration[]> {
+    const columns = await this.prisma.$queryRawUnsafe<Array<{ table_name: string; column_name: string }>>(
+      `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`,
+    );
+    const present = new Set(columns.map((c) => `${c.table_name}.${c.column_name}`));
+    const enums = await this.prisma.$queryRawUnsafe<Array<{ typname: string; enumlabel: string }>>(
+      `SELECT t.typname, e.enumlabel FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid`,
+    );
+    const enumValues = new Set(enums.map((e) => `${e.typname}.${e.enumlabel}`));
+
+    return MANUAL_MIGRATIONS.map((m) => {
+      if (m.probe.kind === 'none') {
+        return { file: m.file, state: 'not-observable' as const, why: m.probe.why, breaksWhenMissing: m.breaksWhenMissing };
+      }
+      const found =
+        m.probe.kind === 'column'
+          ? present.has(`${m.probe.table}.${m.probe.column}`)
+          : enumValues.has(`${m.probe.type}.${m.probe.value}`);
+      return { file: m.file, state: found ? ('applied' as const) : ('missing' as const), breaksWhenMissing: m.breaksWhenMissing };
+    });
+  }
+
+  /** Пункт [deploy-step-did-nothing] 2026-09-26 — сверка имён таблиц.
+   *
+   * Схема читается с диска: единственный источник объявлений — сам
+   * `schema.prisma`, и держать рядом его копию значило бы завести
+   * второе место, которое разойдётся (урок пункта
+   * [screen-said-what-server-unsaid]).
+   *
+   * Запрос — по каталогу базы, без чтения данных пользователей, как и
+   * остальные секции этой вкладки. */
+  private async fetchSchemaTables(): Promise<SchemaTablesDrift> {
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ table_name: string }>>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
+    );
+    const schema = await readFile(join(__dirname, '..', '..', 'prisma', 'schema.prisma'), 'utf8');
+    return compareSchemaTables(schema, rows.map((r) => r.table_name));
   }
 
   /** cron.job — jobid::int, потому что bigint не переживает
@@ -170,7 +263,7 @@ export class AdminDbStateService {
     const [grouped, recent] = await Promise.all([
       this.prisma.aIJob.groupBy({ by: ['status'], _count: { _all: true } }),
       this.prisma.aIJob.findMany({
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: RECENT_JOBS_LIMIT,
         select: {
           id: true,

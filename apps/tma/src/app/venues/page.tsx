@@ -9,15 +9,19 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { browseApprovedVenues } from '../../lib/public-api';
 import { ApprovedVenue } from '../../lib/types';
+import { SectionLoadError } from '../../components/SectionLoadError';
 
 export default function VenuesPage() {
   const [venues, setVenues] = useState<ApprovedVenue[]>([]);
   const [loading, setLoading] = useState(true);
+  // Аудит 2026-09-03: пустой список заведений — утверждение о каталоге,
+  // а не о том, что мы до него не достучались.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     browseApprovedVenues()
       .then(setVenues)
-      .catch(() => setVenues([]))
+      .catch(() => { setVenues([]); setFailed(true); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -48,7 +52,9 @@ export default function VenuesPage() {
       <h2>Заведения для встреч</h2>
       <p className="conversations-section__hint">Партнёрские заведения, подходящие для приватного разговора.</p>
 
-      {venues.length === 0 ? (
+      {failed ? (
+        <SectionLoadError what="список заведений" hint="одобренных заведений нет" />
+      ) : venues.length === 0 ? (
         <p className="conversations-section__hint">Пока ничего не одобрено.</p>
       ) : (
         <>

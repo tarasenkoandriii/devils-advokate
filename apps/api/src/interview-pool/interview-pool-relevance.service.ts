@@ -2,13 +2,23 @@
 // порівняльне ранжування по всьому пулу — "радник, не суддя"
 // реалізовано технічно тут, не тільки продекларовано (§2.3 ТЗ).
 
-import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isMissingColumnError, warnMigrationLagOnce, migrationLagAt } from '../common/enum-migration-lag';
+import { numberedTranscript, resolveSegmentRef } from '../common/transcript-prompt';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
-import { CandidateStage } from '@prisma/client';
+import { CandidateStage, ClauseCoverage, EvidenceKind, TermsClauseKind, TermsSide } from '@prisma/client';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
+import { consentRevoked } from './consent-revocation';
+import { TermsSheetService } from '../terms-sheet/terms-sheet.service';
+import { allFilled, allStringsFilled, itemFields, substanceSite } from '../common/claim-substance';
 
 const TASK_TYPE = 'interview-pool-relevance';
+
+/** Пункт [lag-told-only-the-log] 2026-09-24: имя места в одном месте —
+ * иначе тот, кто ставит отметку, и тот, кто её читает, разъедутся
+ * строкой (урок [label-is-the-choice]). */
+const SNAPSHOT_LAG_SITE = 'poolRelevanceSnapshot.notAssessed';
 
 interface RawCriterionResult {
   questionnaireItemId: string;
@@ -23,17 +33,29 @@ interface RawCandidateAssessment {
   followUpRequests: string[];
 }
 
-function isValidAssessment(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidAssessment(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.criteriaBreakdown)) return false;
-    if (!Array.isArray(parsed?.attentionPoints)) return false;
-    if (!Array.isArray(parsed?.followUpRequests)) return false;
+    // Пункт [finding-without-substance-2] 2026-09-26: элементы этих двух
+    // массивов не проверялись НИЧЕМ, кроме того что массив — массив.
+    // Между тем followUpRequests становятся записями
+    // `candidateFollowUpRequest` прямо из строк, а attentionPoints
+    // рисуются кандидату как сигналы: пустая строка даёт пустой запрос
+    // документа и пустой сигнал. Пустой массив законен и здесь и там —
+    // это и есть способ сказать «нечего».
+    if (!allStringsFilled(parsed?.attentionPoints)) return false;
+    if (!allStringsFilled(parsed?.followUpRequests)) return false;
     return parsed.criteriaBreakdown.every(
       (c: any) =>
         typeof c?.questionnaireItemId === 'string' &&
         ['covered', 'partial', 'not_covered'].includes(c?.coverage) &&
-        typeof c?.note === 'string',
+        // Пункт [finding-without-substance-2] 2026-09-26: «частично» без
+        // обоснования — вывод о кандидате, который нечем проверить.
+        allFilled(c, itemFields(substanceSite('isValidAssessment').required)),
     );
   } catch {
     return false;
@@ -57,9 +79,16 @@ const SYSTEM_PROMPT =
 
 @Injectable()
 export class InterviewPoolRelevanceService {
+  private readonly logger = new Logger(InterviewPoolRelevanceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    // Пункт [job-domain-v2] §6.2 / приёмка 8: после сверки покрытие анкеты
+    // зеркалится в INTERVIEW-лист кандидата ЧЕРНОВИКАМИ позиций (человек
+    // подтверждает). Optional — спеки v1 конструируют сервис двумя
+    // аргументами и остаются контрактом без правок ожиданий.
+    @Optional() private readonly sheets?: TermsSheetService,
   ) {}
 
   /** §4.3 ТЗ — знімок формується після КОЖНОЇ завершеної співбесіди,
@@ -78,7 +107,7 @@ export class InterviewPoolRelevanceService {
       throw new NotFoundException(`InterviewPoolConfig for project ${projectId} not found`);
     }
     if (config.questions.length === 0) {
-      throw new BadRequestException('У цього пулу ще немає зафіксованої анкети — нічого порівнювати');
+      throw new BadRequestException('У этого пула ещё нет зафиксированной анкеты — не с чем сравнивать');
     }
 
     const knownQuestionIds = new Set(config.questions.map((q: { id: string }) => q.id));
@@ -100,12 +129,45 @@ export class InterviewPoolRelevanceService {
       data: { projectId, triggerConversationId },
     });
 
+    // Сверка «пустота, неотличимая от полноты» 2026-09-04: раньше каждая
+    // из трёх причин ниже была молчаливым `continue` — кандидата просто не
+    // было в снимке. Рекрутер видел четырёх из пяти и не мог отличить
+    // «сравнили, совпадений нет» от «не сравнивали вовсе». По этому снимку
+    // решают, с кем продолжать разговор, поэтому пропуск обязан быть
+    // назван — с причиной и человеческим текстом.
+    const notAssessed: Array<{ candidateProfileId: string; displayName: string | null; reason: string }> = [];
+    const skip = (status: { candidateProfileId: string; candidateProfile?: { displayName?: string | null } | null }, reason: string) =>
+      notAssessed.push({
+        candidateProfileId: status.candidateProfileId,
+        displayName: status.candidateProfile?.displayName ?? null,
+        reason,
+      });
+
     for (const status of statuses) {
+      // А-6 (аудит 2026-09-03): отозвавший согласие не пересобирается в снимок.
+      // Старые записи снимка задним числом не переписываются — они уже отданы;
+      // новое по этому человеку просто не считается.
+      if (consentRevoked(status)) {
+        skip(status, 'Кандидат отозвал согласие на обработку — новые сверки по нему не выполняются.');
+        continue;
+      }
       const conversationIds = status.stageProgress.map((p: { conversationId: string | null }) => p.conversationId!).filter(Boolean);
-      if (conversationIds.length === 0) continue; // §4.3 ТЗ мовчазно передбачає завершені співбесіди — без жодної розшифрованої розмови просто нема що оцінювати
+      if (conversationIds.length === 0) {
+        skip(status, 'Нет ни одного завершённого и расшифрованного собеседования — сверять пока не с чем.');
+        continue;
+      }
 
       const assessment = await this.assessCandidate(userId, projectId, config, conversationIds);
-      if (!assessment) continue; // честная деградация — сбой AI на одном кандидате не должен ронять весь снимок
+      if (!assessment) {
+        // Честная деградация: сбой AI на одном кандидате не роняет весь
+        // снимок — но и не делает вид, что кандидата сравнили.
+        skip(status, 'Сверку не удалось выполнить: сбой AI-разбора. Это не результат сравнения — запустите пересчёт позже.');
+        continue;
+      }
+
+      // [job-domain-v2]: лист INTERVIEW у кандидата заводится технически,
+      // без кнопки; покрытие → черновики позиций с опорой на реплику.
+      await this.mirrorIntoTermsSheet(userId, status.id, assessment.criteriaBreakdown.filter((b) => knownQuestionIds.has(b.questionnaireItemId)));
 
       await this.prisma.poolRelevanceEntry.create({
         data: {
@@ -157,7 +219,42 @@ export class InterviewPoolRelevanceService {
       }
     }
 
+    // Список непроверенных пишется ОДНОЙ записью в конце: он про снимок
+    // целиком, а не про отдельного кандидата. Отставание миграции терпится
+    // — снимок важнее подписи, но молчать об отставании нельзя.
+    if (notAssessed.length > 0) {
+      try {
+        await this.prisma.poolRelevanceSnapshot.update({
+          where: { id: snapshot.id },
+          data: { notAssessed: notAssessed as any },
+        });
+      } catch (err) {
+        if (!isMissingColumnError(err)) throw err;
+        warnMigrationLagOnce(
+          this.logger,
+          SNAPSHOT_LAG_SITE,
+          'pool_snapshot_not_assessed_2026_09_04.sql',
+          'снимок без списка непроверенных кандидатов — пропуски снова невидимы',
+        );
+      }
+    }
+
     return this.getSnapshot(userId, snapshot.id);
+  }
+
+  /** Пункт [lag-told-only-the-log] 2026-09-24 — отставание миграции
+   * доходит до ЧИТАТЕЛЯ снимка, а не только до лога сервера.
+   *
+   * Предупреждение выше названо своими словами: «пропуски снова
+   * невидимы». Экран рисует блок «Не вошли в этот снимок» только при
+   * непустом списке — значит при неприменённой миграции он не рисует
+   * ничего, и снимок выглядит ПОЛНЫМ. Это зеркало того самого правила,
+   * ради которого механизм терпимости и писался: пробел конфигурации не
+   * должен выглядеть ни как отказ функции, ни как её полнота. */
+  private withLagNote<T>(snapshot: T): T & { pendingMigration: { migration: string; consequence: string } | null } {
+    return { ...(snapshot as object), pendingMigration: migrationLagAt(SNAPSHOT_LAG_SITE) } as T & {
+      pendingMigration: { migration: string; consequence: string } | null;
+    };
   }
 
   async getLatest(userId: string, projectId: string) {
@@ -170,7 +267,9 @@ export class InterviewPoolRelevanceService {
     if (!snapshot) {
       throw new NotFoundException(`No PoolRelevanceSnapshot for project ${projectId} yet`);
     }
-    return snapshot;
+    // Оба выхода несут пометку: последний снимок читают чаще, чем
+    // только что созданный, и именно его человек принимает за полный.
+    return this.withLagNote(snapshot);
   }
 
   async getHistory(userId: string, projectId: string) {
@@ -183,10 +282,49 @@ export class InterviewPoolRelevanceService {
   }
 
   private async getSnapshot(userId: string, snapshotId: string) {
-    return this.prisma.poolRelevanceSnapshot.findUnique({
+    const snapshot = await this.prisma.poolRelevanceSnapshot.findUnique({
       where: { id: snapshotId },
       include: { entries: { include: { candidateProfile: true } } },
     });
+    return snapshot ? this.withLagNote(snapshot) : snapshot;
+  }
+
+  /** Зеркало criteriaBreakdown → ClausePosition (черновики) в INTERVIEW-листе.
+   * Best-effort: сбой зеркала не должен ронять снимок v1. */
+  private async mirrorIntoTermsSheet(userId: string, pipelineStatusId: string, breakdown: RawCriterionResult[]) {
+    if (!this.sheets || breakdown.length === 0) return;
+    try {
+      const sheet = await this.sheets.openForCandidate(userId, pipelineStatusId, { silent: true });
+      const byQuestion = new Map(
+        sheet.clauses
+          .filter((c) => c.side === TermsSide.EMPLOYER && c.kind === TermsClauseKind.REQUIREMENT && c.confirmedAt && !c.rejectedAt)
+          .map((c) => [c.id, c] as const),
+      );
+      const raw = await this.prisma.termsClause.findMany({
+        where: { sheetId: sheet.id, sourceQuestionnaireItemId: { not: null } },
+        select: { id: true, sourceQuestionnaireItemId: true },
+      });
+      const clauseByQuestionId = new Map(raw.map((r) => [r.sourceQuestionnaireItemId as string, r.id]));
+      for (const b of breakdown) {
+        const clauseId = clauseByQuestionId.get(b.questionnaireItemId);
+        if (!clauseId || !byQuestion.has(clauseId)) continue;
+        // без реплики-источника позиция не сохраняется (§4.3)
+        if (!b.sourceSegmentId) continue;
+        await this.prisma.clausePosition.create({
+          data: {
+            clauseId,
+            bySide: TermsSide.CANDIDATE,
+            coverage: b.coverage as ClauseCoverage,
+            note: b.note.slice(0, 600),
+            evidenceKind: EvidenceKind.TRANSCRIPT_SEGMENT,
+            evidenceRef: b.sourceSegmentId,
+            confirmedAt: null,
+          },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Зеркало релевантности в лист условий не записано: ${(err as Error).message}`);
+    }
   }
 
   /** §2.4/§2.6 ТЗ — побудова контексту для AI НІКОЛИ не включає
@@ -204,7 +342,8 @@ export class InterviewPoolRelevanceService {
     });
     if (segments.length === 0) return null;
 
-    const transcriptText = segments.map((s: { id: string; text: string }) => `[id=${s.id}] ${s.text}`).join('\n');
+    const transcript = numberedTranscript(segments);
+    const transcriptText = transcript.text;
     const questionsText = config.questions
       .map((q) => `[id=${q.id}] ${q.text}${q.isRequired ? ' (обов\'язково)' : ''}`)
       .join('\n');
@@ -221,7 +360,20 @@ export class InterviewPoolRelevanceService {
         maxTokens: 3000,
         validateOutput: isValidAssessment,
       });
-      return JSON.parse(result.text) as RawCandidateAssessment;
+      // Сверка «ссылка на реплику» 2026-09-04: правило §4.3 («позиция
+      // кандидата не сохраняется без реплики-источника») проверяло, что
+      // поле НЕ ПУСТОЕ. Выдуманный моделью id проходил его насквозь и
+      // ложился в лист условий как доказательство. Теперь номер
+      // переводится в настоящий id, а несуществующий обнуляется — и
+      // правило ниже отсекает такую позицию, как и задумано.
+      const parsed = JSON.parse(result.text) as RawCandidateAssessment;
+      return {
+        ...parsed,
+        criteriaBreakdown: parsed.criteriaBreakdown.map((b) => ({
+          ...b,
+          sourceSegmentId: resolveSegmentRef(transcript.byRef, b.sourceSegmentId),
+        })),
+      };
     } catch (err) {
       // [ai-errors] 2026-09-02: здесь ОСОЗНАННО НЕ общий шлюз
       // rethrowClientVisibleAiError. Это точка ЧЕСТНОЙ ДЕГРАДАЦИИ:

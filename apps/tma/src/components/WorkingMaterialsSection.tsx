@@ -17,6 +17,7 @@
 // информационное сообщение, не отдельное действие "разрешить".
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import type { ChangeEvent } from 'react';
 import { listWorkingMaterials, submitWorkingMaterialVersion } from '../lib/features';
 import { extractMaterialText } from '../lib/material-extract';
@@ -30,6 +31,10 @@ interface WorkingMaterialsSectionProps {
 
 export function WorkingMaterialsSection({ projectId }: WorkingMaterialsSectionProps) {
   const [materials, setMaterials] = useState<WorkingMaterial[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -39,8 +44,8 @@ export function WorkingMaterialsSection({ projectId }: WorkingMaterialsSectionPr
 
   const reload = useCallback(() => {
     return listWorkingMaterials(projectId)
-      .then(setMaterials)
-      .catch(() => setMaterials([]));
+      .then((v) => { setMaterials(v); setNotLoaded(false); })
+      .catch(() => { setMaterials([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function WorkingMaterialsSection({ projectId }: WorkingMaterialsSectionPr
 
   return (
     <section className="working-materials-section">
+      {notLoaded && <NotLoadedNotice what="рабочие материалы" />}
       <h3>Материалы для спарринга</h3>
       <p className="conversations-section__hint">
         Сам файл (.md/PPTX) не передаётся на сервер — на устройстве извлекается только текст, дальше уходит только он.
@@ -134,7 +140,7 @@ export function WorkingMaterialsSection({ projectId }: WorkingMaterialsSectionPr
         </label>
         {extracting && <p className="conversations-section__hint">Извлекаем текст на устройстве…</p>}
         {submitting && <p className="conversations-section__hint">Получаем разбор…</p>}
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
       </div>
     </section>
   );

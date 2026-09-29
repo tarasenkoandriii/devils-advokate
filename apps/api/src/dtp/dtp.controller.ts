@@ -44,6 +44,8 @@ class CreateConsultationDto {
   conversationId?: string;
   occurredAt!: string;
   estimatedCost?: number;
+  // Аудит денег 2026-09-03: валюта оценки. Пусто = валюта проекта.
+  currency?: string | null;
 }
 
 class ReviewConsultationDto {
@@ -199,7 +201,7 @@ export class DtpController {
 
   @Post('advisors/:id/consultations')
   async createConsultation(@CurrentUser() userId: string, @Param('id') advisorId: string, @Body() dto: CreateConsultationDto) {
-    return this.dtp.createConsultation(userId, advisorId, dto.conversationId, dto.occurredAt, dto.estimatedCost);
+    return this.dtp.createConsultation(userId, advisorId, dto.conversationId, dto.occurredAt, dto.estimatedCost, dto.currency);
   }
 
   @Get('advisors/:id/consultations')

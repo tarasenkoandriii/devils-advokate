@@ -45,13 +45,13 @@ function SessionPanel({ spec, entityId }: { spec: SessionSpec; entityId: string 
   return (
     <div className="domain-sessions">
       <h4>{spec.label}</h4>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {items.length === 0 && <p className="card-section__empty">Пока нет ни одной — добавьте после встречи.</p>}
       <ul className="domain-sessions__list">
         {items.map((s) => (
           <li key={s.id}>
             <div className="domain-sessions__head">
-              <span>{s.occurredAt ? new Date(s.occurredAt).toLocaleString() : s.id}</span>
+              <span>{s.occurredAt ? new Date(s.occurredAt).toLocaleString('ru-RU') : s.id}</span>
               <span className="domain-badge">{s.status ?? (s.reviewedAt ? 'REVIEWED' : s.breakdown || s.conclusionDraft || s.conclusion ? 'GENERATED' : 'NEW')}</span>
             </div>
             {(s.breakdown || s.conclusionDraft || s.conclusion) && <JsonView data={s.breakdown ?? s.conclusionDraft ?? s.conclusion} />}
@@ -93,7 +93,7 @@ export function EntityPanel({ spec, configId }: { spec: EntitySpec; configId: st
 
   return (
     <div className="domain-panel">
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {items.length === 0 && !error && <p className="card-section__empty">Пока нет ни одной записи.</p>}
       <ul className="domain-entities">
         {items.map((it) => (

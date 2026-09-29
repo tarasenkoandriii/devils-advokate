@@ -20,6 +20,8 @@ import {
   ConversationSourceType,
   MediaReviewItemStatus,
 } from '@prisma/client';
+import { spendLimit } from '../common/spend-limits';
+import type { FailureKind } from '../ai-router/failure-reason';
 
 export const MEDIA_PUBLIC_REVIEW_TASK_TYPE = 'media-public-review';
 
@@ -42,10 +44,12 @@ export const MEDIA_REVIEW_MAX_DURATION_SECONDS = 1200;
  * на дефолт — неправильно настроенный env не должен ронять постановку
  * разбора. */
 export function resolveMaxDurationSeconds(): number {
-  const raw = process.env.MEDIA_REVIEW_MAX_DURATION_SECONDS;
-  if (!raw) return MEDIA_REVIEW_MAX_DURATION_SECONDS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : MEDIA_REVIEW_MAX_DURATION_SECONDS;
+  // Пункт [ceilings-nobody-was-told-about] 2026-09-24: разбор значения —
+  // общий для всех потолков (`common/spend-limits.ts`). Отличие от
+  // прежнего кода одно и намеренное: ноль здесь больше не «упасть на
+  // умолчание», а ноль — как у остальных потолков. Для длительности это
+  // значит «ролики не разбираем», и такое значение выставляют осознанно.
+  return spendLimit('MEDIA_REVIEW_MAX_DURATION_SECONDS');
 }
 
 /** §8.1 — дефолтный промпт; ACTIVE-версия из PromptRegistry
@@ -147,6 +151,18 @@ export function parseMediaReviewOutput(text: string): { language: string | null;
     });
   }
   return { language: typeof root.language === 'string' ? root.language : null, segments };
+}
+
+
+/** Пункт [failure-spoke-to-the-operator] 2026-09-25 — отдельной чистой
+ * функцией, чтобы подсказку можно было проверить без всей очереди.
+ * «Выход не прошёл валидацию схемы» на публичном видео почти всегда
+ * значит ролик без внятной речи (липсинк, музыка, мемы без слов): модель
+ * честно возвращает пустые segments, схема требует хотя бы один. Отказ
+ * правильный, но без пояснения читается как поломка. */
+export function mediaFailureText(personText: string, kind: FailureKind | undefined): string {
+  if (kind !== 'schema-invalid') return personText;
+  return `${personText} Для ролика это чаще всего значит, что внятной речи в нём мало (музыка, липсинк): возьмите ролик с диалогом или загрузите файл вручную.`;
 }
 
 @Injectable()
@@ -342,9 +358,12 @@ export class MediaReviewAutoService implements OnModuleInit {
       // модель честно возвращает пустые segments, а схема требует хотя
       // бы один. Отказ правильный, но без пояснения он читается как
       // поломка (первый живой прогон: Lisa/BLACKPINK-шортс).
-      const reason = outcome.reason.includes('валидацию схемы')
-        ? `${outcome.reason}. Чаще всего это ролик без внятной речи (музыка, липсинк) — модели нечего транскрибировать; возьмите ролик с диалогом или загрузите файл вручную`
-        : outcome.reason;
+      // Пункт [failure-spoke-to-the-operator] 2026-09-25: вид провала
+      // приходит ПОЛЕМ, а не опознаётся по подстроке в человеческом
+      // тексте. Раньше текст сообщения был негласным контрактом: его
+      // правка молча выключала бы эту подсказку — тот же разбор, что в
+      // [error-language].
+      const reason = mediaFailureText(outcome.reason, outcome.failureKind);
       await this.prisma.$transaction([
         this.prisma.mediaReviewQueueItem.update({
           where: { id: item.id },

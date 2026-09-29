@@ -41,7 +41,7 @@ function LabDocuments({ configId, manifest }: { configId: string; manifest: Doma
   return (
     <section className="dtp-section">
       <p className="dtp-hint">Скан или фото анализа распознаётся (OCR) в текст-черновик. Пока вы не подтвердили, что текст совпадает с документом, он нигде не используется как факт — сверьте цифры сами.</p>
-      {(error || loadError) && <p className="generation-error">{error ?? loadError}</p>}
+      {(error || loadError) && <p role="alert" className="generation-error">{error ?? loadError}</p>}
       {data && data.length === 0 && <p className="card-section__empty">Анализов пока нет.</p>}
       {data?.map((d) => (
         <div key={d.id} className="dtp-card">
@@ -85,7 +85,7 @@ export function HealthWorkspace({ config, manifest }: { config: HealthConfig; ma
       {tab === 'providers' && (
         <section className="dtp-section">
           <p className="dtp-hint">Каждый врач — отдельно. После консультации добавьте запись и разбор: AI разложит сказанное по вашим вопросам. Ссылки на исследования, которые врач упоминал, — в карточке врача.</p>
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           {providers && providers.length === 0 && <p className="card-section__empty">Врачей пока нет.</p>}
           {providers?.map((p) => (
             <SourceCard key={p.id} source={p} subtitle={p.providerName} badge={p.specialty} criteria={config.criteria} spec={spec} routes={routes}>

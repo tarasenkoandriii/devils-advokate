@@ -55,7 +55,7 @@ function MeetingCard({ m, criteria, onChanged }: { m: Meeting; criteria: MpCrite
         </ul>
       )}
       {(m.conclusionFinal ?? m.conclusionDraft) && !editing && <pre className="dtp-protocol">{m.conclusionFinal ?? m.conclusionDraft}</pre>}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <div className="entity-form__actions">
         {m.conversationId && status !== 'reviewed' && <button type="button" className="secondary" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await domainApi.postJson(`/major-purchase/meetings/${m.id}/generate-conclusion`, {}); haptic('success'); onChanged(); } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось'); } finally { setBusy(false); } }}>{busy ? '…' : status === 'drafted' ? 'Сформировать заново' : 'Сформировать вывод'}</button>}
         {status === 'drafted' && !editing && <button type="button" className="primary" onClick={() => setEditing(true)}>Поправить и подтвердить</button>}
@@ -85,7 +85,7 @@ function VariantCard({ v, cfg, spec }: { v: Variant; cfg: MpConfig; spec: any })
       </button>
       {open && (
         <div className="dtp-card__body">
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           {v.placeAddress && <p className="dtp-muted">📍 {v.placeAddress}</p>}
           <h4>Сверка с объявлениями</h4>
           {data && data.comparisons.length === 0 && <p className="dtp-muted">Нет. Добавьте ссылки на похожие объявления — цена из них попадёт в вывод и в сравнение.</p>}
@@ -110,7 +110,7 @@ function Variants({ cfg, manifest }: { cfg: MpConfig; manifest: DomainManifest }
   const { data, error } = useList<Variant>(`/major-purchase/configs/${cfg.id}/variants`, tick);
   return (
     <section className="dtp-section">
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {data && data.length === 0 && <p className="card-section__empty">Вариантов пока нет — добавьте квартиру/дом/машину, которые рассматриваете.</p>}
       {data?.map((v) => <VariantCard key={v.id} v={v} cfg={cfg} spec={spec} />)}
       {adding ? <EntityForm fields={spec.fields} initial={{ currency: cfg.currency ?? undefined }} submitLabel="Добавить вариант" onCancel={() => setAdding(false)} onSubmit={async (v) => { await domainApi.postJson(spec.createRoute(cfg.id), v); setAdding(false); setTick((t) => t + 1); }} />
@@ -121,7 +121,7 @@ function Variants({ cfg, manifest }: { cfg: MpConfig; manifest: DomainManifest }
 
 function Comparison({ cfg }: { cfg: MpConfig }) {
   const { data, error } = useOne<ComparisonTable>(`/major-purchase/configs/${cfg.id}/comparison-table`);
-  if (error) return <p className="generation-error">{error}</p>;
+  if (error) return <p role="alert" className="generation-error">{error}</p>;
   if (!data) return <p>Загрузка…</p>;
   if (data.variants.length === 0) return <p className="card-section__empty">Добавьте хотя бы один вариант.</p>;
   return (

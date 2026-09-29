@@ -1,4 +1,4 @@
-import { ReligiousReminderService } from '../religious-reminder/religious-reminder.service';
+import { ReligiousReminderService, REMINDER_MIN_INTERVAL_MS } from '../religious-reminder/religious-reminder.service';
 
 function createFakePrisma() {
   const users = new Map<string, any>();
@@ -86,6 +86,28 @@ async function run() {
 
     const second = await svc.getReminderIfDue(USER_ID);
     assertEqual(second.shouldShow, false, 'второй вызов в тот же день — не показывается повторно');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (аудит времени 2026-09-03): в 23:50 и в 00:10 — это НЕ «раз в день»', async () => {
+    // Раньше сравнивались календарные сутки по UTC, и человек рядом с
+    // местной полуночью получал два напоминания за двадцать минут.
+    // Часового пояса у пользователя в продукте нет, поэтому окно, а не
+    // календарь.
+    const prisma = createFakePrisma();
+    prisma._seedUser({ id: USER_ID, religion: 'Ислам', religiousReminderFrequency: 'ONCE_PER_DAY', religiousReminderLastShownAt: new Date(Date.now() - 20 * 60 * 1000) });
+    const svc = new ReligiousReminderService(prisma as any);
+
+    const res = await svc.getReminderIfDue(USER_ID);
+    assertEqual(res.shouldShow, false, 'через двадцать минут после показа — не показывается, даже если наступили новые сутки по UTC');
+  });
+
+  test('порог — двадцать часов, а не двадцать четыре: иначе ежеутренний вход каждый день опаздывал бы к порогу и однажды пропустил день', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedUser({ id: USER_ID, religion: 'Ислам', religiousReminderFrequency: 'ONCE_PER_DAY', religiousReminderLastShownAt: new Date(Date.now() - (REMINDER_MIN_INTERVAL_MS + 60_000)) });
+    const svc = new ReligiousReminderService(prisma as any);
+
+    assertEqual((await svc.getReminderIfDue(USER_ID)).shouldShow, true, 'через 20 часов с минутой — показывается');
+    assertEqual(REMINDER_MIN_INTERVAL_MS < 24 * 60 * 60 * 1000, true, 'порог строго меньше суток — это и есть защита от дрейфа');
   });
 
   test('getReminderIfDue() с частотой ONCE_PER_DAY показывает снова на следующий день', async () => {

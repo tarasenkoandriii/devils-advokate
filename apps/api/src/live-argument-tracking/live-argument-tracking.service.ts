@@ -24,6 +24,7 @@
 // SUFFICIENTLY_MENTIONED вместо принятия ответа AI как есть.
 
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
+import { MAX_LIVE_WINDOW_CHARS, assertWithinLimit } from '../ai-router/prompt-limits';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -84,13 +85,33 @@ export class LiveArgumentTrackingService {
       where: { projectId, targetPersonId: null, stance: { in: [ArgumentStance.PRO, ArgumentStance.CON] } },
     });
 
-    for (const arg of projectArguments) {
-      const existing = await this.prisma.liveArgumentTrackingStatus.findUnique({ where: { argumentId: arg.id } });
-      if (!existing) {
-        await this.prisma.liveArgumentTrackingStatus.create({
-          data: { projectId, argumentId: arg.id, status: ArgumentTrackingState.NOT_MENTIONED },
-        });
-      }
+    // Пункт [check-then-create] 2026-09-04. Здесь стоял цикл: на КАЖДЫЙ
+    // аргумент проекта — отдельное чтение «а есть ли уже запись», и при
+    // отсутствии — отдельная вставка. Две беды в одном месте.
+    //
+    // Первая: это самый нагруженный экран продукта — сопровождение
+    // живого разговора. Двадцать аргументов означали сорок обращений к
+    // базе на инициализацию, и число росло вместе с проектом человека.
+    //
+    // Вторая, важнее: между чтением и вставкой есть окно, а инициализацию
+    // клиент зовёт при каждом входе в режим — двойное нажатие или
+    // переподключение давали два одновременных вызова, оба проходили
+    // проверку «записи нет» и оба вставляли. `argumentId` уникален, так
+    // что вторая вставка падала с P2002, и человек видел ошибку на
+    // действии, которое УЖЕ УДАЛОСЬ.
+    //
+    // `createMany` со `skipDuplicates` решает обе: один запрос вместо
+    // 2N, и повтор безвреден по определению — база сама пропускает то,
+    // что уже есть, вместо того чтобы падать.
+    if (projectArguments.length > 0) {
+      await this.prisma.liveArgumentTrackingStatus.createMany({
+        data: projectArguments.map((arg) => ({
+          projectId,
+          argumentId: arg.id,
+          status: ArgumentTrackingState.NOT_MENTIONED,
+        })),
+        skipDuplicates: true,
+      });
     }
 
     return this.list(userId, projectId);
@@ -100,6 +121,10 @@ export class LiveArgumentTrackingService {
     if (!transcriptWindow.trim()) {
       throw new BadRequestException('transcriptWindow не может быть пустым');
     }
+    // Аудит границ ввода 2026-09-03: окно живого цикла — последние минуты
+    // разговора, а не архив. Клиент вызывает цикл сам, каждые 15–45 секунд,
+    // и содержимое окна задаёт тоже он.
+    assertWithinLimit(transcriptWindow, MAX_LIVE_WINDOW_CHARS, 'Окно транскрипта');
     await assertProjectOwnership(this.prisma, userId, projectId);
 
     const trackedStatuses = await this.prisma.liveArgumentTrackingStatus.findMany({

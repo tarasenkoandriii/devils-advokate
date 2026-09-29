@@ -22,7 +22,16 @@ export default function IntakeAdminPage() {
       <div className="card" style={{ marginBottom: 20, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
         <div><div className="muted">Сессий</div><strong>{data.total}</strong></div>
         {Object.entries(data.byStatus).map(([k, v]) => <div key={k}><div className="muted">{k}</div><strong>{v}</strong></div>)}
-        <div><div className="muted">Ср. уверенность</div><strong>{data.avgConfidence ?? '—'}</strong></div>
+        {/* Пункт [unmeasured-confidence] 2026-09-05: это среднее
+            САМООЦЕНОК модели, а не её точность. Рядом, в этой же
+            карточке, стоит настоящая проверка — «Предложил ≠ выбрал»:
+            там человек не согласился с классификатором. Две цифры
+            выглядели одинаково важными, и первая присваивала себе смысл
+            второй. */}
+        <div title="Среднее самооценок модели, не её точность. Точность видна в «Предложил ≠ выбрал» ниже.">
+          <div className="muted">Ср. самооценка модели</div>
+          <strong>{data.avgConfidence ?? '—'}</strong>
+        </div>
         <div><div className="muted">Ср. уточнений</div><strong>{data.avgFollowUps ?? '—'}</strong></div>
         <div><div className="muted">Предложил ≠ выбрал</div><strong className={data.mismatchRate !== null && data.mismatchRate > 0.3 ? 'badge badge-bad' : ''}>{data.mismatches} / {data.dispatched}{data.mismatchRate !== null ? ` (${Math.round(data.mismatchRate * 100)}%)` : ''}</strong></div>
       </div>

@@ -211,37 +211,7 @@ describe('AudioBlobService.presignForTranscription', () => {
   });
 });
 
-describe('AudioBlobService.releaseConversationAudio', () => {
-  it('удаляет файл И снимает ссылку в БД — инвариант «pathname есть ⇒ файл есть»', async () => {
-    const deps = makeDeps();
-    const svc = makeService(deps);
-
-    await svc.releaseConversationAudio(CONV_ID, PATHNAME);
-
-    expect(mockDel).toHaveBeenCalledWith(PATHNAME, { token: 'vercel_blob_rw_FAKE' });
-    expect(deps.prisma._updates[0].data).toEqual({ audioBlobPathname: null, audioBlobBytes: null });
-  });
-
-  it('КЛЮЧЕВОЙ ТЕСТ: сбой удаления НЕ роняет обработку — иначе потеряется уже полученный транскрипт', async () => {
-    const deps = makeDeps();
-    mockDel.mockRejectedValueOnce(new Error('blob store unavailable'));
-    const svc = makeService(deps);
-
-    await expect(svc.releaseConversationAudio(CONV_ID, PATHNAME)).resolves.toBeUndefined();
-    // Ссылка всё равно снимается: файл, который не удалось удалить,
-    // чинится чисткой стора, а «в БД висит путь к файлу, который мы
-    // считаем удалённым» — вводит в заблуждение и пользователя, и
-    // следующего разработчика.
-    expect(deps.prisma._updates[0].data).toEqual({ audioBlobPathname: null, audioBlobBytes: null });
-  });
-
-  it('pathname отсутствует — ничего не делает (разговор загружали старым потоковым путём)', async () => {
-    const deps = makeDeps();
-    const svc = makeService(deps);
-
-    await svc.releaseConversationAudio(CONV_ID, null);
-
-    expect(mockDel).not.toHaveBeenCalled();
-    expect(deps.prisma._updates).toHaveLength(0);
-  });
-});
+// Аудит 2026-09-03: блок тестов releaseConversationAudio() удалён вместе с
+// самим методом — он дублировал освобождение аудио, которым занимается
+// ConversationsService.releaseMediaConsumer() (см. комментарий в
+// audio-blob.service.ts). Тесты на живой путь — в conversations.service.spec.

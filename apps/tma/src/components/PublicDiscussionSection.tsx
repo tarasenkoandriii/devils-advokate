@@ -6,6 +6,8 @@
 // /public/[token]/page.tsx, использует lib/public-api.ts, не эту секцию.
 
 import { useState, useEffect, useCallback } from 'react';
+import { SectionLoadError } from './SectionLoadError';
+import { TruncatedListNotice } from './TruncatedListNotice';
 import {
   disablePublicSharing,
   enablePublicSharing,
@@ -13,8 +15,10 @@ import {
   listPublicSubmissionsForModeration,
   moderatePublicSubmission,
 } from '../lib/features';
-import { PublicArgumentSubmission } from '../lib/types';
+import { OwnerPublicSubmission } from '../lib/types';
+import { ApiRequestError } from '../lib/api';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 interface PublicDiscussionSectionProps {
   projectId: string;
@@ -23,7 +27,14 @@ interface PublicDiscussionSectionProps {
 
 export function PublicDiscussionSection({ projectId, publicShareToken: initialToken }: PublicDiscussionSectionProps) {
   const [token, setToken] = useState(initialToken);
-  const [submissions, setSubmissions] = useState<PublicArgumentSubmission[]>([]);
+  const [submissions, setSubmissions] = useState<OwnerPublicSubmission[]>([]);
+  // Сверка чтений без потолка 2026-09-04: список заявок обрезан потолком.
+  const [submissionsHasMore, setSubmissionsHasMore] = useState(false);
+  const [pageLimit, setPageLimit] = useState(0);
+  // И там же: сбой загрузки заявок гасился в пустой список — модератор
+  // видел «заявок нет» вместо «не удалось загрузить». Тот же класс, что
+  // закрывал заход [silent-failure-sweep]; этот экран он не задел.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,9 +48,17 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
       setSubmissions([]);
       return Promise.resolve();
     }
+    setLoadFailed(false);
     return listPublicSubmissionsForModeration(projectId)
-      .then(setSubmissions)
-      .catch(() => setSubmissions([]));
+      .then((page) => {
+        setSubmissions(page.items);
+        setSubmissionsHasMore(page.hasMore);
+        setPageLimit(page.limit);
+      })
+      .catch(() => {
+        setSubmissions([]);
+        setLoadFailed(true);
+      });
   }, [projectId, token]);
 
   useEffect(() => {
@@ -55,7 +74,16 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
       haptic('success');
     } catch (err) {
       haptic('error');
-      if (err instanceof Error && err.message.includes('PUBLIC_SHARING')) {
+      // Пункт [error-language] 2026-09-04: опознаём по устойчивому коду,
+      // а не по подстроке в тексте. Раньше экран зависел от того, что API
+      // вернёт английскую строку со словом PUBLIC_SHARING внутри, — то
+      // есть текст сообщения был негласным контрактом, и перевод этого
+      // сообщения на русский молча сломал бы согласие.
+      if (
+        err instanceof ApiRequestError &&
+        err.code === 'CONSENT_REQUIRED' &&
+        err.details?.consentType === 'PUBLIC_SHARING'
+      ) {
         setNeedsConsent(true);
       } else {
         setError(err instanceof Error ? err.message : 'Не удалось включить публичное обсуждение');
@@ -100,8 +128,8 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
       await moderatePublicSubmission(projectId, submissionId, decision);
       await reload();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось рассмотреть заявку');
     }
   }
 
@@ -125,14 +153,22 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
               Ссылка для публикации: <code>{publicUrl}</code>
             </p>
           )}
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <button type="button" onClick={handleDisable} disabled={toggling}>
             {toggling ? 'Выключаем…' : 'Выключить публичное обсуждение'}
           </button>
 
+          {loadFailed && (
+            <SectionLoadError
+              what="заявки участников"
+              hint="заявок нет — возможно, они есть и ждут вашего решения"
+            />
+          )}
+
           {pendingSubmissions.length > 0 && (
             <>
               <p className="steelman-case__label">На модерации ({pendingSubmissions.length})</p>
+              <TruncatedListNotice hasMore={submissionsHasMore} limit={pageLimit} what="заявок" />
               <ul className="public-discussion-section__moderation-list">
                 {pendingSubmissions.map((s) => (
                   <li key={s.id} className="public-discussion-section__moderation-item">
@@ -160,7 +196,7 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
             Публичное обсуждение делает ваши аргументы доступными по ссылке любому, у кого она есть — без входа в
             приложение. Согласие нужно один раз, отозвать можно в любой момент, выключив обсуждение.
           </p>
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <button type="button" onClick={handleGrantAndEnable} disabled={grantingConsent}>
             {grantingConsent ? 'Включаем…' : 'Согласен(на), включить'}
           </button>
@@ -170,7 +206,7 @@ export function PublicDiscussionSection({ projectId, publicShareToken: initialTo
         </div>
       ) : (
         <div className="conversations-section__add-actions">
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           <button type="button" onClick={handleEnable} disabled={toggling}>
             {toggling ? 'Включаем…' : 'Включить публичное обсуждение'}
           </button>

@@ -1,0 +1,25 @@
+# Общий шаг установки для всех джоб CI: Node + npm ci + prisma generate.
+#
+# prisma generate обязателен ДО любой проверки: без сгенерированного
+# клиента tsc в apps/api валится сотнями «Property ... does not exist on
+# type PrismaClient», и ошибка выглядит как поломка кода, а не как
+# отсутствующий шаг сборки.
+
+name: 'Setup monorepo'
+description: 'Node 20, npm ci, prisma generate'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+
+    - name: npm ci
+      shell: bash
+      run: npm ci
+
+    - name: prisma generate
+      shell: bash
+      run: npm run prisma:generate --workspace=apps/api

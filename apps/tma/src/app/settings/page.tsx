@@ -18,10 +18,15 @@ import {
 import { ReligiousReminderFrequency } from '../../lib/types';
 import { useBackButton } from '../../hooks/useBackButton';
 import { haptic } from '../../lib/telegram';
+import { reportFailure } from '../../lib/failure-report';
 
+// Пункт [promised-arrival] 2026-09-05: «Раз в день» читается как «раз в
+// день оно придёт». Не придёт: показ происходит, только когда человек
+// сам открывает приложение. Частота — это ПОТОЛОК показов, а не
+// расписание доставки.
 const FREQUENCY_OPTIONS: { value: ReligiousReminderFrequency; label: string }[] = [
   { value: 'EVERY_LAUNCH', label: 'При каждом входе' },
-  { value: 'ONCE_PER_DAY', label: 'Раз в день' },
+  { value: 'ONCE_PER_DAY', label: 'Не чаще раза в день' },
   { value: 'OFF', label: 'Выключено' },
 ];
 
@@ -58,9 +63,12 @@ export default function SettingsPage() {
     try {
       await updateSituationalContentPreferences({ alwaysShowQuote: next });
       haptic('light');
-    } catch {
+    } catch (err) {
+      // Пункт [one-buzz-was-the-whole-answer] 2026-09-24: переключатель
+      // отщёлкивал обратно, и это было ЕДИНСТВЕННЫМ объяснением —
+      // человек видит, что настройка не применилась, и не знает почему.
       setAlwaysShowQuote(!next);
-      haptic('error');
+      reportFailure(err, 'Не удалось сохранить настройку');
     } finally {
       setSaving(false);
     }
@@ -73,9 +81,9 @@ export default function SettingsPage() {
     try {
       await updateSituationalContentPreferences({ alwaysShowAnecdote: next });
       haptic('light');
-    } catch {
+    } catch (err) {
       setAlwaysShowAnecdote(!next);
-      haptic('error');
+      reportFailure(err, 'Не удалось сохранить настройку');
     } finally {
       setSaving(false);
     }
@@ -88,9 +96,9 @@ export default function SettingsPage() {
     try {
       await updateReligiousReminderFrequency(next);
       haptic('light');
-    } catch {
+    } catch (err) {
       setReminderFrequency(previous);
-      haptic('error');
+      reportFailure(err, 'Не удалось сохранить частоту напоминаний');
     } finally {
       setSaving(false);
     }
@@ -106,8 +114,10 @@ export default function SettingsPage() {
       await revokeConsent('LOCATION');
       setLocationGranted(false);
       haptic('light');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      // Отзыв согласия, о провале которого сказали вибрацией: человек
+      // уходит уверенным, что отозвал, — а согласие осталось.
+      reportFailure(err, 'Не удалось отозвать согласие на геолокацию');
     } finally {
       setSaving(false);
     }
@@ -156,7 +166,16 @@ export default function SettingsPage() {
           </div>
 
           <div className="settings-page__section">
-            <p className="steelman-case__label">Ежедневное напоминание о заповедях/столпах веры</p>
+            {/* Пункт [promised-arrival] 2026-09-05. Здесь стояло
+                «Ежедневное напоминание о заповедях/столпах веры».
+                Напоминание — это то, что приходит само; push-доставки у
+                этой функции нет вовсе, показ происходит при открытии
+                приложения. Человек, поставивший «раз в день» и не
+                зашедший, не получал ничего и не знал почему. */}
+            <p className="steelman-case__label">Заповеди/столпы веры при открытии приложения</p>
+            <p className="conversations-section__hint">
+              Показывается, когда вы сами открываете приложение. Это не уведомление: если не зайти, ничего не придёт.
+            </p>
             <select
               value={reminderFrequency}
               onChange={(e) => handleFrequencyChange(e.target.value as ReligiousReminderFrequency)}

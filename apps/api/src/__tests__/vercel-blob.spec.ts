@@ -56,15 +56,43 @@ async function run() {
     await assertThrowsAsync(() => putPublicBlob('token', 'photo.jpg', Buffer.from('x'), 'image/jpeg'), VercelBlobError, 'putPublicBlob() при сетевой ошибке');
   });
 
-  test('deleteBlob() НЕ бросает исключение при сбое (best-effort, не должна ронять уже полученный результат)', async () => {
+  /** ДОПОЛНЕН, Пункт [delete-says-done] 2026-09-06. Тест проверял, что
+   * при сбое НЕ БРОСАЕТСЯ исключение — и на этом останавливался. Решение
+   * не бросать верное (удаление не должно ронять уже полученный
+   * результат поиска), а вот МОЛЧАНИЕ о сбое — нет: вызывающий не мог
+   * отличить удалённое от оставшегося, а обоим вызывающим это нужно.
+   * Один обещает человеку, что публичная копия его фото удалена; второй
+   * считает по этому «удалено N» в записи аудита при удалении аккаунта. */
+  test('deleteBlob() НЕ бросает исключение при сбое, но СООБЩАЕТ о нём (best-effort ≠ молча)', async () => {
     (global as any).fetch = async () => { throw new Error('delete failed'); };
     let threw = false;
+    let result: Awaited<ReturnType<typeof deleteBlob>> | null = null;
     try {
-      await deleteBlob('token', 'https://store.public.blob.vercel-storage.com/photo.jpg');
+      result = await deleteBlob('token', 'https://store.public.blob.vercel-storage.com/photo.jpg');
     } catch {
       threw = true;
     }
     assertEqual(threw, false, 'deleteBlob() поглощает ошибку, не пробрасывает');
+    assertEqual(result?.deleted, false, 'но сообщает, что не удалила');
+    assertEqual(typeof result?.reason, 'string', 'и называет причину');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ: не-2xx ответ хранилища больше не считается удалением', async () => {
+    // Прежняя версия не проверяла `response.ok` ВООБЩЕ: 403 от
+    // хранилища был неотличим от успеха. А контракт DELETE-эндпоинта,
+    // по признанию самого файла, подтверждён источниками слабее, чем
+    // PUT, — то есть именно этот случай был вероятнее прочих.
+    (global as any).fetch = async () => ({ ok: false, status: 403, statusText: 'Forbidden' });
+    const result = await deleteBlob('token', 'https://store.public.blob.vercel-storage.com/photo.jpg');
+    assertEqual(result.deleted, false, '403 — это не удаление');
+    assertEqual(result.reason?.includes('403'), true, 'причина называет код ответа');
+  });
+
+  test('успешное удаление сообщает об успехе без причины', async () => {
+    (global as any).fetch = async () => ({ ok: true, status: 200, statusText: 'OK' });
+    const result = await deleteBlob('token', 'https://store.public.blob.vercel-storage.com/photo.jpg');
+    assertEqual(result.deleted, true, 'удалено');
+    assertEqual(result.reason, null, 'причины нет — сообщать нечего');
   });
 
   test('deleteBlob() отправляет POST на /delete с телом {urls: [...]}', async () => {

@@ -21,7 +21,13 @@ function createFakePrisma() {
       .map((s) => ({ ...s, participant: s.participantId ? participants.get(s.participantId) : null }));
   }
 
-  return {
+  const fake: any = {
+    // Сверка «половины операции» 2026-09-04: находка и её основание
+    // пишутся одной транзакцией, поэтому фейк её поддерживает. Он
+    // выполняет колбэк на себе же — отката у in-memory фейка нет, и
+    // притворяться, что есть, было бы хуже отсутствия: тест держит
+    // ФАКТ вызова в транзакции (см. atomicity-spec), а не её семантику.
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedConversation(c: any) { conversations.set(c.id, c); },
     _seedTranscript(t: any) { transcripts.set(t.id, t); },
@@ -71,6 +77,23 @@ function createFakePrisma() {
           });
         }
         return result;
+      },
+      // Пункт [shown-not-all] 2026-09-05: фейк умеет count — сверка со
+      // «своими же прошлыми словами» считает целое, чтобы сказать
+      // модели, что видит не всю историю говорящего.
+      count: async ({ where }: any) => {
+        let result = [...conversations.values()].filter(
+          (c) => c.projectId === where.projectId && c.id !== where.id?.not && where.status.in.includes(c.status),
+        );
+        const requiredPersonId = where.participants?.some?.personId;
+        if (requiredPersonId) {
+          result = result.filter((c) => {
+            const transcript = [...transcripts.values()].find((t) => t.conversationId === c.id);
+            if (!transcript) return false;
+            return segmentsForTranscript(transcript.id).some((s: any) => s.participant?.personId === requiredPersonId);
+          });
+        }
+        return result.length;
       },
     },
     promptVersion: {
@@ -136,6 +159,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 class FakeAIRouterService {

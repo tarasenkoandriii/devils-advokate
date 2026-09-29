@@ -6,18 +6,23 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
 import { assertProjectOwnership } from '../common/project-ownership';
 
-export interface SaveDecisionObjectiveInput {
-  desiredOutcome?: string;
-  idealOutcome?: string;
-  minimumAcceptableOutcome?: string;
-  unacceptableOutcome?: string;
-  deadline?: string;
-  constraints?: string[];
-  nonNegotiables?: string[];
-  negotiables?: string[];
-  doNotSay?: string[];
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class SaveDecisionObjectiveInput {
+  @IsOptional() @IsString() @MaxLength(4000) desiredOutcome?: string;
+  @IsOptional() @IsString() @MaxLength(4000) idealOutcome?: string;
+  @IsOptional() @IsString() @MaxLength(4000) minimumAcceptableOutcome?: string;
+  @IsOptional() @IsString() @MaxLength(4000) unacceptableOutcome?: string;
+  @IsOptional() @IsString() @MaxLength(200) deadline?: string;
+  // Массив без потолка — тот же безлимитный текст, только в другой обёртке.
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) constraints?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) nonNegotiables?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) negotiables?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) doNotSay?: string[];
 }
 
 @Injectable()

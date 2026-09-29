@@ -18,9 +18,10 @@
 // не было способа её заполнить, TMA UI показывал лейбл диаризации
 // ("SPEAKER_00") как есть.
 
-import { ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import { isMissingColumnError, warnMigrationLagOnce } from '../common/enum-migration-lag';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
 import { TranscriptionService, type ParsedTranscript } from './transcription.service';
@@ -33,6 +34,24 @@ import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
 import { ConversationProcessingStatus } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
+import { spendLimit } from '../common/spend-limits';
+
+/** Сколько отметка о заборе вебхука считается живой. Больше, чем
+ * maxDuration функции (60 с) с запасом на холодный старт и на ретрай
+ * провайдера, и меньше, чем время, за которое человек заметит зависший
+ * разговор. */
+const TRANSCRIPTION_CLAIM_TTL_MS = 10 * 60 * 1000;
+
+/** Пункт [background-jobs] 2026-09-04 — потолок порции сторожевой аренд
+ * медиа. Крон ходит раз в минуту, каждая строка — сетевое удаление файла;
+ * 100 за тик — верхняя оценка того, что успевает уложиться в maxDuration
+ * функции, остальное разберётся следующей минутой. */
+const MEDIA_LEASE_REAP_BATCH = 100;
+
+/** Пункт [ceilings-nobody-was-told-about] 2026-09-24: тот же приём,
+ * что у озвучки (`tts.synthesized`) — счётчик расхода живёт в журнале
+ * действий, без содержимого записи. */
+const TRANSCRIPTION_USAGE_ACTION = 'transcription.requested';
 
 @Injectable()
 export class ConversationsService implements OnModuleInit {
@@ -91,6 +110,47 @@ export class ConversationsService implements OnModuleInit {
     });
   }
 
+  /** Суточные потолки транскрибации: по числу записей и по суммарной
+   * длительности. Два, а не один, и это не перестраховка:
+   * `durationSeconds` приходит ОТ КЛИЕНТА и может не быть указана вовсе,
+   * поэтому потолок по минутам ловит обычное использование, а держит
+   * расходы потолок по числу записей. Считать по длительности, которую
+   * вернул провайдер, было бы честнее — продукт её не хранит, и заводить
+   * ради счётчика колонку с ручной миграцией здесь не стали; это
+   * записано, а не умолчано. */
+  private async assertUnderDailyTranscriptionLimit(userId: string): Promise<void> {
+    const countLimit = spendLimit('TRANSCRIPTIONS_PER_USER_PER_DAY');
+    const minutesLimit = spendLimit('TRANSCRIPTION_MINUTES_PER_USER_PER_DAY');
+    if (countLimit === 0 && minutesLimit === 0) return;
+
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recent = await this.prisma.auditLogEntry.findMany({
+      where: { actorId: userId, action: TRANSCRIPTION_USAGE_ACTION, createdAt: { gte: since } },
+      select: { after: true },
+    });
+
+    if (countLimit > 0 && recent.length >= countLimit) {
+      // 429, как у остальных потолков: предел временный, не правовой.
+      throw new HttpException(
+        `Достигнут суточный лимит расшифровок (${countLimit}/сутки). Попробуйте позже.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (minutesLimit > 0) {
+      const seconds = recent.reduce((sum: number, e: { after: unknown }) => {
+        const value = (e.after as { durationSeconds?: number | null } | null)?.durationSeconds;
+        return sum + (typeof value === 'number' && value > 0 ? value : 0);
+      }, 0);
+      if (seconds >= minutesLimit * 60) {
+        throw new HttpException(
+          `Достигнут суточный лимит расшифровки по длительности (${minutesLimit} мин/сутки). Попробуйте позже.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+  }
+
   /** Единственная точка входа для запуска транскрибации+диаризации —
    * все приватность-проверки раздела 4.6 ТЗ идут здесь, до вызова
    * TranscriptionService, не после и не опционально. */
@@ -114,6 +174,13 @@ export class ConversationsService implements OnModuleInit {
     // чат по материалам), а копия проверки в каждом и была причиной
     // того, что часть точек осталась без неё.
     await this.consent.assertAudioMayLeaveDevice(userId, conversation.projectId);
+
+    // Пункт [ceilings-nobody-was-told-about] 2026-09-24: до этого дня у
+    // транскрибации не было потолка ВООБЩЕ — только предел размера
+    // одного файла (500 МБ). Платится она поминутно, и документ о
+    // расходах называет её первой строкой. Потолок стоит ПОСЛЕ проверок
+    // приватности и ДО первого платного шага.
+    await this.assertUnderDailyTranscriptionLimit(userId);
 
     // Пункт [blob-upload] 2026-08-31 — два возможных источника файла,
     // выбор явный, а не «что нашлось». Обоснование — в
@@ -144,6 +211,22 @@ export class ConversationsService implements OnModuleInit {
           'Это конфигурация, а не сбой провайдера — выполните `npm run prisma:seed` против этой базы.',
       );
     }
+
+    // Пункт [ceilings-nobody-was-told-about] 2026-09-24: отметка
+    // расхода пишется ДО платного вызова. Неудачная попытка тоже
+    // засчитывается — провайдер мог быть уже задет, а недосчитать здесь
+    // дороже, чем пересчитать. Длительность кладём такой, какой её
+    // назвал клиент (может не быть вовсе) — содержимого записи в
+    // журнале нет, только её длина.
+    await this.prisma.auditLogEntry.create({
+      data: {
+        actorId: userId,
+        action: TRANSCRIPTION_USAGE_ACTION,
+        resource: 'Conversation',
+        resourceId: conversationId,
+        after: { durationSeconds: conversation.durationSeconds ?? null },
+      },
+    });
 
     const webhookUrl = this.buildWebhookUrl(conversationId);
     const { storedId, provider: usedProvider } = await this.stt.submitWebhookJob({
@@ -249,6 +332,41 @@ export class ConversationsService implements OnModuleInit {
       return { acknowledged: true, matched: true, duplicate: true };
     }
 
+    // Сверка вебхуков и токенов 2026-09-04: проверка выше была
+    // read-then-act. Ретрай провайдер шлёт ИМЕННО тогда, когда наш ответ
+    // медленный, то есть когда первый вызов ещё выполняется, — оба
+    // читали TRANSCRIBING и оба шли дальше, ровно к тем последствиям,
+    // которые описаны абзацем выше. Теперь право на обработку забирается
+    // атомарно, тем же приёмом, что у напоминаний планировщика и у джоб
+    // голосовых реплик.
+    //
+    // Отметка протухает: упавший обработчик (таймаут функции, деплой в
+    // середине) не должен запирать разговор навсегда — через
+    // TRANSCRIPTION_CLAIM_TTL_MS следующий ретрай его подберёт.
+    const claimNow = new Date();
+    const staleBefore = new Date(claimNow.getTime() - TRANSCRIPTION_CLAIM_TTL_MS);
+    try {
+      const claimed = await this.prisma.conversation.updateMany({
+        where: {
+          id: conversation.id,
+          status: { in: [ConversationProcessingStatus.TRANSCRIBING, ConversationProcessingStatus.FAILED] },
+          OR: [{ transcriptionClaimedAt: null }, { transcriptionClaimedAt: { lt: staleBefore } }],
+        },
+        data: { transcriptionClaimedAt: claimNow },
+      });
+      if (claimed.count === 0) {
+        return { acknowledged: true, matched: true, duplicate: true };
+      }
+    } catch (err) {
+      if (!isMissingColumnError(err)) throw err;
+      warnMigrationLagOnce(
+        this.logger,
+        'conversation.transcriptionClaim',
+        'transcription_claim_2026_09_04.sql',
+        'без атомарного забора — повторная доставка вебхука может обработаться дважды',
+      );
+    }
+
     // Провайдера определяет ПРЕФИКС сохранённого идентификатора, а не
     // язык: задачу мог взять запасной провайдер.
     let parsed: ParsedTranscript | null = null;
@@ -274,6 +392,11 @@ export class ConversationsService implements OnModuleInit {
         conversation.id,
         conversation.paralinguisticsEnabled ? 2 : 1,
       );
+      // Отметку снимаем: повтор после сбоя провайдера разрешён намеренно
+      // (прошлая попытка могла упасть на временной ошибке GET, а результат
+      // у него готов) — с невыснятой отметкой такой повтор молча считался
+      // бы дублем и результат был бы потерян.
+      await this.clearTranscriptionClaim(conversation.id);
       return { acknowledged: true, matched: true };
     }
 
@@ -374,6 +497,19 @@ export class ConversationsService implements OnModuleInit {
    * потребителей, но не позже MEDIA_LEASE_MAX_AGE» — осознанное
    * расширение окна хранения, отражённое в тексте согласия
    * EPHEMERAL_SERVER, не только здесь. */
+  /** Снять отметку о заборе. Отставание миграции здесь не должно ронять
+   * обработку: до применения SQL поведение прежнее. */
+  private async clearTranscriptionClaim(conversationId: string): Promise<void> {
+    try {
+      await this.prisma.conversation.updateMany({
+        where: { id: conversationId },
+        data: { transcriptionClaimedAt: null },
+      });
+    } catch (err) {
+      if (!isMissingColumnError(err)) throw err;
+    }
+  }
+
   async releaseMediaConsumer(conversationId: string, count = 1): Promise<void> {
     // Аудит 2026-09-02 (STT), продолжение: декремент был «прочитать →
     // посчитать → записать» двумя запросами, и два потребителя,
@@ -424,30 +560,56 @@ export class ConversationsService implements OnModuleInit {
    * принудительное удаление файла и обнуление счётчика. Утечка файла
    * хуже потерянного анализа — приоритет прямо здесь. Вызывается из
    * POST /internal/ai-jobs/reap (pg_cron). */
-  async reapExpiredMediaLeases(): Promise<{ mediaReaped: number }> {
+  async reapExpiredMediaLeases(): Promise<{ mediaReaped: number; mediaReapFailed: number }> {
+    // Пункт [background-jobs] 2026-09-04 — две правки, обе про то, что
+    // тик исполняется без человека и потому обязан заканчиваться.
+    //
+    // 1. `take`: выборка была неограниченной. Всплеск (много протухших
+    //    аренд после суток простоя крона) означал один вызов, который
+    //    удаляет файлы по одному, пока не упрётся в таймаут функции — и
+    //    тогда не доводит до конца ничего из оставшегося, каждый раз
+    //    начиная заново с той же головы очереди.
+    // 2. try/catch вокруг строки: одно неудачное удаление blob'а
+    //    (хранилище ответило 500) роняло весь тик исключением. Соседние
+    //    аренды при этом не чистились, а следующий тик начинал с той же
+    //    битой строки — вечный затык на одном файле. Порядок по сроку
+    //    истечения делает очередь честной, а счётчик неудач — видимой:
+    //    «почистили 40, на двух споткнулись» отличимо от «почистили 40».
     const expired = await this.prisma.conversation.findMany({
       where: {
         pendingMediaConsumers: { gt: 0 },
         mediaLeaseExpiresAt: { lt: new Date() },
       },
       select: { id: true, audioBlobPathname: true },
+      orderBy: [{ mediaLeaseExpiresAt: 'asc' }, { id: 'asc' }],
+      take: MEDIA_LEASE_REAP_BATCH,
     });
+    let mediaReaped = 0;
+    let mediaReapFailed = 0;
     for (const conversation of expired) {
-      if (conversation.audioBlobPathname) {
-        await this.audioBlob.deleteByPathname(conversation.audioBlobPathname);
+      try {
+        if (conversation.audioBlobPathname) {
+          await this.audioBlob.deleteByPathname(conversation.audioBlobPathname);
+        }
+        await this.prisma.conversation.update({
+          where: { id: conversation.id },
+          data: {
+            pendingMediaConsumers: 0,
+            audioBlobPathname: null,
+            audioBlobBytes: null,
+            audioBlobContentType: null,
+            mediaLeaseExpiresAt: null,
+          },
+        });
+        mediaReaped++;
+      } catch (err) {
+        mediaReapFailed++;
+        this.logger.warn(
+          `Сторожевая аренд медиа: разговор ${conversation.id} очистить не удалось — ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      await this.prisma.conversation.update({
-        where: { id: conversation.id },
-        data: {
-          pendingMediaConsumers: 0,
-          audioBlobPathname: null,
-          audioBlobBytes: null,
-          audioBlobContentType: null,
-          mediaLeaseExpiresAt: null,
-        },
-      });
     }
-    return { mediaReaped: expired.length };
+    return { mediaReaped, mediaReapFailed };
   }
 
   /** Загрузка аудио клиентом — потоковая передача без буферизации,

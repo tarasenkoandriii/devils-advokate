@@ -109,6 +109,36 @@ button:disabled {
   margin-bottom: 16px;
 }
 
+/* Аудит 2026-09-03: сбой загрузки секции — не действие пользователя и не
+   находка, поэтому тон спокойнее ошибки генерации, но заметно: секция
+   обязана остаться видимой, иначе сбой читается как «тут пусто». */
+.section-load-error {
+  background: #fff6e5;
+  color: #8a5a00;
+  font-size: 13px;
+}
+
+/* Пункт [consent-revocation] 2026-09-04: результат отзыва согласия — не
+   ошибка и не находка, а отчёт о том, что произошло и чего НЕ произошло.
+   Тон нейтральный намеренно: красный здесь читался бы как «что-то пошло
+   не так», а отзыв — нормальное действие человека, просто с границами,
+   которые надо назвать вслух. */
+.consent-revocation-report {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #eef4fb;
+  font-size: 13px;
+}
+
+.consent-revocation-report p {
+  margin: 0 0 6px;
+}
+
+.consent-revocation-report p:last-child {
+  margin-bottom: 0;
+}
+
 .arguments-list {
   display: flex;
   gap: 16px;
@@ -1820,10 +1850,55 @@ button:disabled {
   font-weight: bold;
 }
 
+/* Пункт [quotation-marks] 2026-09-05 — пересказ вместо цитаты. Без
+   кавычек намеренно: кавычки с атрибуцией — типографский знак
+   дословности, а это не дословно. */
+.model-paraphrase {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--tg-theme-hint-color, #999);
+}
+
+.model-paraphrase__label {
+  display: block;
+  font-size: 12px;
+  color: var(--tg-theme-hint-color, #666);
+}
+
+.model-paraphrase__text {
+  margin: 4px 0;
+}
+
+.model-paraphrase__source {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tg-theme-hint-color, #666);
+}
+
+/* Пункт [partial-basis] 2026-09-04 — на чём построен разбор. Заметно,
+   но не тревожно: это не ошибка и не предупреждение, а честная подпись
+   под выводом. */
+.analysis-basis-note {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--tg-theme-hint-color, #999);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--tg-theme-hint-color, #666);
+}
+
 /* Пункт 57 (TMA UI): Library. */
 
 .library-submit-section {
   margin: 16px 0;
+}
+
+/* Пункт [own-submission] 2026-09-04 — решение по своей отправке.
+   Читается первым, до пояснения: человек пришёл узнать исход. */
+.library-submit-section__status {
+  display: block;
+  margin: 4px 0 2px;
+  font-weight: 600;
 }
 
 .library-moderation-list,
@@ -1885,6 +1960,40 @@ button:disabled {
   padding: 8px 10px;
   margin-bottom: 8px;
   font-size: 13px;
+}
+
+/* Пункт [source-collapse] 2026-09-05 — происхождение факта рядом с его
+   текстом. Метка не кричит: она должна читаться вместе с фактом, а не
+   вместо него. */
+/* Пункт [no-correction] 2026-09-05 — действия над записью о человеке.
+   Мелкие и рядом с самой записью: это не главное на экране, но должно
+   быть под рукой у той строки, к которой относится. */
+.person-facts-section__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.person-facts-section__actions button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.person-facts-section__source {
+  margin-right: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--tg-theme-hint-color, #666);
+}
+
+.person-facts-section__status {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: var(--tg-theme-secondary-bg-color, #eee);
+  color: var(--tg-theme-hint-color, #666);
 }
 
 .person-facts-section__source-note {
@@ -2274,6 +2383,16 @@ button:disabled {
   font-size: 11px;
 }
 
+/* Пункт [project-log-v2]: снять/вернуть флаг прямо из хронологии.
+   Действие человека, поэтому кнопка неброская и стоит рядом с записью,
+   а не выглядит как «исправить ошибку системы». */
+.project-log-section__flag-action {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 /* Пункт 76 (TMA UI): WeatherForecastSection. */
 
 .weather-forecast-section {
@@ -2422,6 +2541,14 @@ button:disabled {
   margin: 10px 0;
 }
 
+/* Пункт [project-log-v2]: выбор собеседника перед запуском. */
+.assistance-screen__counterpart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+}
+
 .assistance-screen__flag {
   border-left: 3px solid #d9534f;
   padding: 6px 10px;
@@ -2565,6 +2692,11 @@ button:disabled {
 .domain-dl dt { color: var(--tg-theme-hint-color, #777); font-size: 13px; }
 .domain-dl dd { margin: 0; word-break: break-word; }
 .domain-json { white-space: pre-wrap; font-size: 12px; background: var(--tg-theme-secondary-bg-color, #f5f5f5); padding: 8px; border-radius: 6px; width: 100%; }
+/* [machine-text] 2026-09-04: готовый документ (проект соглашения,
+   уведомление о медиации) — обычный текст с сохранёнными переносами, а не
+   моноширинный дамп: раньше переносы схлопывались в одну строку и
+   дисклеймер тонул. Шрифт основной — это документ, а не отладка. */
+.domain-longtext { white-space: pre-wrap; word-break: break-word; }
 .domain-onboarding { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .domain-onboarding__answers { padding-left: 20px; width: 100%; }
 .domain-onboarding__answers li { margin: 4px 0; }
@@ -2637,3 +2769,93 @@ button.secondary { background: transparent; }
 .dtp-protocol { white-space: pre-wrap; width: 100%; font-family: inherit; font-size: 14px; padding: 10px; border-radius: 8px; background: var(--tg-theme-secondary-bg-color, #f5f5f5); }
 .dtp-coverage { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .outcome-scenarios-list__confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+
+/* Пункт [one-buzz-was-the-whole-answer] 2026-09-24 — объявление о
+   неудаче действия. Поверх содержимого и у верхнего края: человек
+   только что нажал кнопку и смотрит туда, где нажал, а не вниз. */
+.failure-announcer {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--signal-critical, #b3261e);
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  font-size: 14px;
+  line-height: 1.35;
+}
+.failure-announcer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.failure-announcer__reason {
+  opacity: 0.9;
+}
+.failure-announcer__close {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+/* Пункт [consent-that-could-not-be-given] 2026-09-24 — блок согласия на
+   разборы о человеке. Заметнее обычной ошибки: это не сбой, а вопрос,
+   на который человек отвечает за другого человека. */
+.person-research-consent {
+  border: 1px solid var(--tg-theme-hint-color, #c7c7c7);
+  border-left: 4px solid var(--tg-theme-link-color, #2481cc);
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 12px;
+  background: var(--tg-theme-secondary-bg-color, #f4f4f5);
+}
+.person-research-consent__title {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.person-research-consent__body {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.person-research-consent__button {
+  margin-top: 4px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--tg-theme-button-color, #2481cc);
+  color: var(--tg-theme-button-text-color, #fff);
+  font-size: 15px;
+}
+.person-research-consent__button:disabled {
+  opacity: 0.6;
+}
+.person-research-consent__error {
+  margin: 8px 0 0;
+  color: var(--tg-theme-destructive-text-color, #d14343);
+  font-size: 14px;
+}
+
+/* Пункт [right-lived-in-the-tab] 2026-09-25 — строка о сроке права
+   забрать написанное. Не «подсказка мелким шрифтом»: это условие, при
+   котором человек решает, писать ли вообще. */
+.public-discussion-page__rights {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--tg-theme-hint-color, #b0b0b0);
+  background: var(--tg-theme-secondary-bg-color, #f4f4f5);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.45;
+}

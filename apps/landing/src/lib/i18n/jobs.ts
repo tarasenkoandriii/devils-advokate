@@ -17,6 +17,8 @@ export interface JobsDictionary {
     subheadline: string;
     tabCandidates: string;
     tabAgencies: string;
+    /** Пункт [job-domain-v2] §8.5 — третья аудитория «Нанимаю сам». */
+    tabEmployers: string;
     /** Название группы ссылок-аудиторий для скринридера. */
     tabsLabel: string;
   };
@@ -30,6 +32,14 @@ export interface JobsDictionary {
     cta: string;
     /** ТЗ §4: «Написать нам» для B2B, пока нет формы лидов. */
     contactCta: string;
+    points: Array<{ title: string; description: string }>;
+  };
+  /** Пункт [job-domain-v2] §7–8.5 — работодатель нанимает сам: компания с
+   *  командой, лист условий, текст вакансии, собеседования, оффер. Честная
+   *  граница — «не отбирает за вас». */
+  employers: {
+    title: string;
+    cta: string;
     points: Array<{ title: string; description: string }>;
   };
   /** Ссылка на эту страницу из футера основного лендинга: страница была
@@ -48,7 +58,7 @@ export interface JobsDictionary {
     title: string;
     items: Array<{ q: string; a: string }>;
   };
-  finalCta: { title: string; candidates: string; agencies: string };
+  finalCta: { title: string; candidates: string; agencies: string; employers: string };
 }
 
 const ru: JobsDictionary = {
@@ -62,9 +72,10 @@ const ru: JobsDictionary = {
     badge: 'Работа',
     headline: 'Подготовьтесь к поиску работы. Или к найму.',
     subheadline:
-      'Кандидату — CV из его собственных слов и разбор вакансий по его критериям. Агентству — одинаковые вопросы всем кандидатам и прозрачное покрытие вместо «AI-балла».',
+      'Кандидату — CV из его собственных слов и разбор вакансий по его критериям. Агентству — одинаковые вопросы всем кандидатам и прозрачное покрытие вместо «AI-балла». Компании, которая нанимает сама, — лист условий, текст вакансии и собеседования без «отбора за вас».',
     tabCandidates: 'Ищу работу',
-    tabAgencies: 'Нанимаю',
+    tabAgencies: 'Подбор персонала',
+    tabEmployers: 'Нанимаю сам',
     tabsLabel: 'Выберите аудиторию',
   },
   candidates: {
@@ -115,6 +126,32 @@ const ru: JobsDictionary = {
       },
     ],
   },
+  employers: {
+    title: 'Компании, которая нанимает сама',
+    cta: 'Начать в Telegram',
+    points: [
+      {
+        title: 'Компания как подпись',
+        description:
+          'Проект начинается с компании: её реквизитами подписываются вакансия, уведомления кандидатам и оффер. Реестры — открытые, по вашей юрисдикции; сайт компании мы не сканируем.',
+      },
+      {
+        title: 'Лист условий вместо «оценки»',
+        description:
+          'Что требуется и что предлагается — пунктами с источником: ваш бриф, анкета, параметры. Слова кандидата сверяются с этими пунктами и показываются с цитатой: отражено, частично, не обсуждалось. Балла нет.',
+      },
+      {
+        title: 'Текст вакансии из листа',
+        description:
+          'Черновик собирается из подтверждённых пунктов, каждая правка — новая редакция. Проверки подсвечивают спорные формулировки с деловой альтернативой и напоминают об оплате — но не блокируют публикацию.',
+      },
+      {
+        title: 'Агентство — по вашему приглашению',
+        description:
+          'Передайте вакансию агентству ровно в том объёме, что отметите; получайте отчёты по кандидатам после их проверки; отзовите передачу в любой момент. Оффер уходит кандидату копией, которую можно отозвать.',
+      },
+    ],
+  },
   boundaries: {
     title: 'Честные границы',
     intro: 'Это не оговорка мелким шрифтом — это то, чем продукт отличается.',
@@ -134,6 +171,10 @@ const ru: JobsDictionary = {
       {
         title: 'CV только из ваших слов',
         description: 'Ни выдуманного опыта, ни «улучшенных» цифр. Что вы не говорили — того в CV нет.',
+      },
+      {
+        title: 'Не отбирает за вас',
+        description: 'Работодателю продукт не ранжирует кандидатов и не отказывает автоматически: матрица покрытия без столбца «итог», решения о найме принимают люди.',
       },
     ],
   },
@@ -169,6 +210,10 @@ const ru: JobsDictionary = {
         a: 'По покрытию одинаковой утверждённой анкеты в завершённых интервью — прозрачная счётная метрика, не скрытый балл.',
       },
       {
+        q: 'Я нанимаю сам, без агентства. Что мне даёт продукт?',
+        a: 'Лист условий вакансии из вашего брифа, текст вакансии с проверками, единую анкету для всех кандидатов и матрицу покрытия без «итога». Кандидатов он не отбирает и не ранжирует — решение ваше.',
+      },
+      {
         q: 'Сколько это стоит?',
         a: 'Продукт в стадии запуска — актуальные условия в боте. Никаких платных «поднятий» CV или приоритетов в выдаче не существует.',
       },
@@ -177,7 +222,8 @@ const ru: JobsDictionary = {
   finalCta: {
     title: 'Готовы попробовать?',
     candidates: 'Я ищу работу',
-    agencies: 'Я нанимаю',
+    agencies: 'Я подбираю персонал',
+    employers: 'Я нанимаю сам',
   },
 };
 
@@ -192,9 +238,10 @@ const uk: JobsDictionary = {
     badge: 'Робота',
     headline: 'Підготуйтеся до пошуку роботи. Або до найму.',
     subheadline:
-      'Кандидату — CV з його власних слів і розбір вакансій за його критеріями. Агенції — однакові питання всім кандидатам і прозоре покриття замість «AI-балу».',
+      'Кандидату — CV з його власних слів і розбір вакансій за його критеріями. Агенції — однакові питання всім кандидатам і прозоре покриття замість «AI-балу». Компанії, яка наймає сама, — лист умов, текст вакансії та співбесіди без «відбору за вас».',
     tabCandidates: 'Шукаю роботу',
-    tabAgencies: 'Наймаю',
+    tabAgencies: 'Підбір персоналу',
+    tabEmployers: 'Наймаю сам',
     tabsLabel: 'Оберіть аудиторію',
   },
   candidates: {
@@ -245,6 +292,16 @@ const uk: JobsDictionary = {
       },
     ],
   },
+  employers: {
+    title: 'Компанії, яка наймає сама',
+    cta: 'Почати в Telegram',
+    points: [
+      { title: 'Компанія як підпис', description: 'Проєкт починається з компанії: її реквізитами підписуються вакансія, повідомлення кандидатам і офер. Реєстри — відкриті, за вашою юрисдикцією; сайт компанії ми не скануємо.' },
+      { title: 'Лист умов замість «оцінки»', description: 'Що вимагається і що пропонується — пунктами з джерелом: ваш бриф, анкета, параметри. Слова кандидата звіряються з цими пунктами й показуються з цитатою: відображено, частково, не обговорювалося. Балу немає.' },
+      { title: 'Текст вакансії з листа', description: 'Чернетка збирається з підтверджених пунктів, кожна правка — нова редакція. Перевірки підсвічують спірні формулювання з діловою альтернативою й нагадують про оплату — але не блокують публікацію.' },
+      { title: 'Агенція — за вашим запрошенням', description: 'Передайте вакансію агенції рівно в тому обсязі, що відмітите; отримуйте звіти по кандидатах після їхньої перевірки; відкличте передачу будь-коли. Офер іде кандидатові копією, яку можна відкликати.' },
+    ],
+  },
   boundaries: {
     title: 'Чесні межі',
     intro: 'Це не примітка дрібним шрифтом — це те, чим продукт відрізняється.',
@@ -253,6 +310,7 @@ const uk: JobsDictionary = {
       { title: 'Не джоб-борд', description: 'Ми не публікуємо і не агрегуємо вакансії. Ви приносите посилання — ми розбираємо саме його.' },
       { title: 'Рішення ухвалює людина', description: 'AI готує матеріал: чернетки, покриття критеріїв, питання. Затверджуєте, відгукуєтесь і наймаєте — ви.' },
       { title: 'CV лише з ваших слів', description: 'Ані вигаданого досвіду, ані «покращених» цифр. Чого ви не казали — того в CV немає.' },
+      { title: 'Не відбирає за вас', description: 'Роботодавцю продукт не ранжує кандидатів і не відмовляє автоматично: матриця покриття без стовпця «підсумок», рішення про найм ухвалюють люди.' },
     ],
   },
   privacy: {
@@ -271,10 +329,11 @@ const uk: JobsDictionary = {
       { q: 'Які джоб-сайти підтримуються?', a: 'Будь-які: ви приносите посилання на сторінку вакансії, продукт розбирає саме її. Жоден сайт не «інтегрований» і не має переваги.' },
       { q: 'AI вирішує, чи підходжу я на вакансію?', a: 'Ні. Розбір показує покриття ваших критеріїв і що варто уточнити. Слів «підходить» чи «не підходить» у ньому немає навмисно.' },
       { q: 'Як агенція порівнює кандидатів?', a: 'За покриттям однакової затвердженої анкети в завершених інтервʼю — прозора лічильна метрика, не прихований бал.' },
+      { q: 'Я наймаю сам, без агенції. Що мені дає продукт?', a: 'Лист умов вакансії з вашого брифу, текст вакансії з перевірками, єдину анкету для всіх кандидатів і матрицю покриття без «підсумку». Кандидатів він не відбирає й не ранжує — рішення ваше.' },
       { q: 'Скільки це коштує?', a: 'Продукт на стадії запуску — актуальні умови в боті. Жодних платних «підняттів» CV чи пріоритетів у видачі не існує.' },
     ],
   },
-  finalCta: { title: 'Готові спробувати?', candidates: 'Я шукаю роботу', agencies: 'Я наймаю' },
+  finalCta: { title: 'Готові спробувати?', candidates: 'Я шукаю роботу', agencies: 'Я підбираю персонал', employers: 'Я наймаю сам' },
 };
 
 const en: JobsDictionary = {
@@ -288,9 +347,10 @@ const en: JobsDictionary = {
     badge: 'Jobs',
     headline: 'Prepare for your job search. Or for hiring.',
     subheadline:
-      'Candidates get a CV built from their own words and vacancy breakdowns against their criteria. Agencies get identical questions for every candidate and transparent coverage instead of an “AI score”.',
+      'Candidates get a CV built from their own words and vacancy breakdowns against their criteria. Agencies get identical questions for every candidate and transparent coverage instead of an “AI score”. A company hiring on its own gets a terms sheet, vacancy text and interviews — without anyone “selecting for you”.',
     tabCandidates: 'I’m job hunting',
-    tabAgencies: 'I’m hiring',
+    tabAgencies: 'Recruiting',
+    tabEmployers: 'Hiring myself',
     tabsLabel: 'Choose your audience',
   },
   candidates: {
@@ -325,6 +385,16 @@ const en: JobsDictionary = {
       { title: 'Teams and reports', description: 'A shared candidate base via invites, follow-up requests, and a client-facing summary report with a stage funnel.' },
     ],
   },
+  employers: {
+    title: 'For a company hiring on its own',
+    cta: 'Start in Telegram',
+    points: [
+      { title: 'The company as the signature', description: 'A project starts with the company: its details sign the vacancy, candidate notices and the offer. Registries are public ones for your jurisdiction; we never crawl the company website.' },
+      { title: 'A terms sheet instead of a “score”', description: 'What is required and what is offered — as clauses with a source: your brief, questionnaire, parameters. A candidate’s words are matched against those clauses and shown with a quote: covered, partial, not discussed. There is no score.' },
+      { title: 'Vacancy text from the sheet', description: 'The draft is built from confirmed clauses; every edit is a new revision. Checks flag questionable wording with a business alternative and remind you about pay — but never block publishing.' },
+      { title: 'An agency — by your invitation', description: 'Hand a vacancy to an agency in exactly the scope you tick; receive candidate reports after their review; revoke the hand-over at any time. The offer reaches the candidate as a copy you can withdraw.' },
+    ],
+  },
   boundaries: {
     title: 'Honest boundaries',
     intro: 'This is not fine print — it is what sets the product apart.',
@@ -333,6 +403,7 @@ const en: JobsDictionary = {
       { title: 'Not a job board', description: 'We do not publish or aggregate vacancies. You bring a link — we analyse exactly that page.' },
       { title: 'Humans decide', description: 'AI prepares material: drafts, criteria coverage, questions. Approving, applying and hiring is done by you.' },
       { title: 'A CV from your words only', description: 'No invented experience, no “improved” numbers. If you did not say it, it is not in the CV.' },
+      { title: 'It does not select for you', description: 'For an employer the product neither ranks candidates nor rejects anyone automatically: a coverage matrix with no “total” column — hiring decisions are made by people.' },
     ],
   },
   privacy: {
@@ -351,10 +422,11 @@ const en: JobsDictionary = {
       { q: 'Which job sites are supported?', a: 'Any of them: you bring a link to a vacancy page and the product analyses exactly that page. No site is “integrated” or privileged.' },
       { q: 'Does AI decide whether I fit a vacancy?', a: 'No. The breakdown shows the coverage of your criteria and what to clarify. The words “fit” or “no fit” are deliberately absent.' },
       { q: 'How do agencies compare candidates?', a: 'By coverage of the same approved questionnaire across completed interviews — a transparent countable metric, not a hidden score.' },
+      { q: 'I hire on my own, without an agency. What do I get?', a: 'A vacancy terms sheet from your brief, vacancy text with checks, one questionnaire for every candidate and a coverage matrix with no “total”. It neither selects nor ranks candidates — the decision is yours.' },
       { q: 'What does it cost?', a: 'The product is launching — current terms are in the bot. There are no paid CV “boosts” or ranking priorities.' },
     ],
   },
-  finalCta: { title: 'Ready to try?', candidates: 'I’m job hunting', agencies: 'I’m hiring' },
+  finalCta: { title: 'Ready to try?', candidates: 'I’m job hunting', agencies: 'I’m recruiting', employers: 'I’m hiring myself' },
 };
 
 const dictionaries: Record<Locale, JobsDictionary> = { en, uk, ru };

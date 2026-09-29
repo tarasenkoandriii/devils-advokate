@@ -55,6 +55,10 @@ function createFakePrisma() {
 
     project: { findUnique: async ({ where }: any) => projects.get(where.id) ?? null },
     recruitingTeamMember: { findUnique: async () => null },
+    // А-6 (аудит 2026-09-03): сервис проверяет отзыв согласия перед разбором.
+    candidateProfile: {
+      findUnique: async ({ where }: any) => candidates.get(where.id) ?? null,
+    },
     candidatePipelineStatus: {
       findUnique: async ({ where }: any) => {
         const key = where.projectId_candidateProfileId;

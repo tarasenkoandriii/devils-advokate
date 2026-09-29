@@ -67,7 +67,7 @@ const scenarios: Array<[string, () => Promise<void>]> = [
   }],
 ];
 
-(async () => {
+void (async () => {
   let failed = 0;
   for (const [name, fn] of scenarios) {
     try { await fn(); console.log(`✓ ${name}`); }

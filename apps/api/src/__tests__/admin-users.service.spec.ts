@@ -165,7 +165,7 @@ describe('AdminUsersService', () => {
     const auditLog = { record: async (input: any) => { recordedCalls.push(input); return {}; } };
     const service = new AdminUsersService(prisma as any, auditLog as any);
 
-    await service.restrictUser('op1', 'target', true, 'причина');
+    await service.restrictUser('op1', 'target', true, 'аномальный паттерн создания проектов');
 
     expect(recordedCalls.length).toBe(1);
     expect(recordedCalls[0].actorId).toBe('op1');
@@ -199,7 +199,7 @@ describe('AdminUsersService', () => {
     prisma._seedUser({ id: 'op1', telegramId: 'op', isOperator: true });
     const service = makeService(prisma);
 
-    await expect(service.restrictUser('op1', 'nonexistent', true)).rejects.toThrow(NotFoundException);
+    await expect(service.restrictUser('op1', 'nonexistent', true, 'причина достаточной длины')).rejects.toThrow(NotFoundException);
   });
 
   it('acceptance-тест (НАЙВАЖЛИВІШИЙ, Пункт [full-block]): blockUser виставляє isBlocked/blockedAt/blockedNote', async () => {
@@ -255,7 +255,7 @@ describe('AdminUsersService', () => {
     const auditLog = { record: async (input: any) => { recordedCalls.push(input); return {}; } };
     const service = new AdminUsersService(prisma as any, auditLog as any);
 
-    await service.blockUser('op1', 'target', true, 'причина');
+    await service.blockUser('op1', 'target', true, 'повторные нарушения после ограничения');
 
     expect(recordedCalls.length).toBe(1);
     expect(recordedCalls[0].action).toBe('user.blocked');
@@ -267,7 +267,7 @@ describe('AdminUsersService', () => {
     prisma._seedUser({ id: 'op1', telegramId: 'op', isOperator: true });
     const service = makeService(prisma);
 
-    await expect(service.blockUser('op1', 'nonexistent', true)).rejects.toThrow(NotFoundException);
+    await expect(service.blockUser('op1', 'nonexistent', true, 'причина достаточной длины')).rejects.toThrow(NotFoundException);
   });
 
   it('регресійний тест (НАЙВАЖЛИВІШИЙ, аудит UI): blockUser відхиляє спробу заблокувати самого себе — захист від self-lockout', async () => {
@@ -275,7 +275,7 @@ describe('AdminUsersService', () => {
     prisma._seedUser({ id: 'op1', telegramId: 'op', isOperator: true, isBlocked: false });
     const service = makeService(prisma);
 
-    await expect(service.blockUser('op1', 'op1', true, 'помилка')).rejects.toThrow(ForbiddenException);
+    await expect(service.blockUser('op1', 'op1', true, 'попытка заблокировать себя')).rejects.toThrow(ForbiddenException);
 
     const stillUnblocked = await service.getUserDetail('op1', 'op1');
     expect(stillUnblocked.isBlocked).toBe(false);

@@ -16,7 +16,11 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Сверка «половины операции» 2026-09-04: принятие заявки создаёт
+    // аргумент и меняет её статус одной транзакцией. Фейк выполняет
+    // колбэк на себе — отката у него нет (см. audit-2026-09-04-atomicity).
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedArgument(a: any) { argumentsStore.push(a); },
     _seedProtocol(p: any) { protocols.push({ id: nextId(), createdAt: new Date(), ...p }); },
@@ -79,7 +83,20 @@ function createFakePrisma() {
       },
       update: async ({ where, data }: any) => {
         const idx = submissions.findIndex((s) => s.id === where.id);
-        submissions[idx] = { ...submissions[idx], ...data };
+        // Пункт [outside-input] 2026-09-04: vote() перешёл на атомарный
+        // { increment: 1 } вместо чтения-потом-записи — тот же переход,
+        // что сделан в library.service.ts повторным аудитом 2026-08-30
+        // и тогда сюда не перенесённый. Мок обязан трактовать эту форму
+        // так же, как Prisma, а не класть объект в поле счётчика.
+        const applied: any = {};
+        for (const [key, value] of Object.entries(data)) {
+          if (value && typeof value === 'object' && 'increment' in (value as any)) {
+            applied[key] = (submissions[idx][key] ?? 0) + (value as any).increment;
+          } else {
+            applied[key] = value;
+          }
+        }
+        submissions[idx] = { ...submissions[idx], ...applied };
         return submissions[idx];
       },
     },
@@ -99,6 +116,7 @@ function createFakePrisma() {
       findFirst: async ({ where }: any) => closingMessages.filter((m) => m.projectId === where.projectId).sort((a, b) => b.createdAt - a.createdAt)[0] ?? null,
     },
   };
+  return fake;
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -315,6 +333,43 @@ async function run() {
     assertEqual(upvoted.upvotes, 1, 'upvotes увеличен');
     const downvoted = await svc.vote(TOKEN, submission.id, 'down');
     assertEqual(downvoted.downvotes, 1, 'downvotes увеличен отдельно');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [outside-input]: два одновременных голоса считаются оба, а не затирают друг друга', async () => {
+    // Прежний код читал счётчик и писал «прочитанное + 1». На публичном
+    // неаутентифицированном эндпоинте это классический lost update: оба
+    // вызова прочли ноль, оба записали единицу, один голос исчез.
+    // Воспроизводится ТОЛЬКО так — запуском обоих до первой записи;
+    // последовательный вызов проходил и на старом коде.
+    const prisma = createFakePrisma();
+    seedProject(prisma, TOKEN);
+    prisma._seedSubmission({ projectId: PROJECT_ID, text: 'x', stance: 'PRO' });
+    const [submission] = prisma._getSubmissions();
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
+
+    await Promise.all([svc.vote(TOKEN, submission.id, 'up'), svc.vote(TOKEN, submission.id, 'up')]);
+
+    assertEqual(prisma._getSubmissions()[0].upvotes, 2, 'учтены оба голоса, а не один');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [outside-input]: непонятное направление голоса — ошибка, а не молчаливый голос «против»', async () => {
+    // Раньше ЛЮБОЕ значение, кроме строки 'up', попадало в ветку
+    // «против»: опечатка клиента тихо превращалась в противоположный
+    // голос. Та же проверка уже стояла в соседней публичной фиче.
+    const prisma = createFakePrisma();
+    seedProject(prisma, TOKEN);
+    prisma._seedSubmission({ projectId: PROJECT_ID, text: 'x', stance: 'PRO' });
+    const [submission] = prisma._getSubmissions();
+    const svc = new PublicDiscussionService(prisma as any, fakeConsent());
+
+    let thrown = false;
+    try {
+      await svc.vote(TOKEN, submission.id, 'UP' as any);
+    } catch {
+      thrown = true;
+    }
+    assertEqual(thrown, true, 'непонятное направление отвергнуто');
+    assertEqual(prisma._getSubmissions()[0].downvotes, 0, 'и не засчитано как голос «против»');
   });
 
   test('addComment() создаёт комментарий, привязанный к проекту', async () => {

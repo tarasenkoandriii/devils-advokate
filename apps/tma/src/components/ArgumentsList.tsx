@@ -12,6 +12,7 @@ import {
 } from '../lib/features';
 import { Argument, ArgumentFailureInsight, ArgumentLifecycleStatus } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 interface ArgumentsListProps {
   arguments: Argument[];
@@ -90,8 +91,8 @@ function ArgumentItem({ argument, projectId }: { argument: Argument; projectId: 
         const result = await getArgumentFailureInsight(projectId, argument.id);
         setInsight(result);
       }
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось изменить статус аргумента');
     } finally {
       setChanging(false);
     }

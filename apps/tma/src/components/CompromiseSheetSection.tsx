@@ -11,6 +11,7 @@
 // сторон, не полагается только на одну.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   generateCompromiseSheet,
   generateCompromiseSheetVoiceOver,
@@ -22,6 +23,7 @@ import {
 } from '../lib/features';
 import { CompromiseSheet, CompromiseSheetPhase } from '../lib/types';
 import { haptic, shareViaTelegram } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 import { UserVoiceRecordingSection } from './UserVoiceRecordingSection';
 
 interface CompromiseSheetSectionProps {
@@ -34,6 +36,10 @@ type ShareState = 'idle' | 'scanning' | 'preview' | 'blocked' | 'error';
 
 export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: CompromiseSheetSectionProps) {
   const [sheets, setSheets] = useState<CompromiseSheet[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState<CompromiseSheetPhase | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,8 +54,8 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
 
   const reload = useCallback(() => {
     return listCompromiseSheets(sessionId)
-      .then(setSheets)
-      .catch(() => setSheets([]));
+      .then((v) => { setSheets(v); setNotLoaded(false); })
+      .catch(() => { setSheets([]); setNotLoaded(true); });
   }, [sessionId]);
 
   useEffect(() => {
@@ -83,8 +89,8 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
         await new Audio(`data:audio/mpeg;base64,${updated.audioBase64}`).play().catch(() => undefined);
       }
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось собрать лист компромиссов');
     }
   }
 
@@ -93,8 +99,8 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
       const updated = await markCompromiseSheetPreviewed(sheetId);
       setSheets((prev) => prev.map((s) => (s.id === sheetId ? updated : s)));
       haptic('light');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось отметить лист просмотренным');
     }
   }
 
@@ -145,6 +151,7 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
 
   return (
     <section className="compromise-sheet-section">
+      {notLoaded && <NotLoadedNotice what="прошлые листы компромиссов" />}
       <h3>Компромиссный лист</h3>
       <p className="conversations-section__hint">
         Конкретные пункты для переговоров — 🟡 рекомендация, не факт. Отправляется только в виде аргументов, без
@@ -165,7 +172,7 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
               {shareState === 'scanning' && <p className="conversations-section__hint">Проверяем…</p>}
               {shareState === 'blocked' && (
                 <>
-                  <p className="generation-error">Отправка отклонена проверкой безопасности содержимого.</p>
+                  <p role="alert" className="generation-error">Отправка отклонена проверкой безопасности содержимого.</p>
                   <button type="button" onClick={handleCancelShare}>
                     Закрыть
                   </button>
@@ -173,7 +180,7 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
               )}
               {shareState === 'error' && (
                 <>
-                  <p className="generation-error">{shareError}</p>
+                  <p role="alert" className="generation-error">{shareError}</p>
                   <button type="button" onClick={handleCancelShare}>
                     Закрыть
                   </button>
@@ -231,7 +238,7 @@ export function CompromiseSheetSection({ sessionId, projectId, hasDialogue }: Co
         </div>
       ))}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <div className="conversations-section__add-actions">
         <button type="button" onClick={() => handleGenerate('BEFORE')} disabled={generating !== null}>
           {generating === 'BEFORE' ? 'Составляем…' : 'Составить лист до тренировки'}

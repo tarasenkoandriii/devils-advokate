@@ -11,6 +11,8 @@ import { generateVenueRecommendations, listVenueRecommendations } from '../lib/f
 import { VenueRecommendation } from '../lib/types';
 import { haptic } from '../lib/telegram';
 import { checkLocationConsent, LocationConsentPrompt } from './LocationConsentPrompt';
+import { NotLoadedNotice } from './NotLoadedNotice';
+import { LOCATION_PURPOSES } from '../lib/location-purposes';
 
 interface VenueRecommendationSectionProps {
   scheduledConversationId: string;
@@ -22,6 +24,7 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConsentPrompt, setShowConsentPrompt] = useState(false);
+  const [notLoaded, setNotLoaded] = useState(false);
 
   async function handleExpand() {
     setExpanded(true);
@@ -29,15 +32,20 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
     try {
       const existing = await listVenueRecommendations(scheduledConversationId);
       setVenues(existing);
+      setNotLoaded(false);
     } catch {
+      // [failure-looks-empty] 2026-09-05: сбой загрузки давал тот же
+      // пустой список, что и «рекомендаций ещё нет», и человек нажимал
+      // «подобрать места» поверх уже подобранных.
       setVenues([]);
+      setNotLoaded(true);
     }
   }
 
   // Пункт 77 (§3.32 ТЗ) — единый геозапрос, тот же гейт, что в
   // WeatherForecastSection.tsx.
   async function handleFindVenues() {
-    const hasConsent = await checkLocationConsent();
+    const hasConsent = await checkLocationConsent(LOCATION_PURPOSES.VENUE_SEARCH);
     if (!hasConsent) {
       setShowConsentPrompt(true);
       return;
@@ -86,6 +94,8 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
 
   return (
     <div className="venue-recommendation-section">
+      {notLoaded && <NotLoadedNotice what="ранее подобранные места" />}
+
       {venues && venues.length > 0 && (
         <ul className="venue-recommendation-section__list">
           {venues.map((v) => (
@@ -100,9 +110,10 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
           ))}
         </ul>
       )}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {showConsentPrompt ? (
         <LocationConsentPrompt
+          purposes={[LOCATION_PURPOSES.VENUE_SEARCH]}
           source="venue-recommendation"
           onGranted={() => {
             setShowConsentPrompt(false);

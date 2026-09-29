@@ -7,6 +7,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { ProjectMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { pagedList, takeWithProbe } from '../common/page';
 
 export const DOMAIN_MODES: Record<string, ProjectMode> = {
   dtp: ProjectMode.DTP,
@@ -16,7 +17,14 @@ export const DOMAIN_MODES: Record<string, ProjectMode> = {
   investment: ProjectMode.INVESTMENT,
   'major-purchase': ProjectMode.MAJOR_PURCHASE,
   'job-search': ProjectMode.JOB_SEARCH, // Пункт [job-search] 2026-09-01
+  'employer-hiring': ProjectMode.EMPLOYER_HIRING, // Пункт [job-domain-v2] §7
 };
+
+/** Пункт [operator-read-the-question] 2026-09-25 — открытие карточки
+ * проекта оператором. Имя действия стоит рядом с местом, где пишется, и
+ * проверяется сверкой: журнал, который переименовали, — это журнал,
+ * который перестал искаться. */
+export const OPERATOR_VIEWED_PROJECT = 'admin.project_card.viewed';
 
 const CONFIG_RELATION: Record<ProjectMode, string | null> = {
   STANDARD: null,
@@ -27,6 +35,8 @@ const CONFIG_RELATION: Record<ProjectMode, string | null> = {
   INVESTMENT: 'investmentConfig',
   MAJOR_PURCHASE: 'majorPurchaseConfig',
   JOB_SEARCH: 'jobSearchConfig', // Пункт [job-search] 2026-09-01
+  // Пункт [job-domain-v2]: работодатель переиспользует конфиг пула (§7.1)
+  EMPLOYER_HIRING: 'interviewPoolConfig',
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -79,12 +89,26 @@ export class AdminDomainsService {
     const [items, total] = await Promise.all([
       this.prisma.project.findMany({
         where, take, skip, orderBy: { createdAt: 'desc' },
-        select: { id: true, question: true, createdAt: true, updatedAt: true, frozenAt: true, owner: { select: { id: true, telegramId: true } }, [relation]: { select: { id: true, createdAt: true } } } as any,
+        // Пункт [operator-read-the-question] 2026-09-25: здесь стоял
+        // `question: true` — СВОИМИ СЛОВАМИ написанная дилемма человека,
+        // и список отдавал её для ВСЕХ проектов домена сразу. Список —
+        // это навигация: оператору нужно отличить строки друг от друга и
+        // увидеть состояние, а не читать, у кого что случилось. Текст
+        // остался в карточке, где открытие записывается в журнал.
+        select: { id: true, createdAt: true, updatedAt: true, frozenAt: true, owner: { select: { id: true, telegramId: true } }, [relation]: { select: { id: true, createdAt: true } }, _count: { select: { conversations: true } } } as any,
       }),
       this.prisma.project.count({ where }),
     ]);
     return {
-      items: (items as any[]).map((p) => ({ id: p.id, question: p.question, createdAt: p.createdAt, updatedAt: p.updatedAt, frozenAt: p.frozenAt ?? null, owner: p.owner, config: p[relation] ?? null })),
+      items: (items as any[]).map((p) => ({
+        id: p.id,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+        frozenAt: p.frozenAt ?? null,
+        owner: p.owner,
+        config: p[relation] ?? null,
+        conversations: p._count?.conversations ?? 0,
+      })),
       total, take, skip,
     };
   }
@@ -101,7 +125,24 @@ export class AdminDomainsService {
     });
     if (!project) throw new NotFoundException(`Project ${projectId} not found in ${domain}`);
     const { [relation]: config, ...rest } = project as any;
-    return { ...rest, config };
+
+    // Пункт [operator-read-the-question] 2026-09-25: в карточке оператор
+    // читает СЛОВА ЧЕЛОВЕКА — вопрос, цель, описание цели домена (у
+    // здоровья и семейного права это самое личное, что есть в
+    // продукте). Доступ у оператора нужен: без него нельзя разобрать
+    // жалобу и заморозить проект. Но доступ без следа — это доступ, о
+    // котором нельзя честно рассказать. Запись делается ДО ответа и в
+    // ней нет самого текста: журнал фиксирует, что карточку открыли, а
+    // не повторяет содержимое ещё раз.
+    await this.auditLog.record({
+      actorId: userId,
+      action: OPERATOR_VIEWED_PROJECT,
+      resource: 'Project',
+      resourceId: projectId,
+      after: { domain, ownerId: (rest as { owner?: { id?: string } }).owner?.id ?? null },
+    });
+
+    return { ...rest, config, operatorViewLogged: true };
   }
 
   /** Отчёт по intake-квизу: статусы + матрица «предложил × выбрал». */
@@ -142,25 +183,73 @@ export class AdminDomainsService {
   }
 
   /** Очереди media-review со статусами элементов; PROCESSING старше суток —
-   * кандидат на «застрял» (класс бага, закрытый аудитом 2026-08-30 §2). */
+   * кандидат на «застрял» (класс бага, закрытый аудитом 2026-08-30 §2).
+   *
+   * Пункт [ceiling-hid-inside-a-total] 2026-09-24. Здесь стоял потолок
+   * `take: 200` без слова о себе, и это было хуже обрезанного списка:
+   * экран администратора не показывает очереди по одной, он СКЛАДЫВАЕТ
+   * их в итоги — «очередей», «роликов», «доля разобранных». Итог по
+   * срезу, подписанный как итог по всему, — уверенно показанное число,
+   * которое неверно: при девятистах очередях оператор читал «200» и
+   * долю среди последних двухсот.
+   *
+   * Поэтому итоги теперь считает БАЗА по всем строкам, а список
+   * остаётся с потолком и говорит о нём (`hasMore`). «Застрявшие»
+   * считаются по всем элементам в работе, а не по показанному срезу:
+   * множество PROCESSING по самой своей природе невелико, а вопрос
+   * «что застряло» не имеет смысла в границах страницы. */
   async mediaReviewQueues(userId: string, now = new Date()) {
     await this.assertOperator(userId);
-    const queues = await this.prisma.mediaReviewQueue.findMany({
-      orderBy: { createdAt: 'desc' }, take: 200,
-      select: { id: true, title: true, createdAt: true, user: { select: { telegramId: true } }, items: { select: { status: true, createdAt: true, conversation: { select: { updatedAt: true } } } } },
-    });
+    const [rows, queuesTotal, itemsByStatus, processingItems] = await Promise.all([
+      this.prisma.mediaReviewQueue.findMany({
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: takeWithProbe(),
+        select: { id: true, title: true, createdAt: true, user: { select: { telegramId: true } }, items: { select: { status: true, createdAt: true, conversation: { select: { updatedAt: true } } } } },
+      }),
+      this.prisma.mediaReviewQueue.count(),
+      this.prisma.mediaReviewQueueItem.groupBy({ by: ['status'], _count: { _all: true } }),
+      this.prisma.mediaReviewQueueItem.findMany({
+        where: { status: 'PROCESSING' },
+        select: { createdAt: true, conversation: { select: { updatedAt: true } } },
+      }),
+    ]);
+
     const staleCutoff = now.getTime() - DAY;
-    return queues.map((q) => {
+    const isStuck = (it: { createdAt: Date; conversation: { updatedAt: Date } | null }) =>
+      // у элемента нет updatedAt — считаем от последнего изменения привязанной записи, иначе от создания
+      (it.conversation?.updatedAt ?? it.createdAt).getTime() < staleCutoff;
+
+    const page = pagedList(rows);
+    const queues = page.items.map((q) => {
       const byStatus: Record<string, number> = {};
       let stuck = 0;
       for (const it of q.items) {
         byStatus[it.status] = (byStatus[it.status] ?? 0) + 1;
-        // у элемента нет updatedAt — считаем от последнего изменения привязанной записи, иначе от создания
-        const since = (it.conversation?.updatedAt ?? it.createdAt).getTime();
-        if (it.status === 'PROCESSING' && since < staleCutoff) stuck++;
+        if (it.status === 'PROCESSING' && isStuck(it)) stuck++;
       }
       return { id: q.id, title: q.title, createdAt: q.createdAt, ownerTelegramId: q.user.telegramId, totalItems: q.items.length, byStatus, stuckProcessing: stuck };
     });
+
+    const totalsByStatus: Record<string, number> = {};
+    let itemsTotal = 0;
+    for (const g of itemsByStatus) {
+      const n = g._count._all;
+      totalsByStatus[g.status] = n;
+      itemsTotal += n;
+    }
+
+    return {
+      queues,
+      hasMore: page.hasMore,
+      limit: page.limit,
+      // Итоги — по ВСЕМ строкам базы, а не по показанному срезу.
+      totals: {
+        queues: queuesTotal,
+        items: itemsTotal,
+        byStatus: totalsByStatus,
+        stuckProcessing: processingItems.filter(isStuck).length,
+      },
+    };
   }
 
   /** Единственная мутация операторской панели. Принуждение — ProjectFrozenGuard

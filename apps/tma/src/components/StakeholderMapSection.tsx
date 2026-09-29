@@ -6,6 +6,7 @@
 // каждого, явно не смешанные между собой.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   confirmStakeholderRole,
   generateArgumentsForStakeholder,
@@ -14,6 +15,7 @@ import {
 } from '../lib/features';
 import { RoleSuggestion, StakeholderMapEntry, StakeholderRole, SuggestRolesResult } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
 
 interface StakeholderMapSectionProps {
   projectId: string;
@@ -28,6 +30,10 @@ const ROLE_LABELS: Record<StakeholderRole, string> = {
 
 export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps) {
   const [map, setMap] = useState<StakeholderMapEntry[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState<SuggestRolesResult | null>(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -36,8 +42,8 @@ export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps)
 
   const reloadMap = useCallback(() => {
     return listStakeholderMap(projectId)
-      .then(setMap)
-      .catch(() => setMap([]));
+      .then((v) => { setMap(v); setNotLoaded(false); })
+      .catch(() => { setMap([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
@@ -67,8 +73,8 @@ export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps)
       );
       await reloadMap();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось принять предложение о роли');
     }
   }
 
@@ -78,8 +84,8 @@ export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps)
       await generateArgumentsForStakeholder(projectId, personId);
       await reloadMap();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось собрать аргументы для фигуранта');
     } finally {
       setGeneratingFor(null);
     }
@@ -89,6 +95,7 @@ export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps)
 
   return (
     <section className="stakeholder-map-section">
+      {notLoaded && <NotLoadedNotice what="карту фигурантов" />}
       <h3>Круг лиц, влияющих на решение</h3>
       <p className="conversations-section__hint">
         Для каждого человека — свой набор аргументов, то, что убедит именно его. Разные фигуранты могут требовать
@@ -126,7 +133,7 @@ export function StakeholderMapSection({ projectId }: StakeholderMapSectionProps)
         </ul>
       )}
 
-      {suggestError && <p className="generation-error">{suggestError}</p>}
+      {suggestError && <p role="alert" className="generation-error">{suggestError}</p>}
       <button type="button" onClick={handleSuggest} disabled={suggesting}>
         {suggesting ? 'Анализируем круг лиц…' : 'Найти круг лиц'}
       </button>

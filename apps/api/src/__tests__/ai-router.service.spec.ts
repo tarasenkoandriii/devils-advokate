@@ -7,7 +7,8 @@
 import { AIRouterService, AIRouterContentBlockedError, AIRouterNoCapableModelError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
 import { ContentScanService } from '../content-scan/content-scan.service';
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { MAX_USER_PROMPT_CHARS } from '../ai-router/prompt-limits';
 
 let fakeAiJobCount = 0; // [rate-limits]
 let fakeReusableJob: any = null; // [idempotency]: что вернёт aIJob.findFirst
@@ -154,6 +155,56 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     await expect(
       router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'test', jsonMode: true }),
     ).rejects.toThrow(ForbiddenException);
+    expect(getCallCount()).toBe(0);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ (мутационная сверка 2026-09-04): слишком длинный запрос отклоняется САМИМ роутером, до провайдера и до джобы', async () => {
+    // Мутация «убрать assertPromptWithinLimit() из prepareJob» проходила
+    // весь набор зелёной: prompt-limits.spec.ts проверял чистую функцию
+    // — то есть что предел посчитан правильно, — но не то, что роутер её
+    // вообще зовёт. Потолок, который нигде не применяется, ничего не
+    // ограничивает; платил бы за это владелец ключа.
+    //
+    // Проверка стоит ДО согласия и до скана намеренно, поэтому здесь
+    // согласие выдано: единственная причина отказа — длина.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const getCallCount = mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+
+    const router = buildRouter(prisma);
+    const tooLong = 'а'.repeat(MAX_USER_PROMPT_CHARS + 1);
+    await expect(
+      router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: tooLong, jsonMode: true }),
+    ).rejects.toThrow(BadRequestException);
+    expect(getCallCount()).toBe(0);
+    // И ни одной строки AIJob: отказ до постановки, а не «упавшая» джоба.
+    expect(prisma._getAllJobs()).toHaveLength(0);
+  });
+
+  it('длина мультимодального запроса считается по текстовым блокам, а не по одной строке', async () => {
+    // Иначе потолок обходится в один приём: тот же объём текста,
+    // разложенный на два блока, — и проверки как не было.
+    const prisma = createFakePrisma();
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'argument-generation', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+    const getCallCount = mockFetchSequence([{ ok: true, body: openaiSuccessBody }]);
+
+    const half = 'б'.repeat(Math.ceil((MAX_USER_PROMPT_CHARS + 2) / 2));
+    const router = buildRouter(prisma);
+    await expect(
+      router.execute({
+        userId: USER_ID,
+        taskType: 'argument-generation',
+        userPrompt: [
+          { type: 'text', text: half },
+          { type: 'text', text: half },
+        ] as any,
+        jsonMode: true,
+      }),
+    ).rejects.toThrow(BadRequestException);
     expect(getCallCount()).toBe(0);
   });
 

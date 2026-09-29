@@ -10,6 +10,8 @@ import { NotFoundException } from '@nestjs/common';
 import { ProjectMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
+export const TEAM_MODES: ReadonlySet<ProjectMode> = new Set([ProjectMode.INTERVIEW_POOL, ProjectMode.EMPLOYER_HIRING]);
+
 export async function assertInterviewPoolProjectAccess(prisma: PrismaService, userId: string, projectId: string) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   // АУДИТ 2026-09-02: режим проекта не проверялся (в job-search такая
@@ -18,7 +20,10 @@ export async function assertInterviewPoolProjectAccess(prisma: PrismaService, us
   // пула создавались на проекте, которого нет в списке домена: данные
   // есть, из интерфейса недостижимы. Плюс расширялась поверхность для
   // члена команды: доступ давался по recruitingTeamId без учёта режима.
-  if (!project || project.mode !== ProjectMode.INTERVIEW_POOL) {
+  // Пункт [job-domain-v2] §6.1: командная функция доступа обслуживает
+  // два режима — агентство и работодатель (та же RecruitingTeam, разный
+  // teamType). JOB_SEARCH сюда не попадает никогда (владелец, личные данные).
+  if (!project || !TEAM_MODES.has(project.mode)) {
     throw new NotFoundException(`Project ${projectId} not found`);
   }
   if (project.ownerId === userId) return project;

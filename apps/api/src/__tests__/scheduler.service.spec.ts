@@ -43,20 +43,58 @@ function createFakePrisma() {
         scheduled.push(s);
         return s;
       },
-      findMany: async ({ where, include }: any) => {
+      // Аудит времени 2026-09-03: отправка напоминаний забирает право
+      // условным UPDATE (claim-then-send), поэтому мок обязан уметь
+      // updateMany с условием — иначе тест проверял бы не тот путь.
+      updateMany: async ({ where, data }: any) => {
+        let count = 0;
+        for (const s of scheduled) {
+          if (s.id !== where.id) continue;
+          if ('sparringReminderSentAt' in where) {
+            const expected = where.sparringReminderSentAt;
+            const actual = s.sparringReminderSentAt;
+            const same = expected === null ? actual === null : actual instanceof Date && expected instanceof Date && actual.getTime() === expected.getTime();
+            if (!same) continue;
+          }
+          if ('postMortemReminderSentAt' in where) {
+            const expected = where.postMortemReminderSentAt;
+            const actual = s.postMortemReminderSentAt;
+            const same = expected === null ? actual === null : actual instanceof Date && expected instanceof Date && actual.getTime() === expected.getTime();
+            if (!same) continue;
+          }
+          Object.assign(s, data);
+          count++;
+        }
+        return { count };
+      },
+      // Пункт [background-jobs] 2026-09-04: фейк научен `gte`, `orderBy` и
+      // `take` — тик напоминаний перестал быть неограниченным. Условие
+      // «разговор уже прошёл» переехало из тела цикла в запрос, а тест
+      // про «не слать задним числом» оставлен прежним НАМЕРЕННО: он и
+      // доказывает, что для человека переезд ничего не изменил.
+      findMany: async ({ where, include, orderBy, take }: any) => {
         let result = scheduled;
         if (where.projectId) result = result.filter((s) => s.projectId === where.projectId);
         if (where.sparringReminderSentAt === null) result = result.filter((s) => s.sparringReminderSentAt === null);
         if (where.sparringReminderMinutesBefore?.not === null) result = result.filter((s) => s.sparringReminderMinutesBefore !== null);
         if (where.postMortemReminderSentAt === null) result = result.filter((s) => s.postMortemReminderSentAt === null);
         if (where.scheduledAt?.lt) result = result.filter((s) => s.scheduledAt < where.scheduledAt.lt);
+        if (where.scheduledAt?.gte) result = result.filter((s) => s.scheduledAt >= where.scheduledAt.gte);
         if (include?.project) {
           result = result.map((s) => ({ ...s, project: { ...projects.get(s.projectId), owner: users.get(projects.get(s.projectId).ownerId) } }));
         }
         if (include?.person) {
           result = result.map((s) => ({ ...s, person: s.personId ? people.get(s.personId) : null }));
         }
-        return [...result].sort((a, b) => a.scheduledAt - b.scheduledAt);
+        const desc = orderBy?.scheduledAt === 'desc';
+        const sorted = [...result].sort((a, b) => (desc ? b.scheduledAt - a.scheduledAt : a.scheduledAt - b.scheduledAt));
+        return typeof take === 'number' ? sorted.slice(0, take) : sorted;
+      },
+      count: async ({ where }: any) => {
+        let result = scheduled;
+        if (where?.postMortemReminderSentAt === null) result = result.filter((s) => s.postMortemReminderSentAt === null);
+        if (where?.scheduledAt?.lt) result = result.filter((s) => s.scheduledAt < where.scheduledAt.lt);
+        return result.length;
       },
       findUnique: async ({ where, include }: any) => {
         const s = scheduled.find((x) => x.id === where.id);
@@ -240,6 +278,38 @@ async function run() {
 
     await svc.dispatchDueReminders(BOT_TOKEN);
     assertEqual(sentText.includes('Начальник Иван'), true, 'имя фигуранта попало в текст');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (аудит времени 2026-09-03): два тика крона внахлёст не шлют человеку два одинаковых напоминания', async () => {
+    // Раньше отметка «отправлено» ставилась ПОСЛЕ отправки, а выборка шла
+    // по `sentAt: null` — минутный крон и подтормозивший предыдущий вызов
+    // брали одну строку и слали дубль. Теперь право на отправку забирается
+    // условным UPDATE до обращения к Telegram.
+    const prisma = createFakePrisma();
+    seedProjectWithUser(prisma);
+    prisma._seedScheduled({ projectId: PROJECT_ID, scheduledAt: new Date(Date.now() + 30 * 60_000), sparringReminderMinutesBefore: 60 });
+    let sentCount = 0;
+    (global as any).fetch = async () => { sentCount++; return { ok: true, json: async () => ({ ok: true }) }; };
+    const svc = new SchedulerService(prisma as any, new FakeSparringService() as any);
+
+    const [a, b] = await Promise.all([svc.dispatchDueReminders(BOT_TOKEN), svc.dispatchDueReminders(BOT_TOKEN)]);
+    assertEqual(a.sparringSent + b.sparringSent, 1, 'напоминание засчитано ровно один раз на два одновременных тика');
+    assertEqual(sentCount, 1, 'и в Telegram ушло ровно одно сообщение');
+  });
+
+  test('сбой отправки снимает отметку — напоминание не теряется навсегда', async () => {
+    // Пропущенное напоминание перед реальным разговором дороже лишнего
+    // запроса на следующем тике; дубль при этом невозможен — пока отметка
+    // стояла, вторая копия строку не выбрала.
+    const prisma = createFakePrisma();
+    seedProjectWithUser(prisma);
+    prisma._seedScheduled({ projectId: PROJECT_ID, scheduledAt: new Date(Date.now() + 30 * 60_000), sparringReminderMinutesBefore: 60 });
+    (global as any).fetch = async () => ({ ok: false, status: 403, text: async () => 'bot was blocked by the user', json: async () => ({ ok: false, description: 'bot was blocked by the user' }) });
+    const svc = new SchedulerService(prisma as any, new FakeSparringService() as any);
+
+    const res = await svc.dispatchDueReminders(BOT_TOKEN);
+    assertEqual(res.failed, 1, 'сбой посчитан');
+    assertEqual(prisma._getScheduled()[0].sparringReminderSentAt, null, 'отметка снята — следующий тик попробует снова');
   });
 
   test('dispatchDueReminders() продолжает обработку остальных напоминаний, даже если одна отправка упала', async () => {

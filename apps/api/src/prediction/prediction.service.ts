@@ -20,6 +20,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled } from '../common/claim-substance';
 
 const TASK_TYPE = 'prediction-analysis';
 
@@ -28,10 +29,13 @@ interface RawAnalysis {
   lesson: string;
 }
 
-function isValidAnalysisPayload(text: string): boolean {
+export function isValidAnalysisPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null && typeof parsed.difference === 'string' && typeof parsed.lesson === 'string';
+    // Пункт [finding-without-substance] 2026-09-25: разбор существует ради
+    // этой разницы, а промпт прямо запрещает общие слова в выводе — пустая
+    // строка есть предел общих слов.
+    return allFilled(parsed, ['difference', 'lesson']);
   } catch {
     return false;
   }

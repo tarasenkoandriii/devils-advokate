@@ -46,7 +46,7 @@ export function InterviewPoolOverview({ config, projectId }: { config: IpConfig;
       )}
 
       <h3>Флаги соответствия</h3>
-      {flagsError && <p className="generation-error">Не удалось загрузить флаги соответствия: {String(flagsError)}. Это НЕ значит, что спорных формулировок нет — проверка не выполнена.</p>}
+      {flagsError && <p role="alert" className="generation-error">Не удалось загрузить флаги соответствия: {String(flagsError)}. Это НЕ значит, что спорных формулировок нет — проверка не выполнена.</p>}
       {!flagsError && flags && flags.length === 0 && <p className="dtp-status dtp-status--ok">В описании вакансии спорных формулировок не найдено.</p>}
       {flags && flags.length > 0 && <p className="dtp-status dtp-status--warn">{flags.length} формулировк{flags.length === 1 ? 'а' : flags.length < 5 ? 'и' : ''} стоит пересмотреть до публикации — приложение не запрещает, только показывает.</p>}
       {flags?.map((f) => (

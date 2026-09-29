@@ -5,14 +5,18 @@
 // сортування варіантів між собою, НІКОЛИ поля covered/score/rank —
 // структурна відсутність у типах нижче, не програмна заборона.
 
+import { intakeNote, type SourceIntake } from '../common/source-intake';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../common/unique-violation';
+import { numberedTranscript, resolveSegmentRef } from '../common/transcript-prompt';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { InvestmentCriterionCategory } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { assertInvestmentProjectAccess } from './investment-access';
 import { ExtractedInvestmentConfigDraft } from './investment-onboarding.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled, substanceSite } from '../common/claim-substance';
 
 const BREAKDOWN_TASK_TYPE = 'investment-meeting-breakdown';
 
@@ -29,12 +33,22 @@ interface RawBreakdown {
   criteriaBreakdown: CriterionStatement[];
 }
 
-function isValidBreakdown(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidBreakdown(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.criteriaBreakdown)) return false;
     return parsed.criteriaBreakdown.every(
-      (c: any) => typeof c?.criterionId === 'string' && typeof c?.whatWasSaid === 'string',
+      // Пункт [finding-without-substance-2] 2026-09-26: `criterionId`
+      // пустым не совпадёт ни с одним критерием домена, а вот
+      // `whatWasSaid` сохраняется как есть — разбор существует ради этой
+      // строки. Одна из ЧЕТЫРЁХ идентичных копий (dtp, health,
+      // family-law, investment); реестр — `common/claim-substance.ts`.
+      (c: any) =>
+        typeof c?.criterionId === 'string' &&
+        allFilled(c, substanceSite('isValidBreakdown').required.map((f) => f.field)),
     );
   } catch {
     return false;
@@ -47,7 +61,7 @@ function isValidBreakdown(text: string): boolean {
 // тексту промпту, не постфактум-вивід).
 const BREAKDOWN_SYSTEM_PROMPT =
   'Тебе дано транскрипт зустрічі з фінансовим радником/представником та перелік критеріїв, важливих для користувача. ' +
-  'Для КОЖНОГО критерію викладі НЕЙТРАЛЬНО, що САМЕ сказав радник по цьому пункту — whatWasSaid, з sourceSegmentId (id репліки-джерела), якщо застосовно. ' +
+  'Для КОЖНОГО критерію викладі НЕЙТРАЛЬНО, що САМЕ сказав радник по цьому пункту — whatWasSaid, з sourceSegmentId (НОМЕР репліки-джерела — число у квадратних дужках перед реплікою), якщо застосовно. ' +
   'КРИТИЧНО ВАЖЛИВО: НІКОЛИ не формулюй висновок як "варто"/"не варто", "рекомендую"/"не рекомендую", "цей варіант кращий", НЕ став оцінку чи бал — ' +
   'тільки буквальний, нейтральний переказ того, що прозвучало. Якщо радник взагалі не торкнувся критерію — чесно напиши "не піднімалось у розмові", не вигадуй. ' +
   'Відповідай СТРОГО валідним JSON вида {"criteriaBreakdown": [{"criterionId": string, "whatWasSaid": string, "sourceSegmentId": string|null}]}. Без пояснень поза ним.';
@@ -66,7 +80,7 @@ export class InvestmentService {
 
     const existing = await this.prisma.investmentConfig.findUnique({ where: { projectId } });
     if (existing) {
-      throw new BadRequestException(`InvestmentConfig for project ${projectId} already exists`);
+      throw new BadRequestException(`Инвестиционный разбор для этого проекта уже настроен`);
     }
     // АУДИТ (повний аудит проєкту): раніше category критеріїв не
     // звірялась з InvestmentCriterionCategory перед записом — клієнт
@@ -75,27 +89,43 @@ export class InvestmentService {
     // застосований до mediaType/category/direction/source у DTP/family-law v2.
     for (const c of draft.criteria) {
       if (!Object.values(InvestmentCriterionCategory).includes(c.category)) {
-        throw new BadRequestException(`Unknown criterion category: ${c.category}`);
+        throw new BadRequestException(`Неизвестная категория критерия: ${c.category}`);
       }
     }
 
-    return this.prisma.investmentConfig.create({
-      data: {
-        projectId,
-        goalDescription: draft.goalDescription,
-        targetBudget: draft.targetBudget ?? undefined,
-        currency: draft.currency ?? undefined,
-        criteria: {
-          create: draft.criteria.map((c) => ({
-            text: c.text,
-            category: c.category,
-            isRequired: c.isRequired,
-            orderIndex: c.orderIndex,
-          })),
+    // Пункт [check-then-create] 2026-09-04: проверка выше остаётся, но
+    // она НЕ гарантия — между ней и вставкой есть окно, и два
+    // одновременных нажатия (двойной тап, повтор при плохой связи)
+    // проходили её оба. `projectId` уникален, поэтому второй вызов падал
+    // с P2002, и человек читал внутреннюю ошибку сервера вместо того же
+    // «уже настроено», что и при обычном повторе. Гонку здесь не
+    // исключить без блокировки, но ответ обязан быть один и тот же
+    // независимо от того, кто успел раньше.
+    try {
+      // `return await`, а не `return`: без await промис уходит из
+      // try/catch, и отказ базы летит мимо обработчика — ошибка
+      // была бы «поймана» только на бумаге.
+      return await this.prisma.investmentConfig.create({
+        data: {
+          projectId,
+          goalDescription: draft.goalDescription,
+          targetBudget: draft.targetBudget ?? undefined,
+          currency: draft.currency ?? undefined,
+          criteria: {
+            create: draft.criteria.map((c) => ({
+              text: c.text,
+              category: c.category,
+              isRequired: c.isRequired,
+              orderIndex: c.orderIndex,
+            })),
+          },
         },
-      },
-      include: { criteria: { orderBy: { orderIndex: 'asc' } } },
-    });
+        include: { criteria: { orderBy: { orderIndex: 'asc' } } },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new BadRequestException(`Инвестиционный разбор для этого проекта уже настроен`);
+      throw err;
+    }
   }
 
   async getConfig(userId: string, projectId: string) {
@@ -161,10 +191,11 @@ export class InvestmentService {
       }),
     ]);
     if (segments.length === 0) {
-      throw new BadRequestException('Транскрипт цієї розмови ще порожній — нечего аналізувати');
+      throw new BadRequestException('Транскрипт этого разговора ещё пуст — нечего анализировать');
     }
 
-    const transcriptText = segments.map((s: { id: string; text: string }) => `[id=${s.id}] ${s.text}`).join('\n');
+    const transcript = numberedTranscript(segments);
+    const transcriptText = transcript.text;
     const criteriaText = criteria
       .map((c: any) => `[id=${c.id}] (${c.category}) ${c.text}${c.isRequired ? ' (критично)' : ''}`)
       .join('\n');
@@ -190,9 +221,19 @@ export class InvestmentService {
     }
 
     const parsed: RawBreakdown = JSON.parse(result.text);
+    // Сверка «ссылка на реплику» 2026-09-04: раньше `sourceSegmentId`
+    // сохранялся как есть. Модель могла назвать реплику, которой нет, и
+    // разбор сослался бы на слова, которых собеседник не говорил.
+    // Теперь номер переводится в настоящий id, а несуществующий —
+    // становится «источник не указан»: у утверждения будет честное
+    // отсутствие ссылки вместо выдуманной.
+    const criteriaBreakdown = parsed.criteriaBreakdown.map((b) => ({
+      ...b,
+      sourceSegmentId: resolveSegmentRef(transcript.byRef, b.sourceSegmentId),
+    }));
     return this.prisma.investmentMeeting.update({
       where: { id: meetingId },
-      data: { criteriaBreakdown: parsed.criteriaBreakdown as any, draftedAt: new Date() },
+      data: { criteriaBreakdown: criteriaBreakdown as any, draftedAt: new Date() },
     });
   }
 
@@ -215,8 +256,9 @@ export class InvestmentService {
     await this.assertOwnedOpportunity(userId, opportunityId);
 
     let sourceText: string;
+    let sourceIntake: SourceIntake;
     try {
-      sourceText = await fetchUrlText(sourceUrl);
+      ({ text: sourceText, intake: sourceIntake } = await fetchUrlText(sourceUrl));
     } catch (err) {
       if (err instanceof UnsafeUrlError || err instanceof UrlFetchError) {
         throw new BadRequestException(err.message);
@@ -229,9 +271,13 @@ export class InvestmentService {
     // продукт складніший за нерухомість/авто, "вирахувана ціна" тут
     // легко стала б імпліцитною оцінкою вигідності. Тільки сирий
     // текст для власного прочитання користувачем.
-    return this.prisma.investmentSourceComparison.create({
+    // Пункт [stored-text-cut] 2026-09-06: если страница вошла не
+    // целиком, человек узнаёт об этом рядом с самим текстом, а не
+    // догадывается по обрыву на полуслове.
+    const created = await this.prisma.investmentSourceComparison.create({
       data: { opportunityId, sourceUrl, sourceText },
     });
+    return { ...created, intakeNote: intakeNote(sourceIntake) };
   }
 
   // ── Порівняльний вивід (§3.2/5.4 ТЗ) — БЕЗ жодного score/rank ──

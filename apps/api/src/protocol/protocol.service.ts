@@ -25,6 +25,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { deadlineRelative } from '../common/server-time';
 
 const TASK_TYPE = 'protocol-generation';
 
@@ -72,8 +73,9 @@ export class ProtocolService {
 
     const commitmentsText = commitments
       .map(
-        (c: { owner: string; description: string; dueDate: Date | null; person: { displayName: string | null } }) =>
-          `- [${c.owner === 'USER' ? 'пользователь' : c.person.displayName ?? 'фигурант'}] ${c.description}${c.dueDate ? ` (срок: ${c.dueDate.toISOString().slice(0, 10)})` : ''}`,
+        // [job-domain-v2]: person nullable — контрагентом может быть CandidateProfile
+        (c: { owner: string; description: string; dueDate: Date | null; person: { displayName: string | null } | null }) =>
+          `- [${c.owner === 'USER' ? 'пользователь' : c.person?.displayName ?? 'фигурант'}] ${c.description}${c.dueDate ? ` (${deadlineRelative(c.dueDate)})` : ''}`,
       )
       .join('\n');
 

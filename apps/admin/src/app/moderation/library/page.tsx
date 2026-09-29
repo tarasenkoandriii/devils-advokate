@@ -4,16 +4,26 @@ import { useEffect, useState } from 'react';
 import { listLibraryModerationQueue, moderateLibraryEntry } from '../../../lib/endpoints';
 import { ModerationQueueTable } from '../../../components/ModerationQueueTable';
 import type { LibraryEntry } from '../../../lib/types';
+import { ErrorBanner } from '../../../components/ErrorBanner';
+import { OperatorTraceNotice } from '../../../components/OperatorTraceNotice';
+import { operatorScreenActions } from '../../../lib/operator-screens';
 
 export default function LibraryModerationPage() {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Пункт [decision-basis] 2026-09-04 — две разные беды, два разных
+  // сообщения. Не загрузилась очередь — показывать нечего, ранний
+  // возврат честен. Не удалось принять или отклонить ОДНУ запись —
+  // очередь на экране осталась верной, и уносить её вместе с сообщением
+  // значит отнять у оператора единственный способ проверить, применилось
+  // решение или нет.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function load() {
     try {
       setEntries(await listLibraryModerationQueue());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось загрузить очередь');
+      setLoadError(err instanceof Error ? err.message : 'Не удалось загрузить очередь');
     }
   }
 
@@ -21,7 +31,7 @@ export default function LibraryModerationPage() {
     void load();
   }, []);
 
-  if (error) return <div className="page"><p style={{ color: 'var(--signal-critical)' }}>{error}</p></div>;
+  if (loadError) return <div className="page"><p role="alert" style={{ color: 'var(--signal-critical)' }}>{loadError}</p></div>;
   if (!entries) return <div className="page"><p className="muted">Загрузка…</p></div>;
 
   return (
@@ -31,6 +41,11 @@ export default function LibraryModerationPage() {
         Разборы, отправленные пользователями в публичную библиотеку (§3.5 ТЗ) — снапшот текста
         аргументов на момент отправки, не живая ссылка на проект.
       </p>
+      {/* Пункт [operator-left-a-trace-unsaid] 2026-09-25: что останется
+          после решения и увидит ли это человек — одним правилом на все
+          экраны оператора, а не подписью, написанной здесь руками. */}
+      <OperatorTraceNotice actions={operatorScreenActions('app/moderation/library/page.tsx')} />
+      <ErrorBanner error={actionError} onDismiss={() => setActionError(null)} />
       <ModerationQueueTable
         items={entries}
         columns={['Название', 'Категория', 'Аргументы']}
@@ -56,7 +71,7 @@ export default function LibraryModerationPage() {
             await moderateLibraryEntry(entry.id, 'ACCEPT');
             setEntries((prev) => prev?.filter((e) => e.id !== entry.id) ?? null);
           } catch (err) {
-            setError(err instanceof Error ? err.message : 'Не удалось принять запись');
+            setActionError(err instanceof Error ? err.message : 'Не удалось принять запись — запись осталась в очереди');
           }
         }}
         onReject={async (entry) => {
@@ -64,7 +79,7 @@ export default function LibraryModerationPage() {
             await moderateLibraryEntry(entry.id, 'REJECT');
             setEntries((prev) => prev?.filter((e) => e.id !== entry.id) ?? null);
           } catch (err) {
-            setError(err instanceof Error ? err.message : 'Не удалось отклонить запись');
+            setActionError(err instanceof Error ? err.message : 'Не удалось отклонить запись — запись осталась в очереди');
           }
         }}
       />

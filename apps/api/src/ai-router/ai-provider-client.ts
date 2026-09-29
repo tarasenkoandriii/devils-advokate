@@ -21,6 +21,7 @@
  * бесполезным для дедупликации (ТЗ §10.1). Разрешение в URI происходит
  * в момент вызова провайдера — MediaUriResolver ниже. */
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
+import type { JsonModeSupport } from './json-mode';
 
 export type MediaRef =
   | { source: 'youtube'; videoId: string }
@@ -131,6 +132,17 @@ export type AILane = 'sync' | 'background';
 export interface AIProviderClient {
   /** Полосы, которые этот клиент реально обслуживает. */
   readonly lanes: readonly AILane[];
+  /**
+   * Чем этот клиент держит формат ответа. Пункт
+   * [json-mode-was-asked-and-dropped] 2026-09-26.
+   *
+   * Тот же довод, что у `lanes`, и та же болезнь: `params.jsonMode`
+   * ставят 83 вызова, а читает его ровно один клиент из четырёх —
+   * остальные молча его роняют. Поле ОБЯЗАТЕЛЬНОЕ: новый клиент не
+   * может забыть объявить, держит ли он формат, а объявить неверно не
+   * даст проверка (`json-mode.ts` и реестр обязаны совпадать).
+   */
+  readonly jsonModeSupport: JsonModeSupport;
   complete(
     params: AIProviderCompletionParams,
     credentials: { apiKey: string; apiEndpoint: string },
@@ -143,6 +155,9 @@ export interface AIProviderClient {
  */
 export class OpenAiCompatibleClient implements AIProviderClient {
   readonly lanes = ['sync'] as const;
+  /** Единственный клиент, который params.jsonMode реально читает — см.
+   * response_format ниже. */
+  readonly jsonModeSupport = 'enforced' as const;
 
   async complete(
     params: AIProviderCompletionParams,
@@ -211,6 +226,11 @@ export class OpenAiCompatibleClient implements AIProviderClient {
  */
 export class AnthropicClient implements AIProviderClient {
   readonly lanes = ['sync'] as const;
+  /** Формат ответа НЕ задаётся: в Messages API нет response_format, а
+   * префикс ответа сломал бы задачи, разбирающие массив верхнего
+   * уровня. Причина целиком — в `json-mode.ts`. Объявлено явно, чтобы
+   * `params.jsonMode` больше не выглядел выполненным. */
+  readonly jsonModeSupport = 'prompt-only' as const;
 
   async complete(
     params: AIProviderCompletionParams,

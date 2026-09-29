@@ -33,6 +33,7 @@ import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/co
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
+import { checkQuoteLimits } from './quote-limit';
 import { ArgumentStance } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 
@@ -52,7 +53,11 @@ function isValidReconciliationPayload(text: string): boolean {
         typeof item.scriptureReference === 'string' &&
         item.scriptureReference.trim().length > 0 &&
         typeof item.text === 'string' &&
-        item.text.trim().length > 0,
+        item.text.trim().length > 0 &&
+        // Аудит 2026-09-03: требование промпта по авторскому праву
+        // («цитата короче 15 слов») теперь проверяется кодом. Ответ с
+        // длинной дословной цитатой уходит на повтор, а не в базу.
+        checkQuoteLimits(item.text).ok,
     );
   } catch {
     return false;

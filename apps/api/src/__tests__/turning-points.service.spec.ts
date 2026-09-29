@@ -13,7 +13,13 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Сверка «половины операции» 2026-09-04: находка и её основание
+    // пишутся одной транзакцией, поэтому фейк её поддерживает. Он
+    // выполняет колбэк на себе же — отката у in-memory фейка нет, и
+    // притворяться, что есть, было бы хуже отсутствия: тест держит
+    // ФАКТ вызова в транзакции (см. atomicity-spec), а не её семантику.
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedConversation(c: any) { conversations.set(c.id, c); },
     _seedTranscript(t: any) { transcripts.set(t.id, t); },
@@ -79,6 +85,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 // Фейковый AIRouterService — не делает реальных HTTP-вызовов.
@@ -165,8 +172,12 @@ async function run() {
     ]);
     const svc = new TurningPointsService(prisma as any, fakeRouter as any);
 
-    const created = await svc.detect(USER_ID, CONV_ID);
+    const { points: created, notice } = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created.length, 1, 'количество созданных точек');
+    // Сверка длинных разговоров 2026-09-04: короткий разговор разбирается
+    // одним куском, и подписи про части быть не должно — иначе она
+    // появлялась бы всегда и перестала бы что-либо значить.
+    assertEqual(notice, null, 'у короткого разговора нет подписи про разбор частями');
     assertEqual(prisma._getSignals().length, 1, 'количество ConversationSignal в базе');
     assertEqual(prisma._getEvidence().length, 1, 'количество ConversationSignalEvidence в базе');
     assertEqual(prisma._getConversation(CONV_ID).status, 'ANALYZED', 'статус после успешной детекции');
@@ -214,8 +225,24 @@ async function run() {
     ]);
     const svc = new TurningPointsService(prisma as any, fakeRouter as any);
 
-    const created = await svc.detect(USER_ID, CONV_ID);
+    // Сверка конвенционных проверок 2026-09-04 ([guard-audit]): то, что
+    // пропуск СЧИТАЕТСЯ и произносится, держала только конвенционная
+    // проверка «в файле есть `invented++`». Мутация `if (false)
+    // invented++;` проходила её насквозь: слово в файле осталось,
+    // поведение исчезло. Здесь проверяется поведение — перехватом
+    // логгера сервиса.
+    const warnings: string[] = [];
+    (svc as any).logger = { warn: (m: string) => warnings.push(m), log: () => undefined, error: () => undefined };
+
+    const { points: created } = await svc.detect(USER_ID, CONV_ID);
     assertEqual(created.length, 1, 'только валидная точка создана, невалидная пропущена без падения');
+
+    assertEqual(warnings.length, 1, 'потеря находки произнесена, а не проглочена молча');
+    assertEqual(
+      warnings[0].includes('на 1 несуществующих реплик'),
+      true,
+      `в предупреждении названо ЧИСЛО потерянных находок, получено: ${warnings[0]}`,
+    );
   });
 
   test('detect() откатывает статус на TRANSCRIBED и бросает BadGatewayException при ошибке AI', async () => {
@@ -274,7 +301,7 @@ async function run() {
     };
 
     const svc = new TurningPointsService(prisma as any, new FakeAIRouterService() as any);
-    const list = await svc.list(USER_ID, CONV_ID);
+    const { points: list } = await svc.list(USER_ID, CONV_ID);
 
     assertEqual(list.length, 2, 'количество точек в list()');
     assertEqual((list[0] as any).transcriptSegmentId, 'seg-1', 'сортировка — seg-1 первым, несмотря на порядок создания');

@@ -85,6 +85,15 @@ import { IntakeModule } from './intake/intake.module';
 import { AdminDomainsModule } from './admin-domains/admin-domains.module';
 import { AdminDbStateModule } from './admin-db-state/admin-db-state.module';
 import { JobSearchModule } from './job-search/job-search.module';
+import { TermsSheetModule } from './terms-sheet/terms-sheet.module';
+import { ClientBriefModule } from './client-brief/client-brief.module';
+import { EmployerDossierModule } from './employer-dossier/employer-dossier.module';
+import { EmployerHiringModule } from './employer-hiring/employer-hiring.module';
+import { CandidateSelfShareModule } from './candidate-self-share/candidate-self-share.module';
+import { VacancyPostingModule } from './vacancy-posting/vacancy-posting.module';
+import { VacancyIntakeModule } from './vacancy-intake/vacancy-intake.module';
+import { HiringExtrasModule } from './hiring-extras/hiring-extras.module';
+import { TelegramBotModule } from './telegram-bot/telegram-bot.module';
 import { MajorPurchaseModule } from './major-purchase/major-purchase.module';
 import { InterviewPoolModule } from './interview-pool/interview-pool.module';
 import { AuditLogModule } from './audit-log/audit-log.module';
@@ -192,6 +201,15 @@ import { DtpModule } from './dtp/dtp.module';
     AdminDomainsModule, // ТЗ domain-ui-and-voice-intake §1.4 — операторский обзор доменов/intake/media-review
     AdminDbStateModule, // Пункт [db-state] 2026-09-01 — вкладка «БД»: pg_cron/pg_net/ai_jobs без ручного SQL
     JobSearchModule, // Пункт [job-search] 2026-09-01 — домен кандидата: CV + сверка вакансий + статистика
+    TermsSheetModule, // Пункт [job-domain-v2] — лист условий: общий слой трёх поддоменов найма
+    ClientBriefModule, // [job-domain-v2] бриф как документ
+    EmployerDossierModule, // [job-domain-v2] компания как объект досье
+    EmployerHiringModule, // [job-domain-v2] поддомен работодателя, engagement, оффер копией
+    CandidateSelfShareModule, // [job-domain-v2] самошеринг соискателя (К-8)
+    VacancyPostingModule, // [job-domain-v2] связка Т — текст вакансии
+    VacancyIntakeModule, // [job-domain-v2] связка П — приток вакансий и инструменты соискателя
+    HiringExtrasModule, // [job-domain-v2] остальные функции этапа 2 парами (К/А/Р) + публичная преданкета
+    TelegramBotModule, // [job-domain-v2] К-20: входящий вебхук бота — пересланная вакансия попадает в проект
     MajorPurchaseModule,
     InterviewPoolModule,
     AuditLogModule,

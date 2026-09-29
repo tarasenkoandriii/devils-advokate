@@ -17,6 +17,8 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, DecisionObjective } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { deadlineRelative } from '../common/server-time';
+import { allFilled, substanceSite } from '../common/claim-substance';
 
 const TASK_TYPE = 'argument-generation';
 
@@ -26,13 +28,19 @@ interface RawGeneratedArgument {
   weight?: number;
 }
 
-function isValidGeneratedPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidGeneratedPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
     return parsed.every(
       (item) =>
-        typeof item.text === 'string' &&
+        // Пункт [finding-without-substance-2] 2026-09-26: аргумент
+        // сохраняется прямо, без отбрасывания, — пустой текст доходит до
+        // экрана записью с позицией и весом, у которой нечего прочитать.
+        allFilled(item, substanceSite('isValidGeneratedPayload').required.map((f) => f.field)) &&
         (item.stance === 'pro' || item.stance === 'con') &&
         (item.weight === undefined || typeof item.weight === 'number'),
     );
@@ -61,7 +69,10 @@ export function buildUserPrompt(
       lines.push(`Не подлежит обсуждению: ${objective.nonNegotiables.join('; ')}`);
     if (objective.negotiables.length > 0)
       lines.push(`Можно поступиться: ${objective.negotiables.join('; ')}`);
-    if (objective.deadline) lines.push(`Срок: ${objective.deadline.toISOString().split('T')[0]}`);
+    // Пункт [server-said-which-day] 2026-09-24: то же самое, записанное
+    // иначе (`split('T')[0]` вместо `slice(0, 10)`), — и поэтому мимо
+    // любого правила, которое смотрело бы на одно написание.
+    if (objective.deadline) lines.push(`Срок: ${deadlineRelative(objective.deadline)}`);
   }
 
   return lines.join('\n');

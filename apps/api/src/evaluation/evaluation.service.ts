@@ -49,7 +49,7 @@ export class EvaluationService {
       throw new NotFoundException(`EvaluationDataset ${evaluationDatasetId} not found`);
     }
     if (cases.length === 0) {
-      throw new BadRequestException('cases must not be empty');
+      throw new BadRequestException('Список примеров пуст — набор без примеров создавать нечего');
     }
     return Promise.all(
       cases.map((c) =>
@@ -82,12 +82,12 @@ export class EvaluationService {
       throw new NotFoundException(`EvaluationDataset ${evaluationDatasetId} not found`);
     }
     if (dataset.cases.length === 0) {
-      throw new BadRequestException(`EvaluationDataset ${evaluationDatasetId} has no cases — nothing to run`);
+      throw new BadRequestException(`В наборе нет ни одного примера — прогонять нечего`);
     }
 
     const caseType = dataset.cases[0].caseType;
     if (dataset.cases.some((c: any) => c.caseType !== caseType)) {
-      throw new BadRequestException('EvaluationDataset must contain cases of a single caseType per run');
+      throw new BadRequestException('В одном прогоне должны быть примеры одного типа');
     }
     if (caseType !== 'classification' && caseType !== 'structural') {
       throw new BadRequestException(
@@ -322,9 +322,11 @@ export class EvaluationService {
     };
   }
 
+  /** Пункт [check-then-create-2] 2026-09-27: имя метрики уникально, а
+   * прогон оценки создаёт метрики параллельно с другим прогоном. Пара
+   * «прочитать и вставить» падала бы с P2002 и роняла ВЕСЬ прогон —
+   * из-за метрики, которая к этому моменту уже существует. */
   private async findOrCreateMetric(name: string) {
-    const existing = await this.prisma.evaluationMetric.findUnique({ where: { name } });
-    if (existing) return existing;
-    return this.prisma.evaluationMetric.create({ data: { name } });
+    return this.prisma.evaluationMetric.upsert({ where: { name }, update: {}, create: { name } });
   }
 }

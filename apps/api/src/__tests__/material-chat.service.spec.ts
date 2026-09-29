@@ -504,6 +504,35 @@ async function run() {
     assertEqual(order, ['CONSENT_CHECKED'], 'проверка согласия — до загрузки, ни одного байта провайдеру не ушло');
   });
 
+  test('КЛЮЧЕВОЙ ТЕСТ (сверка мест применения 2026-09-04): ВТОРОЙ шаг (submitVoiceReply) тоже спрашивает согласие', async () => {
+    // Загрузка байтов и запуск расшифровки — независимые шаги: клиент
+    // вправе вызвать второй с audioUrl, полученным раньше, и согласие
+    // могло быть отозвано между ними. Мутационная сверка показала, что
+    // проверку на втором шаге можно удалить незаметно.
+    const prisma = createFakePrisma();
+    seedBase(prisma);
+    prisma._seedSession({ id: 'sess-2', workingMaterialId: MATERIAL_ID });
+    const order: string[] = [];
+    const consent = {
+      assertAudioMayLeaveDevice: async () => {
+        order.push('CONSENT_CHECKED');
+        throw new ForbiddenException('Consent required: RECORDING');
+      },
+    };
+    const transcription = { submitWebhookJob: async () => { order.push('SENT'); return { storedId: 'x' }; } };
+    const svc = new MaterialChatService(
+      prisma as any, new FakeAIRouterService() as any, transcription as any, fakeSecrets as any,
+      new FakeTextToSpeechService() as any, consent as any,
+    );
+
+    await assertThrowsAsync(
+      () => svc.submitVoiceReply(USER_ID, 'sess-2', 'https://provider.example/audio-1'),
+      ForbiddenException,
+      'submitVoiceReply() при отозванном согласии',
+    );
+    assertEqual(order, ['CONSENT_CHECKED'], 'ни одной отправки провайдеру после отказа');
+  });
+
   for (const [name, fn] of scenarios) {
     try {
       await fn();

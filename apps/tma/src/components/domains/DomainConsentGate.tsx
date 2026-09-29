@@ -33,7 +33,7 @@ export function DomainConsentGate({ consentType, children }: { consentType: stri
     <div className="consent-gate">
       <h3>{t.title}</h3>
       <p>{t.body}</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <button type="button" className="primary" disabled={busy} onClick={async () => {
         setBusy(true); setError(null);
         try { await grantConsent({ consentType: consentType as ConsentType, version: t.version, source: 'domain-gate' }); setState('granted'); }

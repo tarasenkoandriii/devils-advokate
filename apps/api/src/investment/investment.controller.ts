@@ -193,6 +193,20 @@ export class InvestmentController {
     return this.group.createInviteLink(userId, groupId);
   }
 
+  @Get('investment-groups/:id/invites')
+  async listGroupInvites(@CurrentUser() userId: string, @Param('id') groupId: string) {
+    return this.group.listInvites(userId, groupId);
+  }
+
+  @Post('investment-groups/:id/invites/:inviteId/revoke')
+  async revokeGroupInvite(
+    @CurrentUser() userId: string,
+    @Param('id') groupId: string,
+    @Param('inviteId') inviteId: string,
+  ) {
+    return this.group.revokeInvite(userId, groupId, inviteId);
+  }
+
   @Post('investment-groups/:id/join')
   async joinGroup(@CurrentUser() userId: string, @Body() dto: JoinGroupDto) {
     return this.group.joinGroup(userId, dto.token);

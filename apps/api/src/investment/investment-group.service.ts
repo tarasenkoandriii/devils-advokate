@@ -51,17 +51,42 @@ export class InvestmentGroupService {
     return { deepLink: buildStartDeepLink(`investment_group_${token}`), token, expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) };
   }
 
+  /** Сверка вебхуков и токенов 2026-09-04 — см. тот же комментарий у
+   * RecruitingTeamInvite: отозвать можно только то, что видно. */
+  async listInvites(userId: string, groupId: string) {
+    await this.assertOwner(userId, groupId);
+    return this.prisma.investmentGroupInvite.findMany({
+      where: { groupId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true, expiresAt: true, revokedAt: true },
+    });
+  }
+
+  async revokeInvite(userId: string, groupId: string, inviteId: string) {
+    await this.assertOwner(userId, groupId);
+    const invite = await this.prisma.investmentGroupInvite.findFirst({ where: { id: inviteId, groupId } });
+    if (!invite) throw new BadRequestException('Приглашение не найдено в этой группе');
+    return this.prisma.investmentGroupInvite.update({
+      where: { id: invite.id },
+      data: { revokedAt: invite.revokedAt ?? new Date() },
+      select: { id: true, revokedAt: true },
+    });
+  }
+
   async joinGroup(userId: string, token: string) {
     const invite = await this.prisma.investmentGroupInvite.findUnique({ where: { token } });
-    if (!invite || invite.expiresAt < new Date()) {
-      throw new BadRequestException('Запрошення недійсне або прострочене');
+    if (!invite || invite.expiresAt < new Date() || invite.revokedAt) {
+      throw new BadRequestException('Приглашение недействительно или просрочено');
     }
-    const existing = await this.prisma.investmentGroupMember.findUnique({
+    // Пункт [check-then-create] 2026-09-04 — та же правка и по тому же
+    // основанию, что во вступлении в команду рекрутеров: замысел
+    // идемпотентный, но между чтением и вставкой было окно, и повторный
+    // переход по ссылке падал с P2002 вместо «вы уже в группе».
+    // `update: {}` — роль вступившего раньше повтором не переписывается.
+    return this.prisma.investmentGroupMember.upsert({
       where: { groupId_userId: { groupId: invite.groupId, userId } },
-    });
-    if (existing) return existing;
-    return this.prisma.investmentGroupMember.create({
-      data: { groupId: invite.groupId, userId, role: InvestmentGroupRole.MEMBER },
+      update: {},
+      create: { groupId: invite.groupId, userId, role: InvestmentGroupRole.MEMBER },
     });
   }
 
@@ -122,7 +147,7 @@ export class InvestmentGroupService {
   private async assertOwner(userId: string, groupId: string) {
     const membership = await this.assertMember(userId, groupId);
     if (membership.role !== InvestmentGroupRole.OWNER) {
-      throw new ForbiddenException('Тільки власник групи може запрошувати нових учасників');
+      throw new ForbiddenException('Только владелец группы может приглашать новых участников');
     }
     return membership;
   }

@@ -9,11 +9,13 @@
 // не хватает).
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { generateClosingMessage, listClosingMessages } from '../lib/features';
 import { ApiRequestError } from '../lib/api';
 import { ClosingMessage } from '../lib/types';
 import { haptic } from '../lib/telegram';
 import { SpeakButton } from './SpeakButton';
+import { ModelParaphrase, ModelWrittenNote } from './ModelParaphrase';
 
 interface ClosingMessageSectionProps {
   projectId: string;
@@ -21,14 +23,18 @@ interface ClosingMessageSectionProps {
 
 export function ClosingMessageSection({ projectId }: ClosingMessageSectionProps) {
   const [messages, setMessages] = useState<ClosingMessage[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     listClosingMessages(projectId)
-      .then(setMessages)
-      .catch(() => setMessages([]))
+      .then((v) => { setMessages(v); setNotLoaded(false); })
+      .catch(() => { setMessages([]); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -55,22 +61,23 @@ export function ClosingMessageSection({ projectId }: ClosingMessageSectionProps)
 
   return (
     <section className="closing-message-section">
+      {notLoaded && <NotLoadedNotice what="завершающие сообщения" />}
       <h3>Завершающее сообщение</h3>
       <p className="conversations-section__hint">Честный итог по завершении — не сухая статистика и не приукрашивание.</p>
+      <ModelWrittenNote what="Итог" />
 
       {messages.map((m) => (
         <div key={m.id} className="closing-message-section__message">
           <p className="script-text">{m.summaryText}</p>
-          {m.quoteText && (
-            <p className="closing-message-section__quote">
-              «{m.quoteText}» — {m.quoteSourceReference}
-            </p>
-          )}
+          {/* Пункт [quotation-marks] 2026-09-05: кавычки с атрибуцией —
+              знак дословности, а промпт САМ требует от модели парафраз.
+              Продукт знал, что это не цитата, и показывал как цитату. */}
+          {m.quoteText && <ModelParaphrase text={m.quoteText} source={m.quoteSourceReference} />}
           <SpeakButton text={m.summaryText} />
         </div>
       ))}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <button type="button" onClick={handleGenerate} disabled={generating}>
         {generating ? 'Составляем…' : 'Составить завершающее сообщение'}
       </button>

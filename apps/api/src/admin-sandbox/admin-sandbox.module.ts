@@ -20,6 +20,13 @@ import { InterviewPoolModule } from '../interview-pool/interview-pool.module';
 import { FamilyLawModule } from '../family-law/family-law.module';
 import { DtpModule } from '../dtp/dtp.module';
 import { JobSearchModule } from '../job-search/job-search.module';
+import { TermsSheetModule } from '../terms-sheet/terms-sheet.module';
+import { EmployerHiringModule } from '../employer-hiring/employer-hiring.module';
+import { EmployerDossierModule } from '../employer-dossier/employer-dossier.module';
+import { ClientBriefModule } from '../client-brief/client-brief.module';
+import { VacancyPostingModule } from '../vacancy-posting/vacancy-posting.module';
+import { HiringExtrasModule } from '../hiring-extras/hiring-extras.module';
+import { AdminSandboxHiringService } from './admin-sandbox-hiring.service';
 
 // Пункт [admin-sandbox] 2026-08-31: модуль НЕ содержит собственной
 // бизнес-логики цепочки — только переиспользует сервисы, которые уже
@@ -47,8 +54,15 @@ import { JobSearchModule } from '../job-search/job-search.module';
     FamilyLawModule, // Пункт [sandbox-family-law] 2026-09-01 — этап 4 доменного покрытия
     DtpModule, // Пункт [sandbox-dtp] 2026-09-01 — этап 5 доменного покрытия
     JobSearchModule, // Пункт [job-search] 2026-09-01 — седьмой домен
+    // Пункт [job-domain-v2] — найм v2: лист условий, работодатель, бриф, компания, текст вакансии, этап 2
+    TermsSheetModule,
+    EmployerHiringModule,
+    EmployerDossierModule,
+    ClientBriefModule,
+    VacancyPostingModule,
+    HiringExtrasModule,
   ],
   controllers: [AdminSandboxController],
-  providers: [AdminSandboxService],
+  providers: [AdminSandboxService, AdminSandboxHiringService],
 })
 export class AdminSandboxModule {}

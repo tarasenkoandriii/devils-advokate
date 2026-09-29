@@ -47,7 +47,7 @@ export const en: Dictionary = {
     {
       icon: 'lock',
       title: 'Privacy first',
-      description: 'All recordings are stored locally. You control your data.',
+      description: 'Recordings are stored on our server — the analysis would be impossible otherwise. What gets deleted, and when, is your call.',
       side: 'right',
     },
   ],
@@ -103,7 +103,7 @@ export const en: Dictionary = {
     },
     {
       title: 'Full control',
-      description: 'Local storage, no leaks, your rules.',
+      description: 'Server-side storage, with one-click export and deletion, on your terms.',
     },
   ],
   technology: {
@@ -198,13 +198,13 @@ export const en: Dictionary = {
         title: 'Privacy & Security',
         items: [
           { icon: 'wifi', text: 'Your data, your project', description: 'Visible to you and to whoever you hand it to yourself' },
-          { icon: 'lock', text: 'Strong encryption', description: 'Industry-standard protection' },
+          { icon: 'lock', text: 'Encrypted in transit and at rest', description: 'HTTPS and private storage with no public links. There is no end-to-end encryption: the server works with the text in order to analyse it' },
           { icon: 'servers', text: 'Outbound only with consent', description: 'Data reaches external AI services only after your explicit consent' },
-          { icon: 'people', text: 'No tracking', description: 'No analytics, no profiling' },
+          { icon: 'people', text: 'No tracking', description: 'No analytics, no trackers. The product does build a profile of the person you talk to — from your own records, and only for you' },
           {
             icon: 'integrations',
-            text: 'Third-party free',
-            description: 'No hidden sharing or selling',
+            text: 'Third parties named',
+            description: 'AI providers, speech recognition, maps — your data reaches them only with your consent, and you see every one. Data is never sold',
           },
           { icon: 'rocket', text: 'Always improving', description: 'Privacy-first by design' },
         ],
@@ -238,7 +238,7 @@ export const en: Dictionary = {
           {
             id: 'workflow_capture',
             text: 'Full Control at All Times',
-            description: 'Decide what stays, what goes, and who sees it.',
+            description: 'Decide what stays and what goes. One exception: a product operator can open your project card when handling a report or a block — every such opening is written to the audit log.',
           },
           {
             id: 'workflow_review',

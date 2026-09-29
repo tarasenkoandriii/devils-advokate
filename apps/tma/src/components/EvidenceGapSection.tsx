@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react';
 import { getEvidenceGap } from '../lib/features';
 import { EvidenceGapCategory, EvidenceGapReport } from '../lib/types';
+import { SectionLoadError } from './SectionLoadError';
 
 interface EvidenceGapSectionProps {
   projectId: string;
@@ -32,15 +33,20 @@ const CATEGORY_ORDER: EvidenceGapCategory[] = ['KNOWN', 'SUPPORTED', 'ASSUMED', 
 export function EvidenceGapSection({ projectId }: EvidenceGapSectionProps) {
   const [report, setReport] = useState<EvidenceGapReport | null>(null);
   const [loading, setLoading] = useState(true);
+  // Аудит 2026-09-03: без этого сбой загрузки выглядел как «все аргументы
+  // на чём-то основаны» — то есть ровно наоборот к смыслу секции.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     getEvidenceGap(projectId)
-      .then(setReport)
-      .catch(() => setReport(null))
+      .then((r) => { setReport(r); setFailed(false); })
+      .catch(() => { setReport(null); setFailed(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  if (loading || !report) return null;
+  if (loading) return null;
+  if (failed) return <SectionLoadError what="разбивку аргументов по основаниям" hint="у аргументов нет пробелов в основаниях" />;
+  if (!report) return null;
 
   const totalArguments = CATEGORY_ORDER.reduce((sum, cat) => sum + report.breakdown[cat].length, 0);
   if (totalArguments === 0) return null; // нет аргументов — нечего классифицировать

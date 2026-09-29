@@ -8,8 +8,9 @@
 // AI-виклику для порівняння.
 
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { DTP_ROLE_LABEL, labelFor } from '../common/document-labels';
 import { PrismaService } from '../prisma/prisma.service';
-import { sumMoney } from '../common/money';
+import { budgetByCurrency, moneyWithCurrency, normalizeCurrency } from '../common/money';
 import { CriteriaComparisonService, CrossConsultationCheckResult, NOT_DISCUSSED_PLACEHOLDER } from '../criteria-comparison/criteria-comparison.service';
 import { DtpParticipantRole, DtpEvidenceAccessAction, DtpFaultSource, DtpBudgetCategory, DtpBudgetDirection } from '@prisma/client';
 import { assertOwnedDtpProject } from './dtp-access';
@@ -32,12 +33,12 @@ export class DtpV2Service {
     await this.assertOwnedConfig(userId, configId);
 
     if (!Object.values(DtpParticipantRole).includes(role)) {
-      throw new BadRequestException(`Unknown role: ${role}`);
+      throw new BadRequestException(`Неизвестная роль участника: ${role}`);
     }
     if (role === DtpParticipantRole.SELF) {
       const existing = await this.prisma.dtpParticipant.findFirst({ where: { configId, role: DtpParticipantRole.SELF } });
       if (existing) {
-        throw new BadRequestException('У цього конфігу вже є учасник з role=SELF');
+        throw new BadRequestException('У этого конфига уже есть участник с role=SELF');
       }
     }
 
@@ -50,7 +51,7 @@ export class DtpV2Service {
       // рубіж на випадок паралельних запитів, що обидва пройшли
       // сервісну перевірку вище до створення запису.
       if (err?.code === 'P2010' || err?.code === 'P2002') {
-        throw new BadRequestException('У цього конфігу вже є учасник з role=SELF');
+        throw new BadRequestException('У этого конфига уже есть участник с role=SELF');
       }
       throw err;
     }
@@ -106,7 +107,7 @@ export class DtpV2Service {
   ) {
     await this.assertOwnedConfig(userId, configId);
     if (!Object.values(DtpFaultSource).includes(source as any)) {
-      throw new BadRequestException(`Unknown source: ${source}`);
+      throw new BadRequestException(`Неизвестный источник: ${source}`);
     }
     if (!statusText.trim()) {
       throw new BadRequestException('statusText не может быть пустым');
@@ -143,10 +144,10 @@ export class DtpV2Service {
   ) {
     await this.assertOwnedConfig(userId, configId);
     if (!Object.values(DtpBudgetCategory).includes(category as any)) {
-      throw new BadRequestException(`Unknown category: ${category}`);
+      throw new BadRequestException(`Неизвестная категория: ${category}`);
     }
     if (!Object.values(DtpBudgetDirection).includes(direction as any)) {
-      throw new BadRequestException(`Unknown direction: ${direction}`);
+      throw new BadRequestException(`Неизвестное направление: ${direction}`);
     }
     if (amount < 0) {
       throw new BadRequestException('amount не может быть отрицательным');
@@ -164,7 +165,10 @@ export class DtpV2Service {
       }
     }
     return this.prisma.dtpBudgetLineItem.create({
-      data: { configId, category: category as any, direction: direction as any, amount, currency, description, participantId, consultationId },
+      // Пункт [budget-invented-a-currency]: нормализация применялась
+      // на ПРЕЖНЕМ денежном поле (estimatedCost консультации) и не
+      // применялась на том, которое его заменило.
+      data: { configId, category: category as any, direction: direction as any, amount, currency: normalizeCurrency(currency), description, participantId, consultationId },
     });
   }
 
@@ -182,20 +186,12 @@ export class DtpV2Service {
       }),
     ]);
 
-    const byCurrencyMap = new Map<string, { totalExpense: number; totalCoverage: number }>();
-    for (const item of lineItems) {
-      const key = item.currency ?? 'UNSPECIFIED';
-      const bucket = byCurrencyMap.get(key) ?? { totalExpense: 0, totalCoverage: 0 };
-      if (item.direction === 'EXPENSE') bucket.totalExpense = sumMoney([bucket.totalExpense, item.amount]);
-      else bucket.totalCoverage = sumMoney([bucket.totalCoverage, item.amount]);
-      byCurrencyMap.set(key, bucket);
-    }
-    const byCurrency = [...byCurrencyMap.entries()].map(([currency, v]) => ({
-      currency,
-      totalExpense: v.totalExpense,
-      totalCoverage: v.totalCoverage,
-      netBudget: sumMoney([v.totalExpense, -v.totalCoverage]),
-    }));
+    // Пункт [budget-invented-a-currency] 2026-09-24: группировка была
+    // своя в каждом из трёх доменов и одинаково неверная — строка без
+    // валюты уходила в корзину со словом-заглушкой вместо валюты
+    // проекта, регистр не приводился, а сравнение с целью считалось на
+    // экране. Теперь всё это одно общее правило в `common/money.ts`.
+    const byCurrency = budgetByCurrency(lineItems, config.currency, config.targetBudget);
 
     return {
       lineItems,
@@ -212,21 +208,28 @@ export class DtpV2Service {
     await this.assertOwnedConfig(userId, configId);
     const [participants, faultDeterminations, budget] = await Promise.all([
       this.prisma.dtpParticipant.findMany({ where: { configId }, include: { insurance: true } }),
-      this.prisma.dtpFaultDetermination.findMany({ where: { configId }, orderBy: { determinedAt: 'desc' }, take: 1 }),
+      this.prisma.dtpFaultDetermination.findMany({ where: { configId }, orderBy: [{ determinedAt: 'desc' }, { id: 'desc' }], take: 1 }),
       this.getBudget(userId, configId),
     ]);
 
+    // Пункт [draft-spoke-machine] 2026-09-24: шаблон был написан
+    // по-украински, а всё содержимое документа — по-русски (слова
+    // пользователя и вывод модели, которому язык задан централизованно).
+    // Документ из двух языков человек несёт юристу.
     const disclaimer =
-      'Це чернетка-компіляція фактів, зафіксованих користувачем у продукті — НЕ юридично завершений документ, ' +
-      'вимагає перегляду ліцензованим юристом перед використанням чи підписанням.';
+      'Это черновик-компиляция фактов, записанных вами в продукте, — НЕ юридически завершённый документ, ' +
+      'он требует проверки лицензированным юристом перед использованием или подписанием.';
 
     const latestFault = faultDeterminations[0];
     const lines: string[] = [
-      `Учасники: ${participants.map((p: any) => `${p.role}${p.displayName ? ` (${p.displayName})` : ''}`).join(', ') || 'не зазначено'}`,
+      // И роль участника подставлялась машинной константой: «Участники:
+      // OTHER_PARTY (Иван Петров)». У экрана словарь подписей есть с
+      // самого начала, у документа не было.
+      `Участники: ${participants.map((p: any) => `${labelFor(DTP_ROLE_LABEL, p.role)}${p.displayName ? ` (${p.displayName})` : ''}`).join(', ') || 'не указаны'}`,
       latestFault
-        ? `Статус вини: ${latestFault.statusText} (${latestFault.isOfficial ? 'офіційно підтверджено' : 'попередньо, не підтверджено документом'})`
-        : 'Статус вини: не зафіксовано',
-      `Бюджет: ${budget.byCurrency.map((b: any) => `${b.netBudget} ${b.currency}`).join(', ') || 'не зафіксовано'}`,
+        ? `Статус вины: ${latestFault.statusText} (${latestFault.isOfficial ? 'официально подтверждено' : 'предварительно, документом не подтверждено'})`
+        : 'Статус вины: не зафиксирован',
+      `Бюджет: ${budget.byCurrency.map((b: any) => moneyWithCurrency(b.netBudget, b.currency)).join(', ') || 'не зафиксирован'}`,
     ];
 
     return { text: [disclaimer, '', ...lines].join('\n'), generatedAt: new Date().toISOString(), disclaimer };

@@ -28,7 +28,6 @@ import {
   SttProviderName,
   sttFallbackChain,
   sttLanguageHints,
-  sttProviderForLanguage,
 } from './stt-language';
 
 /** Ссылка на секрет ключа провайдера в окружении. */
@@ -108,11 +107,9 @@ export class SttService {
     }
   }
 
-  /** Кто возьмёт этот язык — нужно вызывающему коду, чтобы загрузить
-   *  аудио ТУДА ЖЕ, куда потом уйдёт задача. */
-  providerForLanguage(languageCode?: string | null): SttProviderName {
-    return sttProviderForLanguage(languageCode);
-  }
+  // Аудит 2026-09-03: здесь был providerForLanguage() — обёртка в одну
+  // строку над чистой sttProviderForLanguage(). Вызывающий код всегда
+  // импортировал чистую функцию напрямую; обёртку не звал никто.
 
   /** Загрузка байтов провайдеру, который затем возьмёт задачу. */
   async uploadAudio(

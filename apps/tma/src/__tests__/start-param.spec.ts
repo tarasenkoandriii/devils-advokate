@@ -50,6 +50,12 @@ const scenarios: Array<[string, () => void]> = [
     assertEqual(startParamRoute(parseStartPayload('team_abc')), '/domains/interview-pool?invite=abc', 'команда');
     assertEqual(startParamRoute(parseStartPayload('investment_group_abc')), '/domains/investment?invite=abc', 'инвест-группа');
   }],
+  ['[job-domain-v2] посадочная работодателя, преданкета и приглашение агентству', () => {
+    assertEqual(parseStartPayload('employer_landing__fb')?.audience, 'employer', 'аудитория работодателя');
+    assertEqual(startParamRoute(parseStartPayload('employer_landing')), '/intake', 'работодатель — тоже в квиз');
+    assertEqual(startParamRoute(parseStartPayload('preq_a__b')), '/pre-questionnaire/a__b', 'преданкета целым токеном');
+    assertEqual(startParamRoute(parseStartPayload('eng_t-1')), '/engagements/accept?token=t-1', 'приглашение агентству');
+  }],
   ['метка посадочной ведёт в квиз, а не в отдельный путь', () => {
     // ТЗ job-landing §4: отдельного onboarding-пути не нужно, квиз
     // классифицирует сценарий сам.

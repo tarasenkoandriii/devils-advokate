@@ -108,7 +108,7 @@ export class MaterialChatService {
   async reply(userId: string, sessionId: string, userText: string, engineId?: string) {
     const session = await this.findOwnedSession(userId, sessionId);
     if (session.status !== SparringSessionStatus.ACTIVE) {
-      throw new BadRequestException(`MaterialChatSession ${sessionId} is already ended`);
+      throw new BadRequestException(`Чат по материалу уже завершён — писать в него больше нельзя`);
     }
     if (!userText.trim()) {
       throw new BadRequestException('userText не может быть пустым');
@@ -299,7 +299,7 @@ export class MaterialChatService {
     const session = await this.findOwnedSession(userId, sessionId);
     await this.consent.assertAudioMayLeaveDevice(userId, session.workingMaterial.projectId);
     if (session.status !== SparringSessionStatus.ACTIVE) {
-      throw new BadRequestException(`MaterialChatSession ${sessionId} is already ended`);
+      throw new BadRequestException(`Чат по материалу уже завершён — писать в него больше нельзя`);
     }
     const existingCount = await this.prisma.materialChatMessage.count({ where: { sessionId } });
     if (existingCount >= MAX_MESSAGES_PER_SESSION) {

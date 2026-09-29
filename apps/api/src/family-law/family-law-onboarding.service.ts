@@ -74,7 +74,7 @@ export class FamilyLawOnboardingService {
       throw new BadRequestException('question не может быть пустым');
     }
     if (!Object.values(FamilyLawContractType).includes(contractType)) {
-      throw new BadRequestException(`Unknown contractType: ${contractType}`);
+      throw new BadRequestException(`Неизвестный тип договора: ${contractType}`);
     }
     return this.prisma.project.create({
       data: { ownerId: userId, question: question.trim(), mode: ProjectMode.FAMILY_LAW, contractType },

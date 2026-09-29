@@ -5,6 +5,7 @@
 // /calibration (агрегированный вид по всем проектам).
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { getDecisionOutcome, recordDecisionOutcome } from '../lib/features';
 import { DecisionOutcome, DecisionOutcomeRating } from '../lib/types';
 import { haptic } from '../lib/telegram';
@@ -22,6 +23,10 @@ const OUTCOME_OPTIONS: { value: DecisionOutcomeRating; label: string }[] = [
 
 export function DecisionOutcomeSection({ projectId }: DecisionOutcomeSectionProps) {
   const [outcome, setOutcome] = useState<DecisionOutcome | null>(null);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [rating, setRating] = useState<DecisionOutcomeRating>('WENT_WELL');
   const [notes, setNotes] = useState('');
@@ -39,7 +44,7 @@ export function DecisionOutcomeSection({ projectId }: DecisionOutcomeSectionProp
           setCategory(o.category ?? '');
         }
       })
-      .catch(() => setOutcome(null))
+      .catch(() => { setOutcome(null); setNotLoaded(true); })
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -66,6 +71,7 @@ export function DecisionOutcomeSection({ projectId }: DecisionOutcomeSectionProp
 
   return (
     <section className="decision-outcome-section">
+      {notLoaded && <NotLoadedNotice what="записанный исход решения" />}
       <h3>Исход решения</h3>
       <p className="conversations-section__hint">
         Отметьте, что реально произошло — это накапливается в общую калибровку (страница «Калибровка решений»),
@@ -91,7 +97,7 @@ export function DecisionOutcomeSection({ projectId }: DecisionOutcomeSectionProp
           Заметки (необязательно)
           <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Что конкретно произошло" />
         </label>
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
         <div className="conversations-section__add-actions">
           <button type="button" onClick={handleSave} disabled={saving}>
             {saving ? 'Сохраняем…' : outcome ? 'Обновить исход' : 'Сохранить исход'}

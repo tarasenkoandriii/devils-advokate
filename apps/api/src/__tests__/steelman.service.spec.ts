@@ -177,6 +177,35 @@ describe('SteelmanService', () => {
     expect(capturedBody).not.toContain('Секрет из другого проекта');
   });
 
+  /** КЛЮЧЕВОЙ ТЕСТ [scope-not-applied] 2026-09-06. Область видимости
+   * факта проверялась ТОЛЬКО на проектной границе — что факт чужого
+   * проекта не уходит в промпт. А значение `PRIVATE_TO_USER` («не
+   * публикуется ни при каких обстоятельствах») не проверялось нигде во
+   * всём продукте: десять из одиннадцати мест читали факты без
+   * фильтра по scope вовсе, и правка не уронила ни одного теста. */
+  it('scope=PRIVATE_TO_USER не уходит в промпт ни при каких обстоятельствах', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'Q', goal: null });
+    prisma._seedProjectPerson(PROJECT_ID, PERSON_ID, { id: PERSON_ID, displayName: 'X' });
+    prisma._seedFact({ id: 'fact-private', personId: PERSON_ID, projectId: PROJECT_ID, scope: 'PRIVATE_TO_USER', status: 'ACTIVE', content: 'Личная пометка только для себя' });
+    prisma._seedFact({ id: 'fact-ok', personId: PERSON_ID, projectId: PROJECT_ID, scope: 'PROJECT', status: 'ACTIVE', content: 'Обычный проектный факт' });
+    prisma._seedModelVersion({ id: 'mv-openai', version: 'gpt-4.1', model: { name: 'gpt-4.1', provider: { name: 'openai', apiEndpoint: 'https://api.openai.com/v1', credentialRef: 'OPENAI_API_KEY' } } });
+    prisma._seedCapability({ modelVersionId: 'mv-openai', taskType: 'steelman', availability: 'active' });
+    prisma._seedConsent({ userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null });
+
+    let capturedBody = '';
+    (global as any).fetch = async (_url: string, opts: any) => {
+      capturedBody = opts.body;
+      return { ok: true, status: 200, statusText: 'OK', json: async () => openaiSteelmanBody, text: async () => JSON.stringify(openaiSteelmanBody) };
+    };
+
+    const service = buildSteelmanService(prisma);
+    await service.generate(PROJECT_ID, PERSON_ID, USER_ID);
+    expect(capturedBody).not.toContain('Личная пометка только для себя');
+    // И проверка не вырождена: обычный факт того же человека дошёл.
+    expect(capturedBody).toContain('Обычный проектный факт');
+  });
+
   it('подмешивает scope=PERSON_GLOBAL факты независимо от текущего проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'Q', goal: null });

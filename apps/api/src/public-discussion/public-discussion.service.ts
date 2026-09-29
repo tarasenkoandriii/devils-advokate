@@ -33,6 +33,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { DEFAULT_PAGE_LIMIT, pagedList, takeWithProbe } from '../common/page';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -66,11 +67,24 @@ export class PublicDiscussionService {
 
   async listSubmissionsForModeration(userId: string, projectId: string) {
     await assertProjectOwnership(this.prisma, userId, projectId);
-    return this.prisma.publicArgumentSubmission.findMany({
+    // Сверка чтений без потолка 2026-09-04: заявки сюда пишет любой, у
+    // кого есть публичная ссылка, а читались они все и сразу. Потолок с
+    // честным флагом: обрезанный список, выглядящий полным, для модератора
+    // хуже длинного — он решает, что рассмотрел всё.
+    // Пункт [badge-was-the-key] 2026-09-24: `include: { participant: true }`
+    // теперь принесло бы сюда и `withdrawToken` — удостоверение
+    // участника, выданное ему одному. Автору проекта имя подавшего
+    // нужно (он решает, принимать ли заявку), удостоверение — нет, и
+    // получив его, он смог бы удалять чужое от чужого имени. Поля
+    // перечислены поимённо: новое поле участника обязано попадать сюда
+    // сознательно, а не само собой.
+    const rows = await this.prisma.publicArgumentSubmission.findMany({
       where: { projectId },
-      include: { participant: true },
-      orderBy: { createdAt: 'desc' },
+      include: { participant: { select: { id: true, displayName: true } } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: takeWithProbe(),
     });
+    return pagedList(rows);
   }
 
   /** "Владелец решает, какие публичные аргументы принять в основной
@@ -84,7 +98,7 @@ export class PublicDiscussionService {
       throw new NotFoundException(`PublicArgumentSubmission ${submissionId} not found in project ${projectId}`);
     }
     if (submission.status !== PublicSubmissionStatus.PENDING) {
-      throw new BadRequestException(`Submission ${submissionId} already moderated (status=${submission.status})`);
+      throw new BadRequestException(`Эту заявку уже рассмотрели (${submission.status}) — повторная модерация ничего не изменит`);
     }
 
     if (decision === 'REJECT') {
@@ -94,12 +108,19 @@ export class PublicDiscussionService {
       });
     }
 
-    const argument = await this.prisma.argument.create({
-      data: { projectId, text: submission.text, stance: submission.stance },
-    });
-    return this.prisma.publicArgumentSubmission.update({
-      where: { id: submissionId },
-      data: { status: PublicSubmissionStatus.ACCEPTED, moderatedAt: new Date(), promotedToArgumentId: argument.id },
+    // Сверка «половины операции» 2026-09-04: аргумент создавался, а
+    // заявка помечалась принятой отдельным вызовом. Сбой между ними
+    // оставлял заявку в PENDING при уже созданном аргументе — модератор
+    // принимает её второй раз и получает в своём проекте дубль, не
+    // понимая, откуда он взялся.
+    return this.prisma.$transaction(async (tx) => {
+      const argument = await tx.argument.create({
+        data: { projectId, text: submission.text, stance: submission.stance },
+      });
+      return tx.publicArgumentSubmission.update({
+        where: { id: submissionId },
+        data: { status: PublicSubmissionStatus.ACCEPTED, moderatedAt: new Date(), promotedToArgumentId: argument.id },
+      });
     });
   }
 
@@ -121,34 +142,89 @@ export class PublicDiscussionService {
    * динамику конфликта между конкретными людьми), SchedulerAdvice
    * (личные предпочтения человека, показанные третьей стороне без
    * его ведома) — см. обсуждение перед реализацией в /TODO.md. */
-  async publicView(token: string) {
+  /** Пункт [badge-was-the-key] 2026-09-24 — `viewerParticipantId` нужен
+   * только чтобы отметить «это моё» и НЕ является удостоверением:
+   * удостоверение (`withdrawToken`) выдаётся один раз при входе и в
+   * ответы не попадает никогда. Сам `participantId` из ответов убран —
+   * см. разбор над `withdrawComment`. */
+  async publicView(token: string, viewerParticipantId?: string) {
     const project = await this.findProjectByToken(token);
 
     const [acceptedArguments, submissions, comments, latestProtocol, latestClosingMessage] = await Promise.all([
+      // Сверка чтений без потолка 2026-09-04: это НЕАУТЕНТИФИЦИРОВАННЫЙ
+      // маршрут, и два из трёх списков растит посторонний — заявки и
+      // комментарии пишет любой, у кого есть ссылка. Читались они целиком
+      // при каждом открытии страницы каждым участником.
+      // Пункт [badge-was-the-key] 2026-09-24: строка отдавалась ЦЕЛИКОМ,
+      // вместе с `weight` — субъективной оценкой силы аргумента,
+      // которую ставит автор проекта для себя. Страница её не
+      // показывает, то есть человек не мог даже узнать, что его
+      // взвешивание уходит всем, у кого есть ссылка. Та же «невидимая
+      // на странице выдача», что закрыл пункт [public-name] на именах.
       this.prisma.argument.findMany({
         where: { projectId: project.id, targetPersonId: null, stance: { in: [ArgumentStance.PRO, ArgumentStance.CON] } },
-        orderBy: { createdAt: 'desc' },
+        select: { id: true, text: true, stance: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: takeWithProbe(),
       }),
+      // Пункт [public-name] 2026-09-05: имя участника уходило вместе с
+      // заявками КАЖДОМУ, кто открыл ссылку, — хотя экран его там не
+      // показывает. Невидимая на странице выдача: человек не мог даже
+      // узнать, что его имя путешествует. Заявки показываются без имени,
+      // значит и отдавать его незачем.
       this.prisma.publicArgumentSubmission.findMany({
         where: { projectId: project.id },
-        include: { participant: true },
-        orderBy: { createdAt: 'desc' },
+        select: { id: true, text: true, stance: true, status: true, upvotes: true, downvotes: true, participantId: true, createdAt: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: takeWithProbe(),
       }),
       this.prisma.publicComment.findMany({
         where: { projectId: project.id },
-        include: { participant: true },
+        select: { id: true, text: true, createdAt: true, participantId: true, participant: { select: { displayName: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: takeWithProbe(),
+      }),
+      // Поля названы поимённо и ЗДЕСЬ, а не только на выходе: читать
+      // строку целиком, чтобы вернуть два поля, — способ однажды
+      // вернуть её целиком.
+      this.prisma.protocol.findFirst({
+        where: { projectId: project.id },
+        select: { summaryText: true, createdAt: true },
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.protocol.findFirst({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' } }),
-      this.prisma.closingMessage.findFirst({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.closingMessage.findFirst({
+        where: { projectId: project.id },
+        select: { summaryText: true, quoteText: true, quoteSourceReference: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
     ]);
+
+    // Пункт [badge-was-the-key] 2026-09-24: `participantId` не уходит
+    // наружу ни в одном списке. Он был не только удостоверением — он
+    // ещё и СШИВАЛ два списка: заявки показываются без имени (это
+    // решение пункта [public-name]), комментарии — с именем, и общий
+    // `participantId` возвращал имя к «безымянной» заявке. Прямой путь
+    // тогда закрыли, обходной остался.
+    const mine = (participantId: string | null) =>
+      Boolean(viewerParticipantId) && participantId === viewerParticipantId;
+
+    const submissionsPage = pagedList(submissions);
+    const commentsPage = pagedList(comments);
 
     return {
       question: project.question,
       goal: project.goal,
-      arguments: acceptedArguments,
-      submissions,
-      comments,
+      arguments: pagedList(acceptedArguments).items,
+      argumentsHasMore: pagedList(acceptedArguments).hasMore,
+      submissions: submissionsPage.items.map(({ participantId, ...rest }) => ({ ...rest, mine: mine(participantId) })),
+      submissionsHasMore: submissionsPage.hasMore,
+      comments: commentsPage.items.map(({ participantId, participant, ...rest }) => ({
+        ...rest,
+        authorName: participant?.displayName ?? null,
+        mine: mine(participantId),
+      })),
+      commentsHasMore: commentsPage.hasMore,
+      pageLimit: DEFAULT_PAGE_LIMIT,
       protocol: latestProtocol ? { summaryText: latestProtocol.summaryText, createdAt: latestProtocol.createdAt } : null,
       closingMessage: latestClosingMessage
         ? {
@@ -161,10 +237,15 @@ export class PublicDiscussionService {
     };
   }
 
+  /** Пункт [badge-was-the-key] 2026-09-24: `withdrawToken` отдаётся
+   * ОДИН раз — тому, кто вошёл. Больше он не появляется нигде. */
   async joinAsParticipant(token: string, displayName?: string) {
     const project = await this.findProjectByToken(token);
     return this.prisma.publicParticipant.create({
       data: { projectId: project.id, displayName: displayName?.trim() || null },
+      // Единственное место во всём проекте, где `withdrawToken`
+      // называется в `select`, — и получает его тот, кому он выдан.
+      select: { id: true, displayName: true, createdAt: true, withdrawToken: true },
     });
   }
 
@@ -176,8 +257,14 @@ export class PublicDiscussionService {
     if (participantId) {
       await this.assertParticipantBelongsToProject(participantId, project.id);
     }
+    // Пункт [badge-was-the-key] 2026-09-24: подача заявки возвращала
+    // строку целиком, вместе с `participantId`. Своё удостоверение
+    // подавший и так знает — но правило поверхности не делает
+    // исключений «здесь не страшно»: именно такие исключения и
+    // заканчиваются полем, о котором никто не подумал.
     return this.prisma.publicArgumentSubmission.create({
       data: { projectId: project.id, text: text.trim(), stance: stance as ArgumentStance, participantId: participantId ?? null },
+      select: { id: true, text: true, stance: true, status: true, upvotes: true, downvotes: true, createdAt: true },
     });
   }
 
@@ -185,14 +272,104 @@ export class PublicDiscussionService {
    * защиты от повторного голосования). */
   async vote(token: string, submissionId: string, direction: 'up' | 'down') {
     const project = await this.findProjectByToken(token);
-    const submission = await this.prisma.publicArgumentSubmission.findFirst({ where: { id: submissionId, projectId: project.id } });
+    const submission = await this.prisma.publicArgumentSubmission.findFirst({
+      where: { id: submissionId, projectId: project.id },
+      select: { id: true },
+    });
     if (!submission) {
       throw new NotFoundException(`PublicArgumentSubmission ${submissionId} not found`);
     }
+    // Пункт [outside-input] 2026-09-04. Здесь стояло ровно то, что
+    // повторный аудит 2026-08-30 нашёл и исправил в СОСЕДНЕЙ публичной
+    // фиче (library.service.ts, метод с тем же именем) — и здесь не
+    // исправил: чтение-потом-запись (`submission.upvotes + 1`) на
+    // публичном неаутентифицированном эндпоинте. Два одновременных
+    // голоса перезаписывают друг друга (классический lost update), и на
+    // однопоточном моке это не воспроизводится в принципе.
+    // `{ increment: 1 }` выполняет инкремент на стороне Postgres, где он
+    // атомарен. Вторая половина того же исправления — явная проверка
+    // `direction`: без неё любое значение, кроме строки 'up', молча
+    // считалось голосом «против».
+    if (direction !== 'up' && direction !== 'down') {
+      throw new BadRequestException(`direction должен быть 'up' или 'down', получено: ${String(direction)}`);
+    }
+    // Пункт [badge-was-the-key] 2026-09-24: голос возвращал строку
+    // целиком — вместе с `participantId`, то есть с удостоверением
+    // автора заявки. Публичное чтение сузили, а публичную ЗАПИСЬ,
+    // возвращающую ту же строку, — нет.
     return this.prisma.publicArgumentSubmission.update({
       where: { id: submissionId },
-      data: direction === 'up' ? { upvotes: submission.upvotes + 1 } : { downvotes: submission.downvotes + 1 },
+      data: direction === 'up' ? { upvotes: { increment: 1 } } : { downvotes: { increment: 1 } },
+      select: { id: true, text: true, stance: true, status: true, upvotes: true, downvotes: true, createdAt: true },
     });
+  }
+
+  /** Пункт [public-name] 2026-09-05 — забрать своё.
+   *
+   * НАЙДЕНО: у участника публичного обсуждения не было НИ ОДНОГО
+   * способа убрать написанное. Он приходит по ссылке, у него нет
+   * аккаунта, автор проекта ему никто — и всё, что он написал, остаётся
+   * навсегда, подписанное именем, которое он ввёл, не зная, где оно
+   * появится.
+   *
+   * Опознаём по его же `participantId` — другого удостоверения у него
+   * нет и заводить его ради этого было бы хуже: аккаунт там, где человек
+   * пришёл по ссылке на пять минут, — не право, а условие.
+   *
+   * ПОПРАВКА, Пункт [badge-was-the-key] 2026-09-24. Строки выше
+   * остаются датированной записью замысла; вот что из него вышло.
+   * `participantId` действительно стал удостоверением — и он же
+   * печатался в ответе публичной страницы для КАЖДОГО участника.
+   * Открывший ссылку получал список чужих удостоверений и мог удалить
+   * любой комментарий и забрать любую непринятую заявку. Проверка
+   * `where: { participantId }` и текст ошибки «написан не вами»
+   * выглядели правом собственности, а проверяли ровно одно: знает ли
+   * спрашивающий число, только что ему показанное.
+   *
+   * Соседний комментарий в контроллере довершает картину: там сказано,
+   * что идентификатор передаётся ТЕЛОМ, а не путём, «чтобы не оседал в
+   * логах прокси». Удостоверение берегли от логов и печатали на самой
+   * странице.
+   *
+   * Теперь опознаёт `withdrawToken`: выдаётся один раз при входе, в
+   * списки не попадает. Вывод общий и записан отдельно: ОПОЗНАВАТЬ
+   * МОЖНО ТОЛЬКО ПО ТОМУ, ЧЕГО НЕ ОТДАВАЛ ДРУГИМ.
+   *
+   * ЧЕГО ЭТО НЕ ДЕЛАЕТ: принятую автором заявку удалить отсюда нельзя.
+   * Она уже стала аргументом проекта — отдельной записью, которая живёт
+   * своей жизнью. Сказать «удалено» и оставить её там было бы обещанием
+   * без исполнения, как в пункте [candidate-rights]. */
+  async withdrawComment(token: string, commentId: string, withdrawToken: string) {
+    const project = await this.findProjectByToken(token);
+    const participantId = await this.participantByWithdrawToken(project.id, withdrawToken);
+    const comment = await this.prisma.publicComment.findFirst({
+      where: { id: commentId, projectId: project.id, participantId },
+      select: { id: true },
+    });
+    if (!comment) {
+      throw new NotFoundException('Комментарий не найден или написан не вами');
+    }
+    await this.prisma.publicComment.delete({ where: { id: commentId } });
+    return { deleted: true as const };
+  }
+
+  async withdrawSubmission(token: string, submissionId: string, withdrawToken: string) {
+    const project = await this.findProjectByToken(token);
+    const participantId = await this.participantByWithdrawToken(project.id, withdrawToken);
+    const submission = await this.prisma.publicArgumentSubmission.findFirst({
+      where: { id: submissionId, projectId: project.id, participantId },
+      select: { id: true, status: true },
+    });
+    if (!submission) {
+      throw new NotFoundException('Заявка не найдена или отправлена не вами');
+    }
+    if (submission.status === PublicSubmissionStatus.ACCEPTED) {
+      throw new BadRequestException(
+        'Эту заявку автор уже принял — она стала аргументом проекта и живёт отдельно от неё. Отозвать её здесь нельзя; напишите автору, если хотите, чтобы он убрал аргумент.',
+      );
+    }
+    await this.prisma.publicArgumentSubmission.delete({ where: { id: submissionId } });
+    return { deleted: true as const };
   }
 
   async addComment(token: string, text: string, participantId?: string) {
@@ -203,9 +380,29 @@ export class PublicDiscussionService {
     if (participantId) {
       await this.assertParticipantBelongsToProject(participantId, project.id);
     }
+    // Пункт [badge-was-the-key] 2026-09-24: наружу возвращается только
+    // id созданного — страница всё равно перечитывает список, а лишние
+    // поля в ответе это лишние поля наружу.
     return this.prisma.publicComment.create({
       data: { projectId: project.id, text: text.trim(), participantId: participantId ?? null },
+      select: { id: true },
     });
+  }
+
+  /** Секрет → чей он, в пределах ЭТОГО проекта. Пустая строка не
+   * годится: иначе участник без секрета совпал бы с записями, у которых
+   * автора нет, и «забрать своё» стало бы «забрать ничьё». */
+  private async participantByWithdrawToken(projectId: string, withdrawToken: string): Promise<string> {
+    const participant = withdrawToken?.trim()
+      ? await this.prisma.publicParticipant.findFirst({
+          where: { withdrawToken: withdrawToken.trim(), projectId },
+          select: { id: true },
+        })
+      : null;
+    if (!participant) {
+      throw new NotFoundException('Написанное не найдено или написано не вами');
+    }
+    return participant.id;
   }
 
   private async findProjectByToken(token: string) {

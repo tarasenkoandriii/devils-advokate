@@ -1,8 +1,17 @@
 import { LiveSessionService } from '../live-session/live-session.service';
 import { ForbiddenException } from '@nestjs/common';
 
-function fakeConsent(granted = true) {
-  return { requireConsent: async () => { if (!granted) throw new ForbiddenException('Consent required'); } } as any;
+// Аудит согласий 2026-09-03: живая расшифровка ходит через
+// assertRealtimeAudioAllowed() — в нём и согласие, и режим приватности
+// (последний согласием не обходится).
+function fakeConsent(granted = true, maximumPrivacy = false) {
+  return {
+    requireConsent: async () => { if (!granted) throw new ForbiddenException('Consent required'); },
+    assertRealtimeAudioAllowed: async () => {
+      if (maximumPrivacy) throw new ForbiddenException('privacyProcessingMode=MAXIMUM_PRIVACY запрещает передачу аудио внешнему провайдеру');
+      if (!granted) throw new ForbiddenException('Consent required');
+    },
+  } as any;
 }
 import { BadGatewayException, NotFoundException } from '@nestjs/common';
 
@@ -139,6 +148,19 @@ async function run() {
 
     await svc.mintTranscriptionToken('u1', 300, 'en');
     assertEqual(stt.calls[0].language, 'en', 'переданный язык побеждает профиль');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ (аудит согласий 2026-09-03): в режиме MAXIMUM_PRIVACY живая расшифровка не выдаёт токен — режим согласием не обходится', async () => {
+    // Аудио здесь стримится провайдеру напрямую из браузера, минуя наш
+    // сервер, — из-за этого путь не проходил через общую проверку выпуска
+    // аудио и терял вместе с ней режим приватности. Признак, что это
+    // пробел: операторская песочница ту же облачную расшифровку в этом
+    // режиме отказывалась запускать, а продуктовый путь — запускал.
+    fakePrismaLanguage.value = 'ru';
+    const stt = createFakeStt();
+    const svc = new LiveSessionService(createFakePrisma() as any, fakeConsent(true, true), stt as any);
+    await assertThrowsAsync(() => svc.mintTranscriptionToken('u1'), ForbiddenException, 'MAXIMUM_PRIVACY должен запрещать живую расшифровку');
+    assertEqual(stt.calls.length, 0, 'до провайдера дело не доходит');
   });
 
   test('РЕГРЕСІЯ (аудит БД 2026-08-30): без згоди THIRD_PARTY_AUDIO_RECORDING — ForbiddenException, до провайдера навіть не звертається', async () => {

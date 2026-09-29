@@ -10,15 +10,17 @@ import { EntitySpec, FieldSpec } from '../../../lib/domains/types';
 import { EntityForm } from '../EntityForm';
 import { haptic, shareViaTelegram } from '../../../lib/telegram';
 import { CROSS_LABEL, CrossConsultationStatus, dateTime, money } from '../dtp/dtp-types';
+import { safeSharePreflight, safeShareConfirm } from '../../../lib/features';
 
 export interface Criterion { id: string; text: string; category: string; isRequired: boolean }
 export interface Statement { criterionId: string; whatWasSaid: string }
 export interface Consultation { id: string; conversationId: string | null; occurredAt: string; criteriaBreakdown: Statement[] | null; reviewedAt: string | null; reviewNotes: string | null; estimatedCost?: number | null; currency?: string | null }
 export interface ComparisonSource { id: string; label: string; consultationsCount?: number; meetingsCount?: number; latestBreakdown: Statement[] | null; sourceReferenceCount?: number; comparisonCount?: number }
-export interface ComparisonTable { criteria: Criterion[]; advisors?: ComparisonSource[]; providers?: ComparisonSource[]; opportunities?: ComparisonSource[]; budget?: { targetBudget: number | null; currency: string | null; totalEstimatedCost: number } }
+export interface ComparisonTable { criteria: Criterion[]; advisors?: ComparisonSource[]; providers?: ComparisonSource[]; opportunities?: ComparisonSource[]; budget?: { targetBudget: number | null; currency: string | null; totalEstimatedCost: number | null; estimatedCostByCurrency?: Array<{ currency: string | null; total: number }> } }
 export interface CrossCheckRow { criterionId: string; status: CrossConsultationStatus; statements: Array<{ sourceLabel: string; whatWasSaid: string }>; discrepancyNote?: string }
 export interface BudgetLine { id: string; category: string; direction: 'EXPENSE' | 'COVERAGE'; amount: number; currency: string | null; description: string | null }
-export interface Budget { lineItems: BudgetLine[]; byCurrency: Array<{ currency: string; totalExpense: number; totalCoverage: number; netBudget: number }>; targetBudget: number | null; currency: string | null; hasLegacyEstimatedCosts: boolean }
+export type TargetComparison = 'over' | 'within' | 'not-comparable';
+export interface Budget { lineItems: BudgetLine[]; byCurrency: Array<{ currency: string | null; totalExpense: number; totalCoverage: number; netBudget: number; targetComparison: TargetComparison }>; targetBudget: number | null; currency: string | null; hasLegacyEstimatedCosts: boolean }
 
 export function useList<T>(route: string | null, tick: unknown = 0) {
   const [data, setData] = useState<T[] | null>(null);
@@ -92,7 +94,7 @@ export function ConsultationCard({ c, criteria, routes, onChanged, reviewFields,
       )}
       {c.reviewNotes && <p className="dtp-notes">Заметки: {c.reviewNotes}</p>}
       {extraHint}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       <div className="entity-form__actions">
         {c.conversationId && status !== 'reviewed' && <button type="button" className="secondary" disabled={busy} onClick={generate}>{busy ? '…' : status === 'drafted' ? 'Разобрать заново' : 'Разобрать по критериям'}</button>}
         {status === 'drafted' && !reviewing && <button type="button" className="primary" onClick={() => setReviewing(true)}>Проверил(а), подтвердить</button>}
@@ -126,7 +128,7 @@ export function SourceCard({ source, subtitle, badge, criteria, spec, routes, ch
       </button>
       {open && (
         <div className="dtp-card__body">
-          {error && <p className="generation-error">{error}</p>}
+          {error && <p role="alert" className="generation-error">{error}</p>}
           {data && data.length === 0 && <p className="card-section__empty">Консультаций пока нет.</p>}
           {data?.map((c) => <ConsultationCard key={c.id} c={c} criteria={criteria} routes={routes} onChanged={bump} reviewFields={spec.sessions!.reviewFields} />)}
           {adding ? (
@@ -144,7 +146,7 @@ export function SourceCard({ source, subtitle, badge, criteria, spec, routes, ch
 
 export function ComparisonMatrix({ route, sourceNoun }: { route: string; sourceNoun: string }) {
   const { data, error } = useOne<ComparisonTable>(route);
-  if (error) return <p className="generation-error">{error}</p>;
+  if (error) return <p role="alert" className="generation-error">{error}</p>;
   if (!data) return <p>Загрузка…</p>;
   const sources = (data.advisors ?? data.providers ?? data.opportunities ?? []).filter((a) => a.latestBreakdown);
   if (sources.length === 0) return <p className="card-section__empty">Сравнивать пока нечего — нужна хотя бы одна консультация с разбором по критериям.</p>;
@@ -164,7 +166,21 @@ export function ComparisonMatrix({ route, sourceNoun }: { route: string; sourceN
           </tbody>
         </table>
       </div>
-      {data.budget && <p className="dtp-muted">Сумма оценок {sourceNoun}: {money(data.budget.totalEstimatedCost, data.budget.currency)}{data.budget.targetBudget !== null && ` при целевом бюджете ${money(data.budget.targetBudget, data.budget.currency)}`}</p>}
+      {/* Аудит денег 2026-09-03: раньше здесь всегда стояло ОДНО число с
+          валютой проекта — а оценки консультантов могут быть в разных
+          валютах (поле у консультации своё). Складывать их в одну сумму и
+          подписывать «₴» значит уверенно показать неправду. Когда валюта
+          одна — показываем итог как раньше; когда несколько — разбивку и
+          прямо говорим, почему итога нет. */}
+      {data.budget && (data.budget.estimatedCostByCurrency?.length ?? 0) > 1 ? (
+        <p className="dtp-muted">
+          Оценки {sourceNoun} в разных валютах, поэтому одной суммы нет:{' '}
+          {data.budget.estimatedCostByCurrency!.map((b) => money(b.total, b.currency)).join(' · ')}
+          {data.budget.targetBudget !== null && ` · целевой бюджет ${money(data.budget.targetBudget, data.budget.currency)}`}
+        </p>
+      ) : data.budget && data.budget.totalEstimatedCost !== null ? (
+        <p className="dtp-muted">Сумма оценок {sourceNoun}: {money(data.budget.totalEstimatedCost, data.budget.estimatedCostByCurrency?.[0]?.currency ?? data.budget.currency)}{data.budget.targetBudget !== null && ` при целевом бюджете ${money(data.budget.targetBudget, data.budget.currency)}`}</p>
+      ) : null}
     </section>
   );
 }
@@ -173,7 +189,7 @@ export function ComparisonMatrix({ route, sourceNoun }: { route: string; sourceN
 
 export function CrossCheckList({ route, criteria, sourceNoun }: { route: string; criteria: Criterion[]; sourceNoun: string }) {
   const { data: rows, error } = useOne<CrossCheckRow[]>(route);
-  if (error) return <p className="generation-error">{error}</p>;
+  if (error) return <p role="alert" className="generation-error">{error}</p>;
   if (!rows) return <p>Загрузка…</p>;
   const byId = new Map(criteria.map((c) => [c.id, c]));
   const found = rows.filter((r) => r.status === 'DISCREPANCY_FOUND');
@@ -204,7 +220,7 @@ export function BudgetByCurrency({ route, createRoute, fields, categoryLabels }:
   const [tick, setTick] = useState(0);
   const [adding, setAdding] = useState(false);
   const { data, error } = useOne<Budget>(route, tick);
-  if (error) return <p className="generation-error">{error}</p>;
+  if (error) return <p role="alert" className="generation-error">{error}</p>;
   if (!data) return <p>Загрузка…</p>;
   const expenses = data.lineItems.filter((l) => l.direction === 'EXPENSE');
   const coverage = data.lineItems.filter((l) => l.direction === 'COVERAGE');
@@ -212,14 +228,27 @@ export function BudgetByCurrency({ route, createRoute, fields, categoryLabels }:
     <section className="dtp-section">
       <div className="domain-budget__summary">
         {data.byCurrency.map((b) => {
-          const over = data.targetBudget !== null && b.currency === (data.currency ?? b.currency) && b.netBudget > data.targetBudget;
+          // Пункт [budget-invented-a-currency] 2026-09-24: сравнение с
+          // целью считается на сервере, рядом с правилом о валютах, а
+          // не здесь. Прежде экран считал сам и при незаданной валюте
+          // проекта сравнивал с целью корзину ЛЮБОЙ валюты.
+          const over = b.targetComparison === 'over';
           return (
-            <div key={b.currency} className={over ? 'domain-budget__currency dtp-budget--over' : 'domain-budget__currency'}>
-              <strong>{b.currency}</strong>
+            <div key={b.currency ?? ''} className={over ? 'domain-budget__currency dtp-budget--over' : 'domain-budget__currency'}>
+              {/* Валюта не указана — так и сказано. Слово-заглушка на
+                  месте кода валюты неотличима от настоящего кода. */}
+              <strong>{b.currency ?? 'валюта не указана'}</strong>
               <span>расходы {money(b.totalExpense)}</span>
               <span>покрытие {money(b.totalCoverage)}</span>
               <span>из своего кармана <strong>{money(b.netBudget)}</strong></span>
               {over && <span className="dtp-warn">выше целевого бюджета {money(data.targetBudget)}</span>}
+              {/* Молчание здесь читалось бы как «в пределах бюджета»,
+                  поэтому «не с чем сравнивать» сказано вслух. */}
+              {b.targetComparison === 'not-comparable' && data.targetBudget !== null && (
+                <span className="dtp-muted">
+                  с целевым бюджетом не сравнивается: он задан {data.currency ? `в ${data.currency}` : 'без валюты'}
+                </span>
+              )}
             </div>
           );
         })}
@@ -241,19 +270,118 @@ export function BudgetByCurrency({ route, createRoute, fields, categoryLabels }:
 }
 
 // ── Текстовый документ (протокол / уведомление) ──
+//
+// Пункт [share-bypass] 2026-09-05. Здесь стояли две кнопки, каждая из
+// которых отправляла `data.text` наружу НАПРЯМУЮ — мимо Safe Share:
+//
+//   onClick={() => navigator.clipboard?.writeText(data.text)}
+//   onClick={() => shareViaTelegram(data.text)}
+//
+// Это ровно та дыра, которую фича 12 закрывала у `ShareButton` («шарил
+// текст напрямую, вообще не проходя через content scan — настоящая
+// дыра в приватности, не гипотетическая»), заново открытая в другом
+// компоненте. Правило было, просто не везде — и не где угодно, а на
+// двух самых тяжёлых документах продукта: проект соглашения о
+// возмещении после ДТП и проект соглашения при разводе. Имена, адреса,
+// телефоны, номера машин, деньги, дети.
+//
+// СВЕРКА В ТУ ЖЕ СТОРОНУ, ЧТО И ВЕЗДЕ. `ShareButton`,
+// `ProtocolSection` и `CompromiseSheetSection` делают preflight →
+// превью → подтверждение. Здесь теперь то же самое, тем же вызовом.
+//
+// КОПИРОВАНИЕ ТОЖЕ ДВЕРЬ. Оставить «Скопировать» в обход значило бы
+// сделать из него тривиальный обход «Отправить» — тогда проверка не
+// защищает ни от чего, а только притворяется.
+//
+// ЧЕГО ЗДЕСЬ НЕТ: кнопки «отправить как есть». Она вернула бы ровно ту
+// дверь, ради закрытия которой всё это написано. Документ может
+// потерять адрес или телефон — и это видно в превью до отправки, а не
+// после.
+
+type ShareIntent = 'copy' | 'send';
 
 export function TextDocument({ route, share }: { route: string; share?: boolean }) {
   const { data, error } = useOne<{ text: string; generatedAt?: string; disclaimer?: string }>(route);
-  if (error) return <p className="generation-error">{error}</p>;
+  const [intent, setIntent] = useState<ShareIntent | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [preview, setPreview] = useState<{ text: string; detected: number; actionId: string } | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+
+  async function startShare(next: ShareIntent, text: string) {
+    setChecking(true);
+    setShareError(null);
+    setBlocked(false);
+    try {
+      // contentType — путь документа: в журнале Safe Share должно быть
+      // видно, ЧТО именно ушло, а не только что «что-то ушло».
+      const result = await safeSharePreflight(text, `document:${route}:${next}`.slice(0, 100));
+      if (result.blocked) {
+        setBlocked(true);
+        return;
+      }
+      setPreview({ text: result.sanitizedText, detected: result.detectedItemsCount, actionId: result.safeShareActionId });
+      setIntent(next);
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : 'Не удалось проверить документ перед отправкой');
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function confirmShare() {
+    if (!preview || !intent) return;
+    try {
+      await safeShareConfirm(preview.actionId);
+      if (intent === 'send') shareViaTelegram(preview.text);
+      else await navigator.clipboard?.writeText(preview.text);
+      haptic('success');
+      setPreview(null);
+      setIntent(null);
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : 'Не удалось подтвердить отправку');
+    }
+  }
+
+  if (error) return <p role="alert" className="generation-error">{error}</p>;
   if (!data) return <p>Загрузка…</p>;
   return (
     <section className="dtp-section">
       {data.disclaimer && <p className="dtp-status dtp-status--warn">{data.disclaimer}</p>}
       <pre className="dtp-protocol">{data.text}</pre>
-      <div className="entity-form__actions">
-        <button type="button" className="secondary" onClick={() => navigator.clipboard?.writeText(data.text).then(() => haptic('success'))}>Скопировать</button>
-        {share && <button type="button" className="secondary" onClick={() => shareViaTelegram(data.text)}>Отправить в Telegram</button>}
-      </div>
+      {shareError && <p role="alert" className="generation-error">{shareError}</p>}
+      {blocked && (
+        <p role="alert" className="generation-error">
+          Проверка содержимого отклонила документ — отправка не состоялась. Переформулируйте текст.
+        </p>
+      )}
+      {preview ? (
+        <div className="safe-share-preview">
+          <h3>{intent === 'send' ? 'Вот что увидит получатель' : 'Вот что попадёт в буфер обмена'}</h3>
+          {preview.detected > 0 && (
+            <p className="safe-share-preview__notice">
+              Обнаружено и скрыто чувствительных данных: {preview.detected}. Если что-то из этого нужно получателю —
+              впишите это сами в своём сообщении.
+            </p>
+          )}
+          <pre className="dtp-protocol">{preview.text}</pre>
+          <div className="safe-share-preview__actions">
+            <button type="button" onClick={confirmShare}>{intent === 'send' ? 'Отправить' : 'Скопировать'}</button>
+            <button type="button" className="safe-share-preview__cancel" onClick={() => { setPreview(null); setIntent(null); }}>Отмена</button>
+          </div>
+        </div>
+      ) : (
+        <div className="entity-form__actions">
+          <button type="button" className="secondary" disabled={checking} onClick={() => startShare('copy', data.text)}>
+            {checking ? 'Проверяем…' : 'Скопировать'}
+          </button>
+          {share && (
+            <button type="button" className="secondary" disabled={checking} onClick={() => startShare('send', data.text)}>
+              {checking ? 'Проверяем…' : 'Отправить в Telegram'}
+            </button>
+          )}
+        </div>
+      )}
       {data.generatedAt && <p className="dtp-muted">Сформировано {dateTime(data.generatedAt)}.</p>}
     </section>
   );

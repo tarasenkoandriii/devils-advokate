@@ -15,6 +15,8 @@ import {
 } from '../../../lib/endpoints';
 import { ApiRequestError } from '../../../lib/admin-api';
 import type { PromptVersion, EvaluationRun } from '../../../lib/types';
+import { OperatorTraceNotice } from '../../../components/OperatorTraceNotice';
+import { operatorScreenActions } from '../../../lib/operator-screens';
 
 function PromptDetailInner() {
   const params = useParams<{ id: string }>();
@@ -147,6 +149,12 @@ function PromptDetailInner() {
       <p className="muted" style={{ marginBottom: 20 }}>
         Статус: <span className="badge badge-pending">{version.status}</span>
       </p>
+
+      {/* Пункт [operator-left-a-trace-unsaid] 2026-09-25: эти решения
+          человеку НЕ показываются — внутреннее изменение продукта, — и
+          сказать это оператору так же обязательно, как сказать обратное
+          там, где показываются. */}
+      <OperatorTraceNotice actions={operatorScreenActions('app/prompts/[id]/page.tsx')} />
 
       {actionError && <p style={{ color: 'var(--signal-critical)', marginBottom: 16 }}>{actionError}</p>}
 

@@ -1,5 +1,6 @@
 import { PrecedentSearchService } from '../precedent-search/precedent-search.service';
 import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { createFakeConsentService } from './fake-consent';
 
 function createFakePrisma() {
   const people = new Map<string, any>();
@@ -69,7 +70,17 @@ function createFakePrisma() {
         precedents.push(p);
         return p;
       },
-      findMany: async ({ where }: any) => precedents.filter((p) => p.personId === where.personId).sort((a, b) => b.createdAt - a.createdAt),
+      // Пункт [click-count] 2026-09-05: фейк ЧЕСТНО фильтрует по
+      // ситуации — дедуп ищет повторы внутри одной ситуации, и без
+      // фильтра проверка проверяла бы поведение фейка.
+      findMany: async ({ where }: any) =>
+        precedents
+          .filter(
+            (p) =>
+              p.personId === where.personId &&
+              (where.situationDescription === undefined || p.situationDescription === where.situationDescription),
+          )
+          .sort((a, b) => b.createdAt - a.createdAt),
     },
     $transaction: async (ops: Promise<any>[]) => Promise.all(ops),
   };
@@ -117,7 +128,7 @@ async function run() {
   test('findPrecedents() бросает NotFoundException для чужой персоны', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: 'other-user' });
-    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(
       () => svc.findPrecedents(USER_ID, PERSON_ID, 'Просит остаться на выходных на работе'),
       NotFoundException,
@@ -129,7 +140,7 @@ async function run() {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
     prisma._seedFact({ personId: PERSON_ID, status: 'ACTIVE', content: 'x' });
-    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(
       () => svc.findPrecedents(USER_ID, PERSON_ID, '   '),
       BadRequestException,
@@ -140,7 +151,7 @@ async function run() {
   test('findPrecedents() бросает BadRequestException, если нет ни фактов, ни разговоров', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
-    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(
       () => svc.findPrecedents(USER_ID, PERSON_ID, 'ситуация'),
       BadRequestException,
@@ -157,7 +168,7 @@ async function run() {
     prisma._seedParticipant({ id: 'part-1', personId: PERSON_ID });
     prisma._seedSegment({ id: 'seg-1', transcriptId: 'transcript-1', participantId: 'part-1', text: 'Нет, сейчас не время для отпуска.' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new PrecedentSearchService(prisma as any, fakeRouter as any);
+    const svc = new PrecedentSearchService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     await svc.findPrecedents(USER_ID, PERSON_ID, 'Хочу попросить взять отгул на пятницу');
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Уже дважды отказывал в отпуске'), true, 'факт попал в промпт');
@@ -173,10 +184,14 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { precedentDescription: 'В марте отказал в похожей просьбе без объяснений', similarity: 'ANALOGOUS', sourceDescription: 'факт: уже дважды отказывал' },
     ]);
-    const svc = new PrecedentSearchService(prisma as any, fakeRouter as any);
+    const svc = new PrecedentSearchService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
-    const created = await svc.findPrecedents(USER_ID, PERSON_ID, 'ситуация');
+    // Пункт [click-count] 2026-09-05: ответ несёт и число отсечённых
+    // повторов — молчаливое «ничего не добавилось» человек читает как
+    // «не сработало» и жмёт снова.
+    const { created, duplicatesSkipped } = await svc.findPrecedents(USER_ID, PERSON_ID, 'ситуация');
     assertEqual(created.length, 1, 'один прецедент создан');
+    assertEqual(duplicatesSkipped, 0, 'повторов не было');
     assertEqual(created[0].similarity, 'ANALOGOUS', 'similarity сохранён');
     assertEqual(created[0].personId, PERSON_ID, 'personId проставлен');
   });
@@ -186,25 +201,25 @@ async function run() {
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
     prisma._seedFact({ personId: PERSON_ID, status: 'ACTIVE', content: 'x' });
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new PrecedentSearchService(prisma as any, failingRouter as any);
+    const svc = new PrecedentSearchService(prisma as any, failingRouter as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.findPrecedents(USER_ID, PERSON_ID, 'ситуация'), BadGatewayException, 'findPrecedents() при недоступности провайдера');
   });
 
   test('list() возвращает пустой вывод без прецедентов', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
-    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     const result = await svc.list(USER_ID, PERSON_ID);
     assertEqual(result.total, 0, 'нет прецедентов');
     assertEqual(result.conclusion.includes('не найдено'), true, 'явное пояснение пустоты');
   });
 
-  test('list() строит вероятностный вывод из РЕАЛЬНОГО числа накопленных прецедентов', async () => {
+  test('list() строит вывод из числа прецедентов ЭТОЙ ситуации, а не всей таблицы', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
     prisma._seedFact({ personId: PERSON_ID, status: 'ACTIVE', content: 'x' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new PrecedentSearchService(prisma as any, fakeRouter as any);
+    const svc = new PrecedentSearchService(prisma as any, fakeRouter as any, createFakeConsentService() as any);
 
     fakeRouter.responseText = JSON.stringify([
       { precedentDescription: 'p1', similarity: 'ANALOGOUS', sourceDescription: 's1' },
@@ -216,13 +231,24 @@ async function run() {
     const result = await svc.list(USER_ID, PERSON_ID);
     assertEqual(result.total, 3, 'все три прецедента накоплены');
     assertEqual(result.analogousCount, 2, 'два из трёх — аналогичные');
-    assertEqual(result.conclusion.includes('2 из 3'), true, 'вывод содержит реальное соотношение, не выдуманное');
+    // Пункт [click-count] 2026-09-05: прежняя проверка требовала строку
+    // «2 из 3» — то есть ровно ту формулировку, которая и была находкой:
+    // доля по ВСЕЙ таблице, поданная как утверждение о поведении
+    // человека. Теперь доля считается внутри одной ситуации и названа
+    // тем, что она есть.
+    assertEqual(result.situation, 'ситуация 1', 'ситуация названа');
+    assertEqual(result.situationTotal, 3, 'три прецедента этой ситуации');
+    assertEqual(result.situationAnalogousCount, 2, 'два аналогичных в этой ситуации');
+    assertEqual(result.conclusion.includes('вёл себя схожим образом'), false,
+      'вернулось утверждение о поведении человека');
+    assertEqual(result.conclusion.includes('доля среди НАЙДЕННОГО'), true,
+      'не сказано, что это за доля');
   });
 
   test('list() бросает NotFoundException для чужой персоны', async () => {
     const prisma = createFakePrisma();
     prisma._seedPerson({ id: PERSON_ID, createdByUserId: 'other-user' });
-    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new PrecedentSearchService(prisma as any, new FakeAIRouterService() as any, createFakeConsentService() as any);
     await assertThrowsAsync(() => svc.list(USER_ID, PERSON_ID), NotFoundException, 'list() на чужую персону');
   });
 

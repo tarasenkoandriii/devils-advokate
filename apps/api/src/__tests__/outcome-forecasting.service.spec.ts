@@ -33,8 +33,19 @@ function createFakePrisma() {
       },
     },
     argument: {
-      findMany: async ({ where }: any) =>
-        argumentsStore.filter((a) => a.projectId === where.projectId && (where.targetPersonId?.equals === undefined ? a.targetPersonId == null : true)),
+      // Пункт [partial-basis] 2026-09-04: фейк теперь ЧЕСТНО обрезает по
+      // take и умеет count — иначе проверка усечения проверяла бы
+      // поведение фейка, а не сервиса.
+      findMany: async ({ where, take }: any) => {
+        const rows = argumentsStore.filter(
+          (a) => a.projectId === where.projectId && (where.targetPersonId?.equals === undefined ? a.targetPersonId == null : true),
+        );
+        return take ? rows.slice(0, take) : rows;
+      },
+      count: async ({ where }: any) =>
+        argumentsStore.filter(
+          (a) => a.projectId === where.projectId && (where.targetPersonId?.equals === undefined ? a.targetPersonId == null : true),
+        ).length,
     },
     projectPerson: {
       findFirst: async ({ where, include }: any) => {
@@ -51,7 +62,11 @@ function createFakePrisma() {
       findMany: async ({ where }: any) => relationships.filter((r) => r.personAId === where.OR[0].personAId || r.personBId === where.OR[1].personBId),
     },
     behaviorPrecedent: {
-      findMany: async ({ where }: any) => precedents.filter((p) => p.personId === where.personId),
+      findMany: async ({ where, take }: any) => {
+        const rows = precedents.filter((p) => p.personId === where.personId);
+        return take ? rows.slice(0, take) : rows;
+      },
+      count: async ({ where }: any) => precedents.filter((p) => p.personId === where.personId).length,
     },
     protectedNote: {
       findMany: async ({ where }: any) => protectedNotes.filter((n) => n.projectId === where.projectId),
@@ -171,7 +186,9 @@ async function run() {
     ]);
     const svc = new OutcomeForecastingService(prisma as any, fakeRouter as any);
 
-    const created = await svc.generateScenarios(USER_ID, PROJECT_ID, ['Если промолчу']);
+    // Пункт [partial-basis] 2026-09-04: ответ теперь несёт и основание
+    // прогноза — на всех ли данных он построен.
+    const { scenarios: created } = await svc.generateScenarios(USER_ID, PROJECT_ID, ['Если промолчу']);
     assertEqual(created.length, 2, 'оба сценария созданы');
     assertEqual(created[0].scenarioType, 'DO_NOTHING', 'первый — DO_NOTHING');
     assertEqual(created[0].userDescription, null, 'userDescription null для не-USER_DEFINED');
@@ -209,6 +226,78 @@ async function run() {
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
     const svc = new OutcomeForecastingService(prisma as any, new FakeAIRouterService() as any);
     await assertThrowsAsync(() => svc.list(USER_ID, PROJECT_ID), NotFoundException, 'list() на чужой проект');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [partial-basis]: усечение названо и модели, и человеку', async () => {
+    // Раньше в промпт уходило «Ключевые аргументы» и «Известные
+    // прецеденты поведения» — а внутри был срез из пяти. Модель не могла
+    // знать, что видит часть, и вывод «такого за ним не водится»
+    // выглядел обоснованным.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'в?', goal: null });
+    prisma._seedPerson({ id: PERSON_ID, displayName: 'Начальник Иван' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: PERSON_ID, stakeholderRole: 'DECISION_MAKER' });
+    for (let i = 0; i < 7; i++) {
+      prisma._seedArgument({ projectId: PROJECT_ID, targetPersonId: null, text: `аргумент ${i}`, stance: 'PRO', weight: i });
+      prisma._seedPrecedent({ personId: PERSON_ID, precedentDescription: `случай ${i}` });
+    }
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new OutcomeForecastingService(prisma as any, fakeRouter as any);
+
+    const { basisNote } = await svc.generateScenarios(USER_ID, PROJECT_ID);
+    const prompt = fakeRouter.lastRequest.userPrompt;
+    assertEqual(prompt.includes('5 самых весомых из 7'), true, 'модели не сказано, что аргументы — срез');
+    assertEqual(prompt.includes('последние 5 из 7'), true, 'модели не сказано, что прецеденты — срез');
+    assertEqual(prompt.includes('не делай выводов о том, чего в списке нет'), true, 'модели не запрещено достраивать отсутствующее');
+    assertEqual(basisNote !== null, true, 'человеку не сказано, на чём построен прогноз');
+    assertEqual((basisNote ?? '').includes('прецеденты поведения — последние 5 из 7'), true, 'в приписке нет прецедентов');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [partial-basis]: когда усечения нет — молчание, а не пустая приписка', async () => {
+    // Сообщение об усечении там, где его не было, — такой же обман,
+    // только в другую сторону.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'в?', goal: null });
+    prisma._seedArgument({ projectId: PROJECT_ID, targetPersonId: null, text: 'один', stance: 'PRO', weight: 1 });
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new OutcomeForecastingService(prisma as any, fakeRouter as any);
+
+    const { basisNote } = await svc.generateScenarios(USER_ID, PROJECT_ID);
+    assertEqual(basisNote, null, 'приписка появилась там, где разбор построен на всём');
+    assertEqual(fakeRouter.lastRequest.userPrompt.includes('из 1'), false, 'в промпт попала приписка об усечении, которого не было');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [inference-as-observation]: профиль и прецеденты уходят как ВЫВОД, с источником', async () => {
+    // Раньше и то и другое подавалось как наблюдение: модель получала
+    // собственный прежний вывод под чужим именем и строила на нём
+    // следующий.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'в?', goal: null });
+    prisma._seedPerson({ id: PERSON_ID, displayName: 'Начальник Иван' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: PERSON_ID, stakeholderRole: 'DECISION_MAKER' });
+    prisma._seedTrait({
+      personId: PERSON_ID, traitType: 'RESPONDS_TO_DATA',
+      value: 'Просит конкретные цифры', observedFrom: 'разговор 12 марта',
+    });
+    prisma._seedPrecedent({
+      personId: PERSON_ID, precedentDescription: 'В марте отказал без объяснений',
+      sourceDescription: 'разговор 3 марта',
+    });
+    prisma._seedRelationship({ personAId: PERSON_ID, personBId: 'other', label: 'муж финансового директора' });
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new OutcomeForecastingService(prisma as any, fakeRouter as any);
+
+    await svc.generateScenarios(USER_ID, PROJECT_ID);
+    const prompt = fakeRouter.lastRequest.userPrompt;
+    assertEqual(prompt.includes('Просит конкретные цифры (вывод модели по: разговор 12 марта)'), true,
+      'черта профиля ушла как наблюдение, без происхождения и источника');
+    assertEqual(prompt.includes('В марте отказал без объяснений (вывод модели по: разговор 3 марта)'), true,
+      'прецедент ушёл как наблюдение, без происхождения и источника');
+    assertEqual(prompt.includes('прежние выводы этой же системы'), true,
+      'модели не сказано, что делать с пометкой');
+    // Связь введена человеком руками — приписывать её модели нельзя.
+    assertEqual(prompt.includes('муж финансового директора (вывод модели'), false,
+      'связь, введённая человеком, названа выводом модели');
   });
 
   for (const [name, fn] of scenariosList) {

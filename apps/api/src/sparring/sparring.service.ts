@@ -47,8 +47,14 @@ import { ARCHETYPE_DESCRIPTIONS } from '../archetype-perspective/archetype-persp
 import { ArchetypeType, SparringMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
+import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
 
 const TASK_TYPE = 'sparring-session';
+/** Пункт [partial-basis] 2026-09-04 — лимит был законен, а молчание о
+ * нём нет: модель получала пять последних прецедентов под заголовком
+ * «ИЗВЕСТНЫЕ прецеденты» и не могла знать, что видит срез. */
+const PRECEDENTS_LIMIT = 5;
 const MAX_MESSAGES_PER_SESSION = 40; // 20 обменов репликами — разумный потолок для тренировочной сессии, не бесконечный чат
 
 // Пункт 69 (§3.26 ТЗ) — "разные голоса под разные архетипы
@@ -140,13 +146,27 @@ export class SparringService {
       ? await this.prisma.scheduledConversation.findFirst({ where: { id: scheduledConversationId, projectId } })
       : null;
 
+    // Пункт [partial-basis] 2026-09-04: основание сессии считается
+    // независимо от того, взята ли открывающая реплика из предзаготовки:
+    // все последующие ответы всё равно собирают контекст тем же срезом,
+    // и молчать о нём только потому, что первую фразу приготовили
+    // заранее, было бы случайной честностью.
+    let personBases: PartialBasis[] = [];
+    if (targetPersonId) {
+      const [used, total] = await Promise.all([
+        this.prisma.behaviorPrecedent.count({ where: { personId: targetPersonId }, take: PRECEDENTS_LIMIT }),
+        this.prisma.behaviorPrecedent.count({ where: { personId: targetPersonId } }),
+      ]);
+      personBases = [partialBasis('прецеденты поведения', Math.min(used, PRECEDENTS_LIMIT), total, 'recent')];
+    }
+
     if (scheduled?.preGeneratedSparringOpenerText) {
       openerText = scheduled.preGeneratedSparringOpenerText;
       openerAudio = scheduled.preGeneratedSparringOpenerAudio;
     } else {
       let personContext = '';
       if (targetPersonId) {
-        personContext = await this.buildPersonContext(projectId, targetPersonId);
+        personContext = (await this.buildPersonContext(projectId, targetPersonId)).text;
       }
       const archetypeContext = this.buildArchetypeContext(archetypeType, customArchetypeDescription);
       const userPrompt = this.buildOpeningPrompt(project.question, project.goal, archetypeContext, personContext);
@@ -176,7 +196,12 @@ export class SparringService {
       },
     });
 
-    return { ...session, messages: [message] };
+    // Пункт [partial-basis] 2026-09-04: основание — один раз при начале
+    // сессии, а не при каждой реплике: свойство относится к данным о
+    // человеке, а не к отдельной фразе, и повтор на каждом ответе
+    // превратился бы в шум, который перестают читать. В базе его нет —
+    // это про ЭТУ сессию, и экран говорит об этом прямо.
+    return { ...session, messages: [message], basisNote: humanBasisNote(personBases) };
   }
 
   /** Общий текст промпта открывающей реплики — переиспользуется и
@@ -219,7 +244,7 @@ export class SparringService {
     // effort, не гарантия совпадения с реальным выбором".
     let personContext = '';
     if (scheduled.personId) {
-      personContext = await this.buildPersonContext(scheduled.projectId, scheduled.personId);
+      personContext = (await this.buildPersonContext(scheduled.projectId, scheduled.personId)).text;
     }
     const userPrompt = this.buildOpeningPrompt(scheduled.project.question, scheduled.project.goal, '', personContext);
 
@@ -242,7 +267,7 @@ export class SparringService {
   async reply(userId: string, sessionId: string, userText: string, engineId?: string) {
     const session = await this.findOwnedSession(userId, sessionId);
     if (session.status !== SparringSessionStatus.ACTIVE) {
-      throw new BadRequestException(`SparringSession ${sessionId} is already ended`);
+      throw new BadRequestException(`Спарринг уже завершён — писать в него больше нельзя`);
     }
     if (!userText.trim()) {
       throw new BadRequestException('userText не может быть пустым');
@@ -264,7 +289,7 @@ export class SparringService {
 
     let personContext = '';
     if (session.targetPersonId) {
-      personContext = await this.buildPersonContext(session.projectId, session.targetPersonId);
+      personContext = (await this.buildPersonContext(session.projectId, session.targetPersonId)).text;
     }
     const archetypeContext = this.buildArchetypeContext(
       session.archetypeType ?? undefined,
@@ -358,33 +383,51 @@ export class SparringService {
 
   /** Дублирует buildRealPersonContext() из ArchetypePerspectiveService
    * почти дословно — см. обоснование в шапке файла. */
-  private async buildPersonContext(projectId: string, personId: string): Promise<string> {
+  private async buildPersonContext(
+    projectId: string,
+    personId: string,
+  ): Promise<{ text: string; bases: PartialBasis[] }> {
     const link = await this.prisma.projectPerson.findFirst({ where: { projectId, personId }, include: { person: true } });
     if (!link) {
       throw new NotFoundException(`Person ${personId} not found in project ${projectId}`);
     }
 
-    const [traits, relationships, precedents] = await Promise.all([
+    const [traits, relationships, precedents, precedentsTotal] = await Promise.all([
       this.prisma.personCommunicationTrait.findMany({ where: { personId } }),
       this.prisma.relationship.findMany({ where: { OR: [{ personAId: personId }, { personBId: personId }] } }),
-      this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: 5, orderBy: { createdAt: 'desc' } }),
+      this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: PRECEDENTS_LIMIT, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }),
+      this.prisma.behaviorPrecedent.count({ where: { personId } }),
     ]);
+    const precedentsBasis = partialBasis('прецеденты поведения', precedents.length, precedentsTotal, 'recent');
 
-    const traitsText = traits
-      .map((t: { traitType: string; value: string }) => `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`)
-      .join('; ');
+    // Пункт [inference-as-observation] 2026-09-05: и черты профиля, и
+    // прецеденты целиком созданы моделью по расшифровкам. Раньше они
+    // уходили как «наблюдаемый профиль» и «известные прецеденты» — модель
+    // получала собственный прежний вывод под видом наблюдения.
+    const traitsText = derivedList(
+      traits.map((t: { traitType: string; value: string; observedFrom: string | null }) => ({
+        text: `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`,
+        source: t.observedFrom,
+      })),
+    );
     const relationshipsText = relationships.map((r: { label: string }) => r.label).join('; ');
-    const precedentsText = precedents.map((p: { precedentDescription: string }) => p.precedentDescription).join('; ');
+    const precedentsText = derivedList(
+      precedents.map((p: { precedentDescription: string; sourceDescription: string | null }) => ({
+        text: p.precedentDescription,
+        source: p.sourceDescription,
+      })),
+    );
 
     const lines = [
       `Оппонент — реальный человек по имени ${link.person.displayName ?? 'без имени'}.`,
-      traitsText ? `Наблюдаемый коммуникационный профиль: ${traitsText}.` : '',
+      traitsText ? `Коммуникационный профиль, собранный разбором расшифровок: ${traitsText}.` : '',
       relationshipsText ? `Известные связи: ${relationshipsText}.` : '',
-      precedentsText ? `Известные прецеденты поведения: ${precedentsText}.` : '',
+      precedentsText ? `Прецеденты поведения, найденные разбором расшифровок${promptBasisNote(precedentsBasis)}: ${precedentsText}.` : '',
       !traitsText && !relationshipsText && !precedentsText ? 'О нём известно немного — не выдумывай подробностей.' : '',
+      hasDerived(traits, precedents) ? DERIVED_CONTEXT_INSTRUCTION : '',
     ].filter(Boolean);
 
-    return lines.join(' ');
+    return { text: lines.join(' '), bases: [precedentsBasis] };
   }
 
   /** Пункт 69 (§3.26 ТЗ) — переиспользует ARCHETYPE_DESCRIPTIONS,
@@ -460,7 +503,7 @@ export class SparringService {
     // согласие могло быть отозвано между ними.
     await this.consent.assertAudioMayLeaveDevice(userId, session.projectId);
     if (session.status !== SparringSessionStatus.ACTIVE) {
-      throw new BadRequestException(`SparringSession ${sessionId} is already ended`);
+      throw new BadRequestException(`Спарринг уже завершён — писать в него больше нельзя`);
     }
     const existingCount = await this.prisma.sparringMessage.count({ where: { sessionId } });
     if (existingCount >= MAX_MESSAGES_PER_SESSION) {

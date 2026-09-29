@@ -19,6 +19,15 @@ function createFakePrisma() {
       findUnique: async ({ where }: any) => users.get(where.id) ?? null,
     },
 
+    // Сверка доступа 2026-09-03: предпросмотр погоды теперь проверяет
+    // владение projectId, как и все остальные маршруты домена.
+    project: {
+      findFirst: async ({ where }: any) => {
+        const p = projects.get(where.id);
+        return p && p.ownerId === where.ownerId ? p : null;
+      },
+    },
+
     scheduledConversation: {
       findFirst: async ({ where }: any) => {
         const s = scheduled.get(where.id);
@@ -181,6 +190,61 @@ async function run() {
     assertEqual(serialized.includes('37.618423'), false, 'долгота не просочилась в персистентную запись');
   });
 
+  /** КЛЮЧЕВЫЕ ТЕСТЫ [forecast-without-source] 2026-09-06 — НА ПОВЕДЕНИИ.
+   * Раньше пустой ответ сервиса превращался в строку «нет данных»,
+   * сохранялся как описание погоды, уходил в промпт и возвращался
+   * советом «проводить / перенести» о встрече человека. */
+  test('КЛЮЧЕВОЙ ТЕСТ: сервис ответил без данных — модель не вызывается, совета нет, а причина сказана', async () => {
+    const prisma = createFakePrisma();
+    seedScheduled(prisma);
+    // Ответ формально успешный, но почасового ряда в нём нет.
+    (global as any).fetch = async () => ({ ok: true, json: async () => ({ hourly: { time: [], temperature_2m: [], weathercode: [] } }) });
+    const router = new FakeAIRouterService();
+    const svc = new WeatherForecastService(prisma as any, router as any, new FakeConsentService() as any, new FakeSecretsService() as any);
+
+    const forecast = await svc.generateByGeolocation(USER_ID, SCHEDULED_ID, 55.75, 37.6);
+    assertEqual(router.lastRequest, null, 'модель не вызывалась — советовать было не из чего');
+    assertEqual(forecast.recommendation, null, 'совета нет, а не PROCEED по умолчанию');
+    assertEqual(forecast.condition, null, 'описание погоды пусто, а не строка «нет данных»');
+    assertEqual(forecast.source, 'open-meteo', 'автор ответа записан');
+    assertEqual(forecast.recommendationReason.includes('Open-Meteo'), true, 'причина называет сервис');
+    assertEqual(forecast.generatedByInferenceId, null, 'вывода модели нет, и ссылки на него тоже');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ: при данных модель вызывается, совет есть, и автор прогноза записан', async () => {
+    const prisma = createFakePrisma();
+    seedScheduled(prisma);
+    (global as any).fetch = async () => ({ ok: true, json: async () => ({ hourly: { time: ['2026-06-15T14:00'], temperature_2m: [30], weathercode: [95] } }) });
+    const router = new FakeAIRouterService();
+    const svc = new WeatherForecastService(prisma as any, router as any, new FakeConsentService() as any, new FakeSecretsService() as any);
+
+    const forecast = await svc.generateByGeolocation(USER_ID, SCHEDULED_ID, 55.75, 37.6);
+    assertEqual(router.lastRequest !== null, true, 'модель вызвана');
+    assertEqual(forecast.recommendation, 'PROCEED', 'совет получен от модели');
+    assertEqual(forecast.source, 'open-meteo', 'автор прогноза сохранён вместе с ним');
+    assertEqual(router.lastRequest.userPrompt.includes('нет данных'), false, 'в промпт не уходит строка-заглушка');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ: половинчатый ответ — температура без описания — не подставляет пустоту вместо погоды', async () => {
+    const prisma = createFakePrisma();
+    seedScheduled(prisma);
+    // Почасовой ряд есть, но кода погоды в нём нет — описание
+    // неизвестно, температура известна.
+    (global as any).fetch = async () => ({ ok: true, json: async () => ({ hourly: { time: ['2026-06-15T14:00'], temperature_2m: [18], weathercode: [] } }) });
+    const router = new FakeAIRouterService();
+    const svc = new WeatherForecastService(prisma as any, router as any, new FakeConsentService() as any, new FakeSecretsService() as any);
+
+    const forecast = await svc.generateByGeolocation(USER_ID, SCHEDULED_ID, 55.75, 37.6);
+    assertEqual(router.lastRequest !== null, true, 'температура есть — советовать есть о чём');
+    assertEqual(forecast.temperatureCelsius, 18, 'температура сохранена');
+    assertEqual(
+      router.lastRequest.userPrompt.includes('описание сервис не дал'),
+      true,
+      'промпт прямо говорит, что описания нет, а не оставляет пустое место',
+    );
+    assertEqual(router.lastRequest.userPrompt.includes('Погода: ,'), false, 'пустое описание не подставляется');
+  });
+
   test('generateByCity() бросает BadGatewayException при недоступности провайдера', async () => {
     const prisma = createFakePrisma();
     seedScheduled(prisma);
@@ -219,6 +283,7 @@ async function run() {
 
   test('КЛЮЧЕВОЙ ТЕСТ: previewForScheduling() честно возвращает null без сохранённого профильного города — не гадает', async () => {
     const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedUser({ id: USER_ID, city: null });
     const svc = new WeatherForecastService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any, new FakeSecretsService() as any);
 
@@ -226,8 +291,22 @@ async function run() {
     assertEqual(result, null, 'без сохранённого города — честно null, не запрашивает город заново');
   });
 
+  test('КЛЮЧЕВОЙ ТЕСТ (сверка доступа 2026-09-03): предпросмотр по ЧУЖОМУ projectId отклоняется, а не тратит AI-вызов', async () => {
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: 'proj-чужой', ownerId: 'other-user' });
+    prisma._seedUser({ id: USER_ID, city: 'Москва' });
+    const svc = new WeatherForecastService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any, new FakeSecretsService() as any);
+
+    await assertThrowsAsync(
+      () => svc.previewForScheduling(USER_ID, 'proj-чужой', new Date('2026-06-15T14:00:00Z')),
+      NotFoundException,
+      'предпросмотр по чужому проекту',
+    );
+  });
+
   test('previewForScheduling() НЕ требует согласия LOCATION — использует уже сохранённый город, не разовую геолокацию', async () => {
     const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedUser({ id: USER_ID, city: 'Москва' });
     (global as any).fetch = async (url: string) => {
       if (url.includes('geocoding-api')) return { ok: true, json: async () => ({ results: [{ latitude: 55.75, longitude: 37.6 }] }) };
@@ -243,6 +322,7 @@ async function run() {
 
   test('previewForScheduling() честно возвращает null, если внешний провайдер недоступен — не бросает, не ломает форму', async () => {
     const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedUser({ id: USER_ID, city: 'Москва' });
     (global as any).fetch = async () => { throw new Error('network down'); };
     const svc = new WeatherForecastService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any, new FakeSecretsService() as any);
@@ -253,6 +333,7 @@ async function run() {
 
   test('previewForScheduling() честно возвращает null, если AI-провайдер недоступен', async () => {
     const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedUser({ id: USER_ID, city: 'Москва' });
     (global as any).fetch = async (url: string) => {
       if (url.includes('geocoding-api')) return { ok: true, json: async () => ({ results: [{ latitude: 55.75, longitude: 37.6 }] }) };
@@ -267,6 +348,7 @@ async function run() {
 
   test('previewForScheduling() НЕ создаёт запись WeatherForecast — чистый предпросмотр, ничего не персистируется', async () => {
     const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedUser({ id: USER_ID, city: 'Москва' });
     (global as any).fetch = async (url: string) => {
       if (url.includes('geocoding-api')) return { ok: true, json: async () => ({ results: [{ latitude: 55.75, longitude: 37.6 }] }) };
@@ -280,6 +362,7 @@ async function run() {
 
   test('previewForScheduling() корректно передаёт рекомендацию AI дальше в результат предпросмотра', async () => {
     const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID });
     prisma._seedUser({ id: USER_ID, city: 'Москва' });
     (global as any).fetch = async (url: string) => {
       if (url.includes('geocoding-api')) return { ok: true, json: async () => ({ results: [{ latitude: 55.75, longitude: 37.6 }] }) };

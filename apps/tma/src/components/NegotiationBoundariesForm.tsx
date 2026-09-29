@@ -94,7 +94,7 @@ export function NegotiationBoundariesForm({ projectId }: NegotiationBoundariesFo
         <input value={walkAwayPoint} onChange={(e) => setWalkAwayPoint(e.target.value)} />
       </label>
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <button type="button" onClick={handleSave} disabled={saving}>
         {saving ? 'Сохраняем…' : 'Сохранить'}

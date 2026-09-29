@@ -29,12 +29,22 @@
 // данными), но лимит сохранён — тот же принцип "не отменять защиту
 // просто потому что объём сузился".
 
+import { projectFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { MotiveConfidenceLevel } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { partialBasis, promptBasisNote, humanBasisNote } from '../common/partial-basis';
+import { factsBlockWithInstruction } from '../common/fact-provenance';
+import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
+import { ConsentService } from '../consent/consent.service';
+import { ConsentType } from '@prisma/client';
+import { allFilled } from '../common/claim-substance';
+
+/** Пункт [partial-basis] 2026-09-04 — лимит законен, молчание о нём нет. */
+const PRECEDENTS_LIMIT = 5;
 
 const TASK_TYPE = 'motive-analysis';
 const DAILY_LIMIT_PER_USER = 10; // "суммарно по разным людям" — общий счётчик, не по одному человеку
@@ -57,15 +67,16 @@ interface RawMotiveHypothesis {
   suggestsFigurantStatus?: boolean;
 }
 
-function isValidMotivePayload(text: string): boolean {
+export function isValidMotivePayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
     return parsed.every(
       (item) =>
-        typeof item.explanation === 'string' &&
-        item.explanation.trim().length > 0 &&
-        typeof item.supportingFactsSummary === 'string' &&
+        // Пункт [finding-without-substance] 2026-09-25: непустоты
+        // требовали от самой гипотезы и не требовали от её основания — в
+        // одном выражении, через строчку.
+        allFilled(item, ['explanation', 'supportingFactsSummary']) &&
         ['LOW', 'MEDIUM', 'HIGH'].includes(item.confidence),
     );
   } catch {
@@ -81,9 +92,15 @@ export class MotiveAnalysisService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly consent: ConsentService,
   ) {}
 
   async analyze(userId: string, projectId: string, personId: string, engineId?: string) {
+    // Пункт [consent-that-could-not-be-given] 2026-09-24: предмет этого
+    // разбора — названный человек, и решение владельца (§16.0 ТЗ)
+    // требует для таких разборов ОТДЕЛЬНОГО согласия. Граница и обе её
+    // стороны — в common-реестре `consent/person-research.ts`.
+    await this.consent.requireConsent(userId, ConsentType.PERSON_RESEARCH, projectId);
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
     const link = await this.prisma.projectPerson.findFirst({ where: { projectId, personId }, include: { person: true } });
     if (!link) {
@@ -93,12 +110,19 @@ export class MotiveAnalysisService {
     await this.assertUnderRateLimit(userId);
 
     const [facts, precedents, traits, relationships, objective] = await Promise.all([
-      this.prisma.personFact.findMany({ where: { personId, status: 'ACTIVE' } }),
-      this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: 5, orderBy: { createdAt: 'desc' } }),
+      // Пункт [scope-not-applied] 2026-09-06 — область видимости.
+      this.prisma.personFact.findMany({ where: { personId, status: 'ACTIVE', ...projectFactsScopeWhere(projectId) } }),
+      this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: PRECEDENTS_LIMIT, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }),
       this.prisma.personCommunicationTrait.findMany({ where: { personId } }),
       this.prisma.relationship.findMany({ where: { OR: [{ personAId: personId }, { personBId: personId }] } }),
       this.prisma.decisionObjective.findUnique({ where: { projectId } }),
     ]);
+    // Пункт [partial-basis] 2026-09-04: прецедентов берётся пять
+    // последних, а в промпте они назывались «известными» — модель не
+    // могла знать, что видит срез, и гипотезы о мотивах строились на
+    // ложной посылке полноты.
+    const precedentsTotal = await this.prisma.behaviorPrecedent.count({ where: { personId } });
+    const precedentsBasis = partialBasis('прецеденты поведения', precedents.length, precedentsTotal, 'recent');
 
     if (facts.length === 0 && precedents.length === 0 && traits.length === 0) {
       throw new BadRequestException(
@@ -106,11 +130,26 @@ export class MotiveAnalysisService {
       );
     }
 
-    const factsText = facts.map((f: { content: string }) => `- ${f.content}`).join('\n');
-    const precedentsText = precedents.map((p: { precedentDescription: string }) => `- ${p.precedentDescription}`).join('\n');
-    const traitsText = traits
-      .map((t: { traitType: string; value: string }) => `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`)
-      .join('; ');
+    // Пункт [source-collapse] 2026-09-05: происхождение факта доходит
+    // до модели. Раньше ⚪ «моё предположение» уходило как «известный
+    // факт», и гипотеза о мотивах могла держаться на догадке самого
+    // пользователя, вернувшейся к нему выводом.
+    const factsText = factsBlockWithInstruction(facts);
+    // Пункт [inference-as-observation] 2026-09-05: прецеденты и черты
+    // профиля целиком созданы моделью по расшифровкам.
+    const precedentsText = derivedList(
+      precedents.map((p: { precedentDescription: string; sourceDescription: string | null }) => ({
+        text: p.precedentDescription,
+        source: p.sourceDescription,
+      })),
+      '\n- ',
+    );
+    const traitsText = derivedList(
+      traits.map((t: { traitType: string; value: string; observedFrom: string | null }) => ({
+        text: `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`,
+        source: t.observedFrom,
+      })),
+    );
     const relationshipsText = relationships.map((r: { label: string }) => r.label).join('; ');
 
     const objectiveText = objective
@@ -127,11 +166,12 @@ export class MotiveAnalysisService {
     const userPrompt = [
       `Ситуация: ${project.question}`,
       project.goal ? `Общая цель проекта: ${project.goal}` : '',
-      `Известные факты о фигуранте (${link.person.displayName ?? 'без имени'}):\n${factsText || '(фактов нет)'}`,
-      precedentsText ? `Известные прецеденты поведения:\n${precedentsText}` : '',
-      traitsText ? `Наблюдаемый коммуникационный профиль: ${traitsText}` : '',
+      `Факты о фигуранте (${link.person.displayName ?? 'без имени'}), каждый с указанием происхождения:\n${factsText || '(фактов нет)'}`,
+      precedentsText ? `Прецеденты поведения, найденные разбором расшифровок${promptBasisNote(precedentsBasis)}:\n${precedentsText}` : '',
+      traitsText ? `Коммуникационный профиль, собранный разбором расшифровок: ${traitsText}` : '',
       relationshipsText ? `Известные связи: ${relationshipsText}` : '',
       `Цель пользователя в этой ситуации:\n${objectiveText}`,
+      hasDerived(precedents, traits) ? DERIVED_CONTEXT_INSTRUCTION : '',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -164,7 +204,7 @@ export class MotiveAnalysisService {
     }
 
     const rawHypotheses: RawMotiveHypothesis[] = JSON.parse(result.text);
-    return this.prisma.$transaction(
+    const hypotheses = await this.prisma.$transaction(
       rawHypotheses.map((h) =>
         this.prisma.motiveHypothesis.create({
           data: {
@@ -182,6 +222,13 @@ export class MotiveAnalysisService {
         }),
       ),
     );
+
+    // Пункт [partial-basis] 2026-09-04: на чём построены ИМЕННО ЭТИ
+    // гипотезы. В базе основания нет — колонки под него не существует, и
+    // ручную миграцию ради подписи под текстом мы не заводили; в
+    // сохранённом списке этого поля не будет, и экран говорит об этом
+    // прямо, а не делает вид, что помнит.
+    return { hypotheses, basisNote: humanBasisNote([precedentsBasis]) };
   }
 
   async list(userId: string, projectId: string, personId: string) {

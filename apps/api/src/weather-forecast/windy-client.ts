@@ -70,8 +70,10 @@ function closestIndex(timestampsMs: number[], targetMs: number): number {
  * условие, когда weatherWarnings ничего не сообщил (нет значимых
  * явлений — не значит "нет данных", значит "нет ГРОЗЫ/ДОЖДЯ/ТУМАНА",
  * ясность/облачность отдельно считываем из cloud-параметров). */
-function conditionFromClouds(totalCloudFraction: number | null): string {
-  if (totalCloudFraction === null) return 'нет данных';
+function conditionFromClouds(totalCloudFraction: number | null): string | null {
+  // Пункт [forecast-without-source] 2026-09-06: null вместо строки
+  // «нет данных» — та строка доходила до промпта как описание погоды.
+  if (totalCloudFraction === null) return null;
   if (totalCloudFraction < 0.15) return 'ясно';
   if (totalCloudFraction < 0.5) return 'преимущественно ясно';
   if (totalCloudFraction < 0.85) return 'переменная облачность';
@@ -112,7 +114,7 @@ export async function getWindyForecast(
   const data = (await response.json()) as WindyResponse;
   const timestamps = Array.isArray(data.ts) ? data.ts : [];
   if (timestamps.length === 0) {
-    return { temperatureCelsius: null, condition: 'нет данных' };
+    return { temperatureCelsius: null, condition: null, source: 'windy' };
   }
 
   const idx = closestIndex(timestamps, targetDate.getTime());
@@ -128,7 +130,7 @@ export async function getWindyForecast(
   const warningsSeries = data['weatherwarnings-surface'];
   const warningCode = Array.isArray(warningsSeries) ? (warningsSeries[idx] as number | null) : null;
 
-  let condition: string;
+  let condition: string | null;
   if (typeof warningCode === 'number' && warningCode > 0 && WEATHER_CODE_LABELS[warningCode]) {
     condition = WEATHER_CODE_LABELS[warningCode];
   } else {
@@ -140,7 +142,7 @@ export async function getWindyForecast(
     condition = conditionFromClouds(totalCloud);
   }
 
-  return { temperatureCelsius, condition };
+  return { temperatureCelsius, condition, source: 'windy' };
 }
 
 function readCloudFraction(data: WindyResponse, key: string, idx: number): number | null {

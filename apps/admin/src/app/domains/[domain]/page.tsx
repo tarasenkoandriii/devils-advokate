@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { listDomainProjects, getDomainProject, setDomainProjectFrozen } from '../../../lib/endpoints';
 import type { DomainProjectRow, DomainProjectDetail } from '../../../lib/types';
+import { OperatorTraceNotice } from '../../../components/OperatorTraceNotice';
+import { operatorScreenActions } from '../../../lib/operator-screens';
 
 export default function DomainProjectsAdminPage() {
   const { domain } = useParams<{ domain: string }>();
@@ -48,15 +50,27 @@ export default function DomainProjectsAdminPage() {
           <button key={f} className={filter === f ? 'btn btn-primary' : 'btn'} onClick={() => setFilter(f)}>{f === 'all' ? 'Все' : f === 'with' ? 'С конфигом' : 'Без конфига (застряли в онбординге)'}</button>
         ))}
       </div>
+      {/* Пункт [operator-left-a-trace-unsaid] 2026-09-25: одно правило на
+          все экраны оператора. Фраза в карточке ниже осталась — она о
+          КОНКРЕТНОМ моменте, рядом со словами человека; здесь же
+          перечислено, что остаётся после каждого действия экрана. */}
+      <OperatorTraceNotice actions={operatorScreenActions('app/domains/[domain]/page.tsx')} />
       {!rows && <p className="muted">Загрузка…</p>}
       {rows && (
         <table>
-          <thead><tr><th>Вопрос</th><th>Владелец (tg)</th><th>Создан</th><th>Конфиг</th><th>Заморозка</th><th></th></tr></thead>
+          {/* Пункт [operator-read-the-question] 2026-09-25: столбца
+              «Вопрос» здесь больше нет — в нём стояли слова человека о
+              его деле, для всех проектов домена сразу. Список нужен,
+              чтобы отличать строки и видеть состояние; текст — в
+              карточке, и её открытие записывается в журнал. */}
+          <thead><tr><th>Проект</th><th>Владелец (tg)</th><th>Создан</th><th>Разговоров</th><th>Конфиг</th><th>Заморозка</th><th></th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <Fragment key={r.id}>
                 <tr>
-                  <td>{r.question}</td><td>{r.owner.telegramId}</td><td>{new Date(r.createdAt).toLocaleDateString()}</td>
+                  <td><code title="идентификатор проекта">{r.id.slice(0, 8)}</code></td>
+                  <td>{r.owner.telegramId}</td><td>{new Date(r.createdAt).toLocaleDateString('ru-RU')}</td>
+                  <td>{r.conversations}</td>
                   <td>{r.config ? <span className="badge badge-ok">есть</span> : <span className="badge badge-pending">нет</span>}</td>
                   <td>
                     {r.frozenAt ? (
@@ -71,9 +85,20 @@ export default function DomainProjectsAdminPage() {
                   <td><button className="btn" onClick={() => toggle(r.id)}>{expanded[r.id] ? 'Скрыть' : 'Открыть'}</button></td>
                 </tr>
                 {expanded[r.id] && (
-                  <tr><td colSpan={6}>
+                  <tr><td colSpan={7}>
                     {expanded[r.id] === 'loading' ? <span className="muted">Загрузка…</span> : (
-                      <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{JSON.stringify(expanded[r.id], null, 2)}</pre>
+                      <>
+                        {/* Пункт [operator-read-the-question] 2026-09-25:
+                            оператор должен видеть, что он делает. Ниже —
+                            слова человека о его деле; открытие карточки
+                            записано в журнал действий. Сказать это здесь
+                            дешевле, чем объяснять потом. */}
+                        <p className="muted" style={{ marginTop: 0 }}>
+                          Здесь слова человека о его деле. Открытие карточки записано в журнал действий — с вашим
+                          идентификатором и временем.
+                        </p>
+                        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{JSON.stringify(expanded[r.id], null, 2)}</pre>
+                      </>
                     )}
                   </td></tr>
                 )}

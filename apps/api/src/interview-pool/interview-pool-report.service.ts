@@ -6,6 +6,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ClientReportType, CandidateStage } from '@prisma/client';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
+import { assertConsentActive, consentRevoked } from './consent-revocation';
+import { daysAgo } from '../common/server-time';
 
 const CONCLUSION_TASK_TYPE = 'interview-pool-client-report-conclusion';
 
@@ -33,8 +35,18 @@ export class InterviewPoolReportService {
    * criteriaBreakdown ЧИТАЄТЬСЯ з уже наявного PoolRelevanceEntry (не
    * рахується заново), conclusion — окремий AI-виклик narrative-
    * висновку, без вердикта. */
+  /** Пункт [job-domain-v2]: список отчётов проекта — экрану TMA нужен для
+   * доставки заказчику (Р-4: только проверенные). Раньше списка не было —
+   * отчёты жили только в состоянии экрана, который их создал. */
+  async list(userId: string, projectId: string) {
+    await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
+    return this.prisma.clientReport.findMany({ where: { projectId }, orderBy: { draftedAt: 'desc' } });
+  }
+
   async generateCandidateReport(userId: string, projectId: string, candidateProfileId: string) {
     await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
+    // А-6: отзыв согласия останавливает разбор по этому человеку (аудит 2026-09-03)
+    await assertConsentActive(this.prisma, candidateProfileId);
 
     const status = await this.prisma.candidatePipelineStatus.findUnique({
       where: { projectId_candidateProfileId: { projectId, candidateProfileId } },
@@ -57,7 +69,10 @@ export class InterviewPoolReportService {
     const processDescription = status.stageProgress
       .map(
         (p: any) =>
-          `${p.stageDefinition.name}: ${p.completedAt ? `завершено ${p.completedAt.toISOString().slice(0, 10)}` : 'ще не завершено'}`,
+          // Пункт [server-said-which-day] 2026-09-24: число по UTC
+          // заменено расстоянием во времени — для описания процесса
+          // важно «когда относительно сейчас», а не календарь.
+          `${p.stageDefinition.name}: ${p.completedAt ? `завершено ${daysAgo(p.completedAt)}` : 'ще не завершено'}`,
       )
       .join('; ');
 
@@ -91,10 +106,14 @@ export class InterviewPoolReportService {
   async generateSummaryReport(userId: string, projectId: string) {
     await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
 
-    const statuses = await this.prisma.candidatePipelineStatus.findMany({
+    // А-6: кандидаты с отозванным согласием не попадают в отчёт заказчику —
+    // ни в воронку, ни в список (аудит 2026-09-03). Их число называется явно:
+    // молча уменьшившаяся воронка выглядела бы как потеря данных.
+    const allStatuses = await this.prisma.candidatePipelineStatus.findMany({
       where: { projectId },
       include: { candidateProfile: true },
     });
+    const statuses = allStatuses.filter((s: any) => !consentRevoked(s));
 
     const funnel: { totalCandidates: number; byStage: Record<string, number> } = {
       totalCandidates: statuses.length,
@@ -142,7 +161,13 @@ export class InterviewPoolReportService {
       data: {
         projectId,
         type: ClientReportType.SUMMARY,
-        content: { funnel, entries } as any,
+        content: {
+          funnel,
+          entries,
+          // Отозвавшие согласие не в отчёте, но их число названо — иначе
+          // расхождение с пулом читается как потеря данных (А-6).
+          excludedByRevokedConsent: allStatuses.length - statuses.length,
+        } as any,
       },
     });
   }
@@ -150,7 +175,7 @@ export class InterviewPoolReportService {
   async updateContent(userId: string, reportId: string, content: unknown) {
     const report = await this.assertOwnedReport(userId, reportId);
     if (report.sentAt) {
-      throw new BadRequestException('Звіт вже надіслано — редагування недоступне');
+      throw new BadRequestException('Отчёт уже отправлен — редактирование недоступно');
     }
     return this.prisma.clientReport.update({ where: { id: reportId }, data: { content: content as any } });
   }
@@ -168,7 +193,7 @@ export class InterviewPoolReportService {
   async send(userId: string, reportId: string, sentViaShare: string) {
     const report = await this.assertOwnedReport(userId, reportId);
     if (!report.reviewedAt) {
-      throw new BadRequestException('Звіт не пройшов рев\'ю — reviewedAt обов\'язковий перед відправкою');
+      throw new BadRequestException('Отчёт не прошёл ревью — reviewedAt обязателен перед отправкой');
     }
     return this.prisma.clientReport.update({
       where: { id: reportId },

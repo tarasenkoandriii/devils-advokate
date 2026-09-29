@@ -10,8 +10,19 @@ import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { JobSearchOnboardingService, ExtractedJobSearchConfigDraft } from './job-search-onboarding.service';
-import { JobSearchService } from './job-search.service';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { JobSearchService, CvDraft } from './job-search.service';
+import { CvImportService, MAX_IMPORT_CHARS } from './cv-import.service';
+import { IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+
+// Пункт [job-domain-v2] К-22 — импорт готового резюме текстом.
+class ImportCvDto {
+  @IsString() @MinLength(40) @MaxLength(MAX_IMPORT_CHARS) text!: string;
+  @IsOptional() @IsString() @MaxLength(200) sourceRef?: string | null;
+}
+
+class UpdateCvDraftDto {
+  @IsObject() draft!: CvDraft;
+}
 
 class CreateProjectDto {
   // Пункт [validation] 2026-09-01: лимиты на тексты, уходящие в LLM.
@@ -57,6 +68,7 @@ export class JobSearchController {
     private readonly onboarding: JobSearchOnboardingService,
     private readonly jobSearch: JobSearchService,
     private readonly prisma: PrismaService,
+    private readonly cvImport: CvImportService,
   ) {}
 
   // Повторный аудит 2026-09-01: у домена были только POST-роуты
@@ -121,6 +133,16 @@ export class JobSearchController {
   @Post('projects/:projectId/cv/draft')
   async generateCv(@CurrentUser() userId: string, @Param('projectId') projectId: string) {
     return this.jobSearch.generateCvDraft(userId, projectId);
+  }
+
+  @Post('projects/:projectId/cv/import')
+  async importCv(@CurrentUser() userId: string, @Param('projectId') projectId: string, @Body() dto: ImportCvDto) {
+    return this.cvImport.importCv(userId, projectId, dto);
+  }
+
+  @Post('projects/:projectId/cv/draft-edit')
+  async editCvDraft(@CurrentUser() userId: string, @Param('projectId') projectId: string, @Body() dto: UpdateCvDraftDto) {
+    return this.cvImport.updateDraft(userId, projectId, dto.draft);
   }
 
   @Post('projects/:projectId/cv/review')

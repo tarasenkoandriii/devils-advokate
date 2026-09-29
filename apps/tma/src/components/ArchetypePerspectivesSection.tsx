@@ -14,7 +14,9 @@
 // профиль/связи/прецеденты в промпт.
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { generateArchetypePerspective, listArchetypePerspectives, listPeople } from '../lib/features';
+import { AnalysisBasisNote } from './AnalysisBasisNote';
 import { ArchetypePerspective, ArchetypeType, ProjectPersonLink } from '../lib/types';
 import { haptic } from '../lib/telegram';
 
@@ -37,6 +39,10 @@ const ARCHETYPE_LABELS: Record<ArchetypeType, string> = {
 
 export function ArchetypePerspectivesSection({ projectId }: ArchetypePerspectivesSectionProps) {
   const [perspectives, setPerspectives] = useState<ArchetypePerspective[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [people, setPeople] = useState<ProjectPersonLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState<ArchetypeType>('LAWYER');
@@ -45,15 +51,17 @@ export function ArchetypePerspectivesSection({ projectId }: ArchetypePerspective
   const [focusOwnPosition, setFocusOwnPosition] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Пункт [partial-basis] 2026-09-04: на чём построена ЭТА перспектива.
+  const [basisNote, setBasisNote] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     return listArchetypePerspectives(projectId)
-      .then(setPerspectives)
-      .catch(() => setPerspectives([]));
+      .then((v) => { setPerspectives(v); setNotLoaded(false); })
+      .catch(() => { setPerspectives([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
-    void Promise.all([reload(), listPeople(projectId).then(setPeople).catch(() => setPeople([]))]).finally(() =>
+    void Promise.all([reload(), listPeople(projectId).then((v) => { setPeople(v); setNotLoaded(false); }).catch(() => { setPeople([]); setNotLoaded(true); })]).finally(() =>
       setLoading(false),
     );
   }, [reload, projectId]);
@@ -72,6 +80,7 @@ export function ArchetypePerspectivesSection({ projectId }: ArchetypePerspective
         focusOwnPosition,
       );
       setPerspectives((prev) => [result, ...prev]);
+      setBasisNote(result.basisNote);
       if (selectedType === 'CUSTOM') setCustomDescription('');
       haptic('success');
     } catch (err) {
@@ -95,7 +104,9 @@ export function ArchetypePerspectivesSection({ projectId }: ArchetypePerspective
 
   return (
     <section className="archetype-perspectives-section">
+      {notLoaded && <NotLoadedNotice what="прошлые взгляды и список людей проекта" />}
       <h3>Взгляд глазами других</h3>
+      <AnalysisBasisNote note={basisNote} />
       <p className="conversations-section__hint">
         🟡 Догадка ИИ — симуляция мнения, не факт. Некоторые архетипы намеренно предвзяты — это стресс-тест для вашей
         позиции, не поиск объективной истины. Для реального человека — на основе того, что о нём реально известно
@@ -160,7 +171,7 @@ export function ArchetypePerspectivesSection({ projectId }: ArchetypePerspective
             )}
           </label>
         )}
-        {error && <p className="generation-error">{error}</p>}
+        {error && <p role="alert" className="generation-error">{error}</p>}
         <div className="conversations-section__add-actions">
           <button
             type="button"

@@ -198,9 +198,40 @@ async function run() {
     };
     const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
 
-    const created = await svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg');
+    /** ДОПОЛНЕН, Пункт [delete-says-done] 2026-09-06: метод возвращает
+     * не только записи, но и исход удаления ПУБЛИЧНОЙ КОПИИ фото.
+     * Экран обещает человеку безусловно — «ссылка удаляется сразу
+     * после поиска», — а удаление было best-effort и молчало. */
+    const { verifications: created, publicCopy } = await svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg');
     assertEqual(created.length, 1, 'ровно одна запись');
-    assertEqual(created[0].verificationStatus, 'NO_SIMILAR_IMAGES_FOUND', 'статус — нет совпадений, не вердикт о подлинности');
+    assertEqual((created[0] as any).verificationStatus, 'NO_SIMILAR_IMAGES_FOUND', 'статус — нет совпадений, не вердикт о подлинности');
+    assertEqual(publicCopy.removed, true, 'публичная копия удалена, и об этом сказано явно');
+    assertEqual(publicCopy.note, null, 'при успехе человеку сообщать нечего');
+  });
+
+  /** КЛЮЧЕВОЙ ТЕСТ [delete-says-done] 2026-09-06 — главный случай.
+   * Фото на время поиска РЕАЛЬНО публично в интернете, и экран обещает
+   * человеку безусловно, что ссылка удаляется сразу после поиска. Если
+   * хранилище отказало, фото остаётся публичным — промолчать об этом
+   * значит оставить человека с обещанием вместо факта. */
+  test('verifyPhoto(): удаление публичной копии не прошло — человек узнаёт об этом, а не остаётся с обещанием', async () => {
+    const prisma = createFakePrisma();
+    seedOwnedFact(prisma);
+    (global as any).fetch = async (url: string, init: any) => {
+      if (init?.method === 'PUT') return { ok: true, json: async () => ({ url: 'https://store.public.blob.vercel-storage.com/x.jpg', pathname: 'x.jpg', contentType: 'image/jpeg' }) };
+      if (url.includes('serpapi.com')) return { ok: true, json: async () => ({ search_metadata: { status: 'Success' }, visual_matches: [] }) };
+      // Именно удаление: хранилище отвечает отказом, не бросая ошибку.
+      if (url.includes('/delete')) return { ok: false, status: 403, statusText: 'Forbidden' };
+      return { ok: true, json: async () => ({}) };
+    };
+    const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
+
+    const { verifications, publicCopy } = await svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg');
+    // Результат поиска человек получает — удаление его не роняет.
+    assertEqual(verifications.length, 1, 'результат поиска не потерян из-за неудачного удаления');
+    assertEqual(publicCopy.removed, false, 'копия НЕ удалена — и это сказано');
+    assertEqual((publicCopy.note ?? '').includes('403'), true, 'причина названа');
+    assertEqual((publicCopy.note ?? '').includes('остаётся доступной по ссылке'), true, 'сказано прямо, что фото всё ещё публично');
   });
 
   test('verifyPhoto() создаёт по записи на каждое найденное совпадение, статус SIMILAR_IMAGES_FOUND (нейтральный, не вердикт)', async () => {
@@ -227,10 +258,10 @@ async function run() {
     };
     const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
 
-    const created = await svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg');
+    const { verifications: created } = await svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg');
     assertEqual(created.length, 2, 'две записи, по одной на совпадение');
     assertEqual(created.every((c: any) => c.verificationStatus === 'SIMILAR_IMAGES_FOUND'), true, 'обе — нейтральный статус найденного совпадения');
-    assertEqual(created[0].sourceUrl, 'https://example.com/a', 'sourceUrl сохранён');
+    assertEqual((created[0] as any).sourceUrl, 'https://example.com/a', 'sourceUrl сохранён');
   });
 
   test('list() возвращает записи владельца факта', async () => {

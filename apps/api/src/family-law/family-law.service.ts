@@ -7,11 +7,15 @@
 
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isUniqueViolation } from '../common/unique-violation';
+import { numberedTranscript, resolveSegmentRef } from '../common/transcript-prompt';
+import { normalizeCurrency } from '../common/money';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { FamilyLawCriterionCategory } from '@prisma/client';
 import { assertOwnedFamilyLawProject } from './family-law-access';
 import { ExtractedFamilyLawConfigDraft } from './family-law-onboarding.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { allFilled, substanceSite } from '../common/claim-substance';
 
 const BREAKDOWN_TASK_TYPE = 'family-law-consultation-breakdown';
 
@@ -28,12 +32,22 @@ interface RawBreakdown {
   criteriaBreakdown: CriterionStatement[];
 }
 
-function isValidBreakdown(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: спека вызывает сам
+// валидатор, а не ищет в его тексте слово `allFilled`
+// (Пункт [finding-without-substance-2] 2026-09-26).
+export function isValidBreakdown(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.criteriaBreakdown)) return false;
     return parsed.criteriaBreakdown.every(
-      (c: any) => typeof c?.criterionId === 'string' && typeof c?.whatWasSaid === 'string',
+      // Пункт [finding-without-substance-2] 2026-09-26: `criterionId`
+      // пустым не совпадёт ни с одним критерием домена, а вот
+      // `whatWasSaid` сохраняется как есть — разбор существует ради этой
+      // строки. Одна из ЧЕТЫРЁХ идентичных копий (dtp, health,
+      // family-law, investment); реестр — `common/claim-substance.ts`.
+      (c: any) =>
+        typeof c?.criterionId === 'string' &&
+        allFilled(c, substanceSite('isValidBreakdown').required.map((f) => f.field)),
     );
   } catch {
     return false;
@@ -44,7 +58,7 @@ function isValidBreakdown(text: string): boolean {
 // на медичну оцінку в Пункті [health].
 const BREAKDOWN_SYSTEM_PROMPT =
   'Тебе дано транскрипт консультації з сімейним юристом/медіатором та перелік критеріїв, важливих для користувача. ' +
-  'Для КОЖНОГО критерію виклади НЕЙТРАЛЬНО, що САМЕ сказав юрист/медіатор по цьому пункту — whatWasSaid, з sourceSegmentId (id репліки-джерела), якщо застосовно. ' +
+  'Для КОЖНОГО критерію виклади НЕЙТРАЛЬНО, що САМЕ сказав юрист/медіатор по цьому пункту — whatWasSaid, з sourceSegmentId (НОМЕР репліки-джерела — число у квадратних дужках перед реплікою), якщо застосовно. ' +
   'КРИТИЧНО ВАЖЛИВО: НІКОЛИ не формулюй, на що "має право" користувач, як "вирішить суд", чи є умова "справедливою", НЕ став оцінку чи бал, НЕ давай юридичну пораду від свого імені. ' +
   'Якщо юрист/медіатор взагалі не торкнувся критерію — чесно напиши "не піднімалось у розмові", не вигадуй. ' +
   'Відповідай СТРОГО валідним JSON вида {"criteriaBreakdown": [{"criterionId": string, "whatWasSaid": string, "sourceSegmentId": string|null}]}. Без пояснень поза ним.';
@@ -73,39 +87,55 @@ export class FamilyLawService {
 
     const existing = await this.prisma.familyLawConfig.findUnique({ where: { projectId } });
     if (existing) {
-      throw new BadRequestException(`FamilyLawConfig for project ${projectId} already exists`);
+      throw new BadRequestException(`Семейно-правовой разбор для этого проекта уже настроен`);
     }
     // АУДИТ (повний аудит проєкту): та сама відсутня валідація, що
     // виправлена в investment/health/dtp.
     for (const c of draft.criteria) {
       if (!Object.values(FamilyLawCriterionCategory).includes(c.category)) {
-        throw new BadRequestException(`Unknown criterion category: ${c.category}`);
+        throw new BadRequestException(`Неизвестная категория критерия: ${c.category}`);
       }
     }
 
-    return this.prisma.familyLawConfig.create({
-      data: {
-        projectId,
-        goalDescription: draft.goalDescription,
-        targetBudget: draft.targetBudget ?? undefined,
-        currency: draft.currency ?? undefined,
-        criteria: {
-          create: draft.criteria.map((c) => ({
-            text: c.text,
-            category: c.category,
-            isRequired: c.isRequired,
-            orderIndex: c.orderIndex,
-          })),
+    // Пункт [check-then-create] 2026-09-04: проверка выше остаётся, но
+    // она НЕ гарантия — между ней и вставкой есть окно, и два
+    // одновременных нажатия (двойной тап, повтор при плохой связи)
+    // проходили её оба. `projectId` уникален, поэтому второй вызов падал
+    // с P2002, и человек читал внутреннюю ошибку сервера вместо того же
+    // «уже настроено», что и при обычном повторе. Гонку здесь не
+    // исключить без блокировки, но ответ обязан быть один и тот же
+    // независимо от того, кто успел раньше.
+    try {
+      // `return await`, а не `return`: без await промис уходит из
+      // try/catch, и отказ базы летит мимо обработчика — ошибка
+      // была бы «поймана» только на бумаге.
+      return await this.prisma.familyLawConfig.create({
+        data: {
+          projectId,
+          goalDescription: draft.goalDescription,
+          targetBudget: draft.targetBudget ?? undefined,
+          currency: draft.currency ?? undefined,
+          criteria: {
+            create: draft.criteria.map((c) => ({
+              text: c.text,
+              category: c.category,
+              isRequired: c.isRequired,
+              orderIndex: c.orderIndex,
+            })),
+          },
+          // Пункт [family-law-v2] §3.7 ТЗ — перший запис історії повістки
+          // питання створюється одразу, історія повна з моменту
+          // створення, не тільки з моменту першої зміни.
+          goalRevisions: {
+            create: { goalDescription: draft.goalDescription },
+          },
         },
-        // Пункт [family-law-v2] §3.7 ТЗ — перший запис історії повістки
-        // питання створюється одразу, історія повна з моменту
-        // створення, не тільки з моменту першої зміни.
-        goalRevisions: {
-          create: { goalDescription: draft.goalDescription },
-        },
-      },
-      include: { criteria: { orderBy: { orderIndex: 'asc' } } },
-    });
+        include: { criteria: { orderBy: { orderIndex: 'asc' } } },
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new BadRequestException(`Семейно-правовой разбор для этого проекта уже настроен`);
+      throw err;
+    }
   }
 
   async getConfig(userId: string, projectId: string) {
@@ -145,6 +175,9 @@ export class FamilyLawService {
     conversationId: string | undefined,
     occurredAt: string,
     estimatedCost?: number,
+    // Аудит денег 2026-09-03 — то же, что в DTP: поле в схеме было, писать
+    // его было некому.
+    currency?: string | null,
     isMediationSession?: boolean,
   ) {
     const advisor = await this.assertOwnedAdvisor(userId, advisorId);
@@ -158,7 +191,7 @@ export class FamilyLawService {
       throw new BadRequestException('estimatedCost не может быть отрицательным');
     }
     return this.prisma.familyLawConsultation.create({
-      data: { advisorId, conversationId, occurredAt: new Date(occurredAt), estimatedCost, isMediationSession: isMediationSession ?? false },
+      data: { advisorId, conversationId, occurredAt: new Date(occurredAt), estimatedCost, currency: normalizeCurrency(currency), isMediationSession: isMediationSession ?? false },
     });
   }
 
@@ -190,10 +223,11 @@ export class FamilyLawService {
       }),
     ]);
     if (segments.length === 0) {
-      throw new BadRequestException('Транскрипт цієї консультації ще порожній — нечего аналізувати');
+      throw new BadRequestException('Транскрипт этой консультации ещё пуст — нечего анализировать');
     }
 
-    const transcriptText = segments.map((s: { id: string; text: string }) => `[id=${s.id}] ${s.text}`).join('\n');
+    const transcript = numberedTranscript(segments);
+    const transcriptText = transcript.text;
     const criteriaText = criteria
       .map((c: any) => `[id=${c.id}] (${c.category}) ${c.text}${c.isRequired ? ' (критично)' : ''}`)
       .join('\n');
@@ -219,10 +253,20 @@ export class FamilyLawService {
     }
 
     const parsed: RawBreakdown = JSON.parse(result.text);
+    // Сверка «ссылка на реплику» 2026-09-04: раньше `sourceSegmentId`
+    // сохранялся как есть. Модель могла назвать реплику, которой нет, и
+    // разбор сослался бы на слова, которых собеседник не говорил.
+    // Теперь номер переводится в настоящий id, а несуществующий —
+    // становится «источник не указан»: у утверждения будет честное
+    // отсутствие ссылки вместо выдуманной.
+    const criteriaBreakdown = parsed.criteriaBreakdown.map((b) => ({
+      ...b,
+      sourceSegmentId: resolveSegmentRef(transcript.byRef, b.sourceSegmentId),
+    }));
     return this.prisma.familyLawConsultation.update({
       where: { id: consultationId },
       data: {
-        criteriaBreakdown: parsed.criteriaBreakdown as any,
+        criteriaBreakdown: criteriaBreakdown as any,
         draftedAt: new Date(),
         // Той самий фікс, що вже знайдений аудитом у Пункті [health]
         // — повторна генерація очищує старий reviewedAt/reviewNotes,

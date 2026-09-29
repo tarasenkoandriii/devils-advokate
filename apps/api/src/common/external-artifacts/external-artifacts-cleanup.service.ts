@@ -84,12 +84,16 @@ export class ExternalArtifactsCleanupService {
           report.evidenceFailed++;
           continue;
         }
-        try {
-          await deleteBlob(token, item.blobUrl);
-          report.evidenceDeleted++;
-        } catch {
-          report.evidenceFailed++;
-        }
+        // Пункт [delete-says-done] 2026-09-06: `catch` здесь ловил
+        // пустоту — `deleteBlob` не бросал НИЧЕГО и не проверял даже
+        // код ответа, поэтому `evidenceDeleted++` выполнялся всегда.
+        // Счётчик «удалено» был завышен по построению, и именно он
+        // уходит в запись аудита при удалении аккаунта: человек читал,
+        // что его доказательства ДТП убраны из внешнего хранилища, при
+        // том что они могли остаться.
+        const outcome = await deleteBlob(token, item.blobUrl);
+        if (outcome.deleted) report.evidenceDeleted++;
+        else report.evidenceFailed++;
       }
     }
 

@@ -15,6 +15,7 @@
 // поле редактируемое, пользователь может поправить вручную.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import {
   assignParticipant,
   checkAgainstUserSource,
@@ -55,11 +56,14 @@ import {
   TurningPoint,
 } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
+import { activatable } from '../lib/a11y';
 import { AudioProcessingConsentPrompt, checkAudioProcessingConsent } from './AudioProcessingConsentPrompt';
 import { SpeakButton } from './SpeakButton';
 import { CooldownNudgeSession } from './CooldownNudgeSession';
 import { LiveHintsSession } from './LiveHintsSession';
 import { AssistanceScreen } from './AssistanceScreen';
+import { ParalinguisticsNotes } from './SkippedNotes';
 
 interface ConversationsSectionProps {
   projectId: string;
@@ -75,6 +79,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export function ConversationsSection({ projectId }: ConversationsSectionProps) {
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список — и экран говорил «разговоров пока нет».
+  const [listFailed, setListFailed] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -82,7 +89,7 @@ export function ConversationsSection({ projectId }: ConversationsSectionProps) {
   const reload = useCallback(() => {
     return listConversations(projectId)
       .then(setConversations)
-      .catch(() => setConversations([]));
+      .catch(() => { setConversations([]); setListFailed(true); });
   }, [projectId]);
 
   useEffect(() => {
@@ -95,6 +102,7 @@ export function ConversationsSection({ projectId }: ConversationsSectionProps) {
     <section className="conversations-section">
       <h3>Досье разговора</h3>
 
+      {listFailed && <NotLoadedNotice what="список разговоров" />}
       {conversations.length === 0 && !showAddForm && (
         <p className="conversations-section__hint">
           Загрузите запись или файл разговора — расшифровка и разбор по репликам появятся здесь.
@@ -279,7 +287,7 @@ function AddConversationForm({
         отзыв согласий — в разделе «Приватность».
       </p>
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       <div className="conversations-section__add-actions">
         <button type="button" onClick={handleSubmit} disabled={busy || !file}>
@@ -306,12 +314,19 @@ function ConversationRow({
   onChanged: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: девять блоков
+  // карточки грузятся по отдельности, и каждый молчал по
+  // отдельности. «Расхождений нет», «прецедентов нет», «точек
+  // перелома нет» — всё это выводы о РАЗГОВОРЕ И ЧЕЛОВЕКЕ, и ни
+  // один из них продукт не делал: запрос просто не дошёл.
+  // Поэтому имя блока — в множестве, а подпись стоит у своего.
+  const [rowFailed, setRowFailed] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   useEffect(() => {
     if (!expanded) return;
     getConversation(conversation.id)
       .then(setDetail)
-      .catch(() => setDetail(null));
+      .catch(() => { setDetail(null); setRowFailed((prev) => new Set(prev).add('detail')); });
   }, [expanded, conversation.id]);
 
   // Пункт 26: сопоставление диаризации фигурантам — список людей
@@ -322,7 +337,7 @@ function ConversationRow({
     if (!expanded) return;
     listPeople(projectId)
       .then(setPeople)
-      .catch(() => setPeople([]));
+      .catch(() => { setPeople([]); setRowFailed((prev) => new Set(prev).add('people')); });
   }, [expanded, projectId]);
 
   async function handleAssignParticipant(participantId: string, value: string) {
@@ -335,8 +350,8 @@ function ConversationRow({
       const refreshed = await getConversation(conversation.id);
       setDetail(refreshed);
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось сопоставить говорящего с участником');
     }
   }
 
@@ -364,6 +379,9 @@ function ConversationRow({
   // деталями, если разговор уже расшифрован (детекция доступна) или
   // уже проанализирован (результат уже есть).
   const [turningPoints, setTurningPoints] = useState<TurningPoint[]>([]);
+  // Сверка длинных разговоров 2026-09-04: если разговор разбирался
+  // частями, человек обязан это видеть рядом с находками.
+  const [chunkedNotice, setChunkedNotice] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
 
@@ -371,8 +389,11 @@ function ConversationRow({
     if (!expanded) return;
     if (conversation.status !== 'TRANSCRIBED' && conversation.status !== 'ANALYZED') return;
     listTurningPoints(conversation.id)
-      .then(setTurningPoints)
-      .catch(() => setTurningPoints([]));
+      .then((result) => {
+        setTurningPoints(result.points);
+        setChunkedNotice(result.notice);
+      })
+      .catch(() => { setTurningPoints([]); setRowFailed((prev) => new Set(prev).add('turningPoints')); });
   }, [expanded, conversation.id, conversation.status]);
 
   async function handleDetect() {
@@ -380,8 +401,9 @@ function ConversationRow({
     setDetectError(null);
     try {
       await detectTurningPoints(conversation.id);
-      const points = await listTurningPoints(conversation.id);
-      setTurningPoints(points);
+      const result = await listTurningPoints(conversation.id);
+      setTurningPoints(result.points);
+      setChunkedNotice(result.notice);
       onChanged(); // обновить статус разговора в родительском списке (TRANSCRIBED → ANALYZED)
       haptic('success');
     } catch (err) {
@@ -404,13 +426,18 @@ function ConversationRow({
   const [manipulationPoints, setManipulationPoints] = useState<ManipulationPoint[]>([]);
   const [detectingManipulation, setDetectingManipulation] = useState(false);
   const [manipulationError, setManipulationError] = useState<string | null>(null);
+  // Сверка длинных разговоров 2026-09-04 — подпись про разбор частями.
+  const [manipulationNotice, setManipulationNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!expanded) return;
     if (conversation.status !== 'TRANSCRIBED' && conversation.status !== 'ANALYZED') return;
     listManipulationPatterns(conversation.id)
-      .then(setManipulationPoints)
-      .catch(() => setManipulationPoints([]));
+      .then((result) => {
+        setManipulationPoints(result.points);
+        setManipulationNotice(result.notice);
+      })
+      .catch(() => { setManipulationPoints([]); setRowFailed((prev) => new Set(prev).add('manipulation')); });
   }, [expanded, conversation.id, conversation.status]);
 
   async function handleDetectManipulation() {
@@ -418,8 +445,9 @@ function ConversationRow({
     setManipulationError(null);
     try {
       await detectManipulationPatterns(conversation.id);
-      const points = await listManipulationPatterns(conversation.id);
-      setManipulationPoints(points);
+      const result = await listManipulationPatterns(conversation.id);
+      setManipulationPoints(result.points);
+      setManipulationNotice(result.notice);
       haptic('success');
     } catch (err) {
       haptic('error');
@@ -448,7 +476,7 @@ function ConversationRow({
     if (conversation.status !== 'TRANSCRIBED' && conversation.status !== 'ANALYZED') return;
     listDiscrepancies(conversation.id)
       .then(setDiscrepancies)
-      .catch(() => setDiscrepancies([]));
+      .catch(() => { setDiscrepancies([]); setRowFailed((prev) => new Set(prev).add('discrepancies')); });
   }, [expanded, conversation.id, conversation.status]);
 
   async function handleDetectDiscrepancies() {
@@ -472,8 +500,8 @@ function ConversationRow({
       const updated = await confirmIntentionalFalsehood(signalId);
       setDiscrepancies((prev) => prev.map((d) => (d.id === signalId ? updated : d)));
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось сохранить отметку');
     }
   }
 
@@ -564,6 +592,7 @@ function ConversationRow({
   // реально пришёл ответ (сегменты собеседника просто не попадут в
   // doNotSayBySegment).
   const [doNotSayItems, setDoNotSayItems] = useState<DoNotSayItem[]>([]);
+  const [doNotSayNotice, setDoNotSayNotice] = useState<string | null>(null);
   const [detectingDoNotSay, setDetectingDoNotSay] = useState(false);
   const [doNotSayError, setDoNotSayError] = useState<string | null>(null);
 
@@ -571,8 +600,11 @@ function ConversationRow({
     if (!expanded) return;
     if (conversation.status !== 'TRANSCRIBED' && conversation.status !== 'ANALYZED') return;
     listDoNotSay(conversation.id)
-      .then(setDoNotSayItems)
-      .catch(() => setDoNotSayItems([]));
+      .then((result) => {
+        setDoNotSayItems(result.points);
+        setDoNotSayNotice(result.notice);
+      })
+      .catch(() => { setDoNotSayItems([]); setRowFailed((prev) => new Set(prev).add('doNotSay')); });
   }, [expanded, conversation.id, conversation.status]);
 
   async function handleDetectDoNotSay() {
@@ -580,8 +612,9 @@ function ConversationRow({
     setDoNotSayError(null);
     try {
       await detectDoNotSay(conversation.id);
-      const items = await listDoNotSay(conversation.id);
-      setDoNotSayItems(items);
+      const result = await listDoNotSay(conversation.id);
+      setDoNotSayItems(result.points);
+      setDoNotSayNotice(result.notice);
       haptic('success');
     } catch (err) {
       haptic('error');
@@ -612,13 +645,13 @@ function ConversationRow({
     if (conversation.status !== 'TRANSCRIBED' && conversation.status !== 'ANALYZED') return;
     getLatestBestNextMove(conversation.id)
       .then(setBestNextMove)
-      .catch(() => setBestNextMove(null));
+      .catch(() => { setBestNextMove(null); setRowFailed((prev) => new Set(prev).add('bestNextMove')); });
     // Пункт [multimodal] §7.3 — панель паралингвистики: сигналы подачи,
     // если проход был включён и уже отработал. Пустой список = панель
     // не показывается вовсе, ничего не «грузится» вхолостую.
     listDeliverySignals(conversation.id)
       .then(setDeliverySignals)
-      .catch(() => setDeliverySignals([]));
+      .catch(() => { setDeliverySignals([]); setRowFailed((prev) => new Set(prev).add('delivery')); });
   }, [expanded, conversation.id, conversation.status]);
 
   async function handleDetectBestNextMove() {
@@ -640,8 +673,14 @@ function ConversationRow({
 
   return (
     <li className="conversations-list__item">
-      <div className="conversations-list__row" onClick={() => setExpanded((v) => !v)}>
-        <span>{new Date(conversation.occurredAt).toLocaleString()}</span>
+      {/* Пункт [announce-failures] 2026-09-04: строка раскрывалась только
+          мышью. */}
+      <div
+        className="conversations-list__row"
+        aria-expanded={expanded}
+        {...activatable(() => setExpanded((v) => !v))}
+      >
+        <span>{new Date(conversation.occurredAt).toLocaleString('ru-RU')}</span>
         <span className={`conversation-status conversation-status--${conversation.status.toLowerCase()}`}>
           {STATUS_LABELS[conversation.status] ?? conversation.status}
         </span>
@@ -682,6 +721,19 @@ function ConversationRow({
                   </div>
                 )}
 
+                {/* Пункт [job-died-quietly] 2026-09-06: блок ниже рисовался
+                    ТОЛЬКО при непустом списке отметок — то есть при провале
+                    фоновой задачи не появлялось ничего, и человек, включивший
+                    галочку, читал пустоту как «ничего не было». Подпись стоит
+                    ДО блока и рисуется независимо от него: она и нужна ровно
+                    тогда, когда блока нет. */}
+                <ParalinguisticsNotes
+                  enabled={detail.paralinguisticsEnabled}
+                  error={detail.paralinguisticsError}
+                  skipped={detail.paralinguisticsSkipped}
+                />
+
+                {rowFailed.has('delivery') && <NotLoadedNotice what="сигналы подачи" />}
                 {deliverySignals.length > 0 && (
                   <div className="participant-assignment">
                     <p className="steelman-case__label">Подача (паралингвистика)</p>
@@ -757,7 +809,7 @@ function ConversationRow({
                                 placeholder="https://…"
                               />
                             </label>
-                            {sourceCheckError && <p className="generation-error">{sourceCheckError}</p>}
+                            {sourceCheckError && <p role="alert" className="generation-error">{sourceCheckError}</p>}
                             <div className="conversations-section__add-actions">
                               <button
                                 type="button"
@@ -785,7 +837,7 @@ function ConversationRow({
                             </button>
                           </div>
                         )}
-                        {factCheckError && <p className="generation-error">{factCheckError}</p>}
+                        {factCheckError && <p role="alert" className="generation-error">{factCheckError}</p>}
                         {factCheckResults[seg.id] && (
                           <div className="source-check-result">
                             {factCheckResults[seg.id].claims.length === 0 ? (
@@ -858,38 +910,72 @@ function ConversationRow({
                     {detecting ? 'Ищем переломные моменты…' : 'Найти поворотные точки'}
                   </button>
                 )}
+                {rowFailed.has('turningPoints') && <NotLoadedNotice what="точки перелома этого разговора" />}
+                {rowFailed.has('manipulation') && <NotLoadedNotice what="разбор приёмов давления" />}
+                {rowFailed.has('doNotSay') && <NotLoadedNotice what="список «чего не говорить»" />}
                 {conversation.status === 'ANALYZED' && turningPoints.length === 0 && (
-                  <p className="conversations-section__hint">Явных поворотных точек не найдено.</p>
+                  <p className="conversations-section__hint">
+                    Явных поворотных точек не найдено.
+                    {chunkedNotice ? ' Учтите: разговор разбирался частями — см. пояснение ниже.' : ''}
+                  </p>
                 )}
-                {detectError && <p className="generation-error">{detectError}</p>}
+                {chunkedNotice && (
+                  <p className="conversations-section__hint" role="note">
+                    {chunkedNotice}
+                  </p>
+                )}
+                {detectError && <p role="alert" className="generation-error">{detectError}</p>}
 
                 {(conversation.status === 'TRANSCRIBED' || conversation.status === 'ANALYZED') && (
                   <button type="button" onClick={handleDetectDoNotSay} disabled={detectingDoNotSay}>
                     {detectingDoNotSay ? 'Проверяем реплики…' : 'Проверить, что не стоило говорить'}
                   </button>
                 )}
-                {doNotSayError && <p className="generation-error">{doNotSayError}</p>}
+                {doNotSayError && <p role="alert" className="generation-error">{doNotSayError}</p>}
+                {doNotSayNotice && (
+                  <p className="conversations-section__hint" role="note">
+                    {doNotSayNotice}
+                  </p>
+                )}
 
                 {(conversation.status === 'TRANSCRIBED' || conversation.status === 'ANALYZED') && (
-                  <button type="button" onClick={handleDetectManipulation} disabled={detectingManipulation}>
-                    {detectingManipulation ? 'Проверяем на манипуляции…' : 'Найти манипулятивные приёмы'}
-                  </button>
+                  <>
+                    <button type="button" onClick={handleDetectManipulation} disabled={detectingManipulation}>
+                      {detectingManipulation ? 'Проверяем на манипуляции…' : 'Найти манипулятивные приёмы'}
+                    </button>
+                    {/* Пункт [same-line-not-drawn] 2026-09-24: у блока
+                        «Подача (паралингвистика)» такая оговорка стои́т с
+                        самого начала — «Только описание наблюдаемого. Это
+                        не оценка правдивости и не „детектор лжи"». У
+                        разбора манипулятивных приёмов, который называет
+                        приём в словах НАЗВАННОГО человека, её не было
+                        вовсе, хотя утверждение тут прямее. */}
+                    <p className="conversations-section__hint">
+                      Находит приёмы аргументации в конкретных репликах — у любого из говорящих, включая вас. Это не оценка человека и не «детектор лжи»: приём в одной фразе ничего не говорит о характере и намерениях.
+                    </p>
+                  </>
                 )}
-                {manipulationError && <p className="generation-error">{manipulationError}</p>}
+                {manipulationError && <p role="alert" className="generation-error">{manipulationError}</p>}
+                {manipulationNotice && (
+                  <p className="conversations-section__hint" role="note">
+                    {manipulationNotice}
+                  </p>
+                )}
 
                 {(conversation.status === 'TRANSCRIBED' || conversation.status === 'ANALYZED') && (
                   <button type="button" onClick={handleDetectDiscrepancies} disabled={detectingDiscrepancies}>
                     {detectingDiscrepancies ? 'Сверяем с источниками…' : 'Проверить на расхождения'}
                   </button>
                 )}
-                {discrepancyError && <p className="generation-error">{discrepancyError}</p>}
+                {discrepancyError && <p role="alert" className="generation-error">{discrepancyError}</p>}
 
+                {rowFailed.has('discrepancies') && <NotLoadedNotice what="расхождения в словах по этому разговору" />}
                 {discrepancies.length > 0 && (
                   <button type="button" onClick={handleExportFacts} disabled={exportingFacts}>
                     {exportingFacts ? 'Формируем список…' : 'Выгрузить список для проверки'}
                   </button>
                 )}
-                {exportError && <p className="generation-error">{exportError}</p>}
+                {exportError && <p role="alert" className="generation-error">{exportError}</p>}
                 {exportedFacts && (
                   <div className="facts-export">
                     <p className="conversations-section__hint">
@@ -904,7 +990,10 @@ function ConversationRow({
                     {detectingBestNextMove ? 'Формируем рекомендацию…' : 'Рекомендовать следующий шаг'}
                   </button>
                 )}
-                {bestNextMoveError && <p className="generation-error">{bestNextMoveError}</p>}
+                {bestNextMoveError && <p role="alert" className="generation-error">{bestNextMoveError}</p>}
+                {rowFailed.has('bestNextMove') && <NotLoadedNotice what="рекомендацию следующего шага" />}
+                {rowFailed.has('people') && <NotLoadedNotice what="список людей проекта" consequence="Сопоставить говорящего с человеком сейчас нельзя." />}
+                {rowFailed.has('detail') && <NotLoadedNotice what="подробности этого разговора" />}
                 {bestNextMove && (
                   <div className="best-next-move">
                     <div className="best-next-move__item">
@@ -941,7 +1030,7 @@ function ConversationRow({
               </>
             )
           ) : conversation.status === 'FAILED' ? (
-            <p className="generation-error">Расшифровка не удалась.</p>
+            <p role="alert" className="generation-error">Расшифровка не удалась.</p>
           ) : (
             <p className="conversations-section__hint">Расшифровка ещё не готова.</p>
           )}

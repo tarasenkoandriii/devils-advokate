@@ -31,7 +31,7 @@ export default function MediaReviewQueuesPage() {
         <label className="entity-form__field"><span>Название очереди</span><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например: дебаты кандидатов, сезон 2026" /></label>
         <div className="entity-form__actions"><button type="button" className="primary" disabled={busy || !title.trim()} onClick={create}>Создать очередь</button></div>
       </div>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {queues.length === 0 && !error && <p className="card-section__empty">Очередей пока нет.</p>}
       <ul className="project-list">
         {queues.map((q) => (

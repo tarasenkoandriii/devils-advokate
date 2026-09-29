@@ -14,7 +14,7 @@ export class LegalDisclaimerController {
   @Get()
   async get(@CurrentUser() userId: string, @Query('mode') mode: string) {
     if (!Object.values(ProjectMode).includes(mode as ProjectMode)) {
-      throw new BadRequestException(`Unknown mode: ${mode}`);
+      throw new BadRequestException(`Неизвестный режим: ${mode}`);
     }
     return this.legalDisclaimer.getDisclaimer(userId, mode as ProjectMode);
   }

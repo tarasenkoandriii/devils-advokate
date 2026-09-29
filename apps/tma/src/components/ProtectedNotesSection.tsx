@@ -18,9 +18,12 @@
 // предлагать").
 
 import { useState, useEffect, useCallback } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { createProtectedNote, listProtectedNotes, updateProtectedNote, deleteProtectedNote } from '../lib/features';
 import { ProtectedNote, ProtectedNoteType } from '../lib/types';
 import { haptic } from '../lib/telegram';
+import { reportFailure } from '../lib/failure-report';
+import { activatable } from '../lib/a11y';
 
 interface ProtectedNotesSectionProps {
   projectId: string;
@@ -33,6 +36,10 @@ const TYPE_LABELS: Record<ProtectedNoteType, string> = {
 
 export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps) {
   const [notes, setNotes] = useState<ProtectedNote[]>([]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newType, setNewType] = useState<ProtectedNoteType>('ACE_IN_THE_HOLE');
@@ -46,8 +53,8 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
 
   const reload = useCallback(() => {
     return listProtectedNotes(projectId)
-      .then(setNotes)
-      .catch(() => setNotes([]));
+      .then((v) => { setNotes(v); setNotLoaded(false); })
+      .catch(() => { setNotes([]); setNotLoaded(true); });
   }, [projectId]);
 
   useEffect(() => {
@@ -93,8 +100,8 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
       setEditingId(null);
       await reload();
       haptic('success');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось сохранить заметку');
     }
   }
 
@@ -103,8 +110,8 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
       await deleteProtectedNote(noteId);
       await reload();
       haptic('light');
-    } catch {
-      haptic('error');
+    } catch (err) {
+      reportFailure(err, 'Не удалось удалить заметку');
     }
   }
 
@@ -115,6 +122,7 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
 
   return (
     <section className="protected-notes-section">
+      {notLoaded && <NotLoadedNotice what="защищённые заметки" />}
       <h3>Туз в рукаве и План Б</h3>
       <p className="conversations-section__hint">
         Отдельные защищённые заметки — сильные аргументы или запасные варианты, которые вы бережёте до нужного
@@ -142,7 +150,15 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
                   </>
                 ) : (
                   <>
-                    <span onClick={() => handleStartEdit(n)}>{n.content}</span>
+                    {/* Пункт [announce-failures] 2026-09-04: текст заметки
+                        запускает правку — значит, это действие, и до него
+                        обязан доставать Tab, а не только палец. */}
+                    <span
+                      aria-label="Изменить заметку"
+                      {...activatable(() => handleStartEdit(n))}
+                    >
+                      {n.content}
+                    </span>
                     <button type="button" onClick={() => handleDelete(n.id)}>
                       Удалить
                     </button>
@@ -175,7 +191,15 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
                 ) : (
                   <>
                     {n.planOrder !== null && <strong>№{n.planOrder} </strong>}
-                    <span onClick={() => handleStartEdit(n)}>{n.content}</span>
+                    {/* Пункт [announce-failures] 2026-09-04: текст заметки
+                        запускает правку — значит, это действие, и до него
+                        обязан доставать Tab, а не только палец. */}
+                    <span
+                      aria-label="Изменить заметку"
+                      {...activatable(() => handleStartEdit(n))}
+                    >
+                      {n.content}
+                    </span>
                     {n.triggerCondition && (
                       <p className="conversations-section__hint">Когда предлагать: {n.triggerCondition}</p>
                     )}
@@ -190,7 +214,7 @@ export function ProtectedNotesSection({ projectId }: ProtectedNotesSectionProps)
         </div>
       )}
 
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       {showAddForm ? (
         <div className="conversations-section__add">

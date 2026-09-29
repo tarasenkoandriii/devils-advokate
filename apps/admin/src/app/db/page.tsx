@@ -15,17 +15,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getAdminDbState } from '../../lib/endpoints';
 import type { AdminDbState, DbStateSection } from '../../lib/types';
+import { SchemaTablesCard } from '../../components/SchemaTablesCard';
 
 const REFRESH_MS = 30_000;
 
-// Ожидаемые расписания — из pg_cron_ai_jobs.sql (poll прорежен до
-// «*/3» Пунктом [poll-thinning]); расхождение подсвечивается: живой
-// инстанс настраивается вручную и легко отстаёт от файла в репозитории.
-const EXPECTED_SCHEDULES: Record<string, string> = {
-  'ai-jobs-submit': '* * * * *',
-  'ai-jobs-poll': '*/3 * * * *',
-  'ai-jobs-reap': '* * * * *',
-};
+// Пункт [background-jobs] 2026-09-04. Здесь стоял список из ТРЁХ
+// ожидаемых расписаний, зашитый в экран, — только джобы из
+// pg_cron_ai_jobs.sql. Джоб в репозитории семь, в пяти файлах, и
+// отсутствующая на инстансе не давала ни одной строки: таблица из трёх
+// зелёных «совпадает» читалась как «всё настроено», хотя, например,
+// напоминания могли не отправляться ни разу. Список ожидаемого переехал
+// в API (admin-db-state/expected-cron-jobs.ts), где его держит тест на
+// совпадение с самими SQL-файлами, а экран теперь отдельно показывает
+// то, чего НЕТ.
 
 function isError<T>(s: DbStateSection<T>): s is { error: string } {
   return typeof s === 'object' && s !== null && 'error' in (s as object) && !Array.isArray(s);
@@ -79,7 +81,7 @@ export default function DbStatePage() {
       <p className="muted" style={{ marginBottom: 16 }}>
         Read-only зеркало служебных таблиц: расписание pg_cron, лог запусков, фактические ответы
         API на вызовы кронов (pg_net) и сводка AI-джоб. Управление кронами — по-прежнему через
-        SQL Editor (pg_cron_ai_jobs.sql). Автообновление каждые 30 с.
+        SQL Editor (файлы prisma/manual-migrations/pg_cron_*.sql). Автообновление каждые 30 с.
       </p>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
         <button type="button" onClick={load} disabled={loading}>
@@ -92,43 +94,168 @@ export default function DbStatePage() {
 
       {state && (
         <>
-          {/* ── 1. Расписание кронов ── */}
+          {/* ── 0. Таблицы схемы: есть ли в базе то, что объявлено ──
+              Пункт [deploy-step-did-nothing] 2026-09-26. `VERCEL.md`
+              честно писал: `migrate deploy` при пустой истории ничего не
+              создаёт, схема появлялась через `db push` или руками, «и
+              ничто не проверяет, что боевая база соответствует
+              schema.prisma». Предупреждение читал тот, кто открыл
+              документ; сам продукт о расхождении не знал ничего. */}
+                    <SchemaTablesCard section={state.schemaTables} />
+
+          {/* ── 0. Ручные миграции: что не применено НА ЭТОМ инстансе ──
+              Пункт [latest-migration-was-from-memory] 2026-09-24. Раньше
+              ответ на этот вопрос жил только в голове владельца и в
+              переписке: продукт знал, что миграции бывают, и не знал,
+              какие прошли. Стоит первым блоком — с этого начинается
+              разбор «задеплоилось, но не работает». */}
           <div className="card" style={{ marginBottom: 20 }}>
-            <h2 style={{ marginTop: 0 }}>Крон-джобы (cron.job)</h2>
-            {isError(state.cronJobs) ? (
-              <SectionError section={state.cronJobs} />
-            ) : state.cronJobs.length === 0 ? (
-              <p className="muted">Джоб нет — pg_cron_ai_jobs.sql ещё не применялся на этом инстансе.</p>
+            <h2 style={{ marginTop: 0 }}>Ручные миграции</h2>
+            {isError(state.manualMigrations) ? (
+              <SectionError section={state.manualMigrations} />
             ) : (
-              <table>
-                <thead><tr><th>Имя</th><th>Расписание</th><th>Активна</th><th>Соответствие файлу</th></tr></thead>
-                <tbody>
-                  {state.cronJobs.map((j) => {
-                    const expected = EXPECTED_SCHEDULES[j.jobname];
-                    const mismatch = expected !== undefined && expected !== j.schedule;
-                    return (
+              <>
+                {(() => {
+                  const rows = state.manualMigrations;
+                  const missing = rows.filter((m) => m.state === 'missing');
+                  const unknown = rows.filter((m) => m.state === 'not-observable');
+                  return (
+                    <>
+                      <p className="muted" style={{ marginTop: 0 }}>
+                        Применяются вручную по DIRECT_URL, не через `db push`. Не применено: {missing.length} из{' '}
+                        {rows.length}
+                        {unknown.length > 0 && <> · по схеме не видно: {unknown.length}</>}
+                      </p>
+                      <table>
+                        <thead>
+                          <tr><th>Файл</th><th>Состояние</th><th>Что не работает без неё</th></tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((m) => (
+                            <tr key={m.file}>
+                              <td><code>{m.file}</code></td>
+                              <td>
+                                {m.state === 'applied' && <span className="badge badge-ok">применена</span>}
+                                {m.state === 'missing' && <span className="badge badge-bad">НЕ применена</span>}
+                                {/* «Не видно» — не «применена»: выдать одно за
+                                    другое значило бы успокоить впустую. */}
+                                {m.state === 'not-observable' && (
+                                  <span className="badge" title={m.why}>по схеме не видно</span>
+                                )}
+                              </td>
+                              <td>{m.state === 'applied' ? '—' : m.breaksWhenMissing}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+
+          {/* ── 1. Что ДОЛЖНО стоять: сверка репозитория с инстансом ── */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <h2 style={{ marginTop: 0 }}>Плановые задачи проекта</h2>
+            {isError(state.expectedCron) ? (
+              <SectionError section={state.expectedCron} />
+            ) : (
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  Все задачи, которые поставляет репозиторий ({state.expectedCron.jobs.length} шт. в
+                  pg_cron_*.sql), сверенные с этим инстансом. Пустая строка в колонке «На инстансе»
+                  означает, что задача не применялась: она не сломается — её просто нет, и увидеть
+                  это иначе неоткуда.
+                </p>
+                {state.expectedCron.missing.length > 0 && (
+                  <p style={{ color: 'var(--signal-critical)', fontSize: 13 }}>
+                    Не найдено на инстансе: {state.expectedCron.missing.length} из{' '}
+                    {state.expectedCron.jobs.length}. Применить соответствующий файл через SQL Editor
+                    Supabase.
+                  </p>
+                )}
+                {state.expectedCron.disabled.length > 0 && (
+                  <p style={{ color: 'var(--signal-critical)', fontSize: 13 }}>
+                    Стоят, но выключены: {state.expectedCron.disabled.join(', ')}.
+                  </p>
+                )}
+                {state.expectedCron.missing.length === 0 &&
+                  state.expectedCron.mismatched.length === 0 &&
+                  state.expectedCron.disabled.length === 0 && (
+                    <p className="muted" style={{ fontSize: 13 }}>
+                      Все задачи из репозитория стоят на инстансе с ожидаемым расписанием.
+                    </p>
+                  )}
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Имя</th>
+                      <th>Ожидается</th>
+                      <th>На инстансе</th>
+                      <th>Файл</th>
+                      <th>Что не работает без неё</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {state.expectedCron.jobs.map((j) => (
                       <tr key={j.jobname}>
                         <td>{j.jobname}</td>
                         <td><code>{j.schedule}</code></td>
-                        <td>{j.active ? <span className="badge badge-ok">да</span> : <span className="badge badge-bad">выключена</span>}</td>
                         <td>
-                          {expected === undefined ? (
-                            <span className="muted">не наша (другой файл)</span>
-                          ) : mismatch ? (
-                            <span className="badge badge-bad" title={`в pg_cron_ai_jobs.sql: ${expected}`}>ожидалось {expected}</span>
+                          {j.actualSchedule === null ? (
+                            <span className="badge badge-bad">нет</span>
+                          ) : j.actualSchedule !== j.schedule ? (
+                            <span className="badge badge-bad"><code>{j.actualSchedule}</code></span>
+                          ) : j.active === false ? (
+                            <span className="badge badge-bad">выключена</span>
                           ) : (
                             <span className="badge badge-ok">совпадает</span>
                           )}
                         </td>
+                        <td><code style={{ fontSize: 11 }}>{j.file}</code></td>
+                        <td style={{ fontSize: 12 }}>
+                          {j.actualSchedule === null || j.active === false ? (
+                            j.breaksWhenMissing
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
                       </tr>
-                    );
-                  })}
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+
+          {/* ── 2. Что реально стоит, включая чужое ── */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <h2 style={{ marginTop: 0 }}>Всё содержимое cron.job</h2>
+            {isError(state.cronJobs) ? (
+              <SectionError section={state.cronJobs} />
+            ) : state.cronJobs.length === 0 ? (
+              <p className="muted">
+                На инстансе не стоит ни одной крон-джобы — ни наших, ни чужих. Ни одна плановая
+                задача из таблицы выше не выполняется.
+              </p>
+            ) : (
+              <table>
+                <thead><tr><th>Имя</th><th>Расписание</th><th>Активна</th></tr></thead>
+                <tbody>
+                  {state.cronJobs.map((j) => (
+                    <tr key={j.jobname}>
+                      <td>{j.jobname}</td>
+                      <td><code>{j.schedule}</code></td>
+                      <td>{j.active ? <span className="badge badge-ok">да</span> : <span className="badge badge-bad">выключена</span>}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             )}
           </div>
 
-          {/* ── 2. Лог запусков ── */}
+          {/* ── 3. Лог запусков ── */}
           <div className="card" style={{ marginBottom: 20 }}>
             <h2 style={{ marginTop: 0 }}>Лог запусков (cron.job_run_details, последние 60)</h2>
             <p className="muted" style={{ fontSize: 13 }}>
@@ -163,7 +290,7 @@ export default function DbStatePage() {
             )}
           </div>
 
-          {/* ── 3. Ответы API на вызовы кронов ── */}
+          {/* ── 4. Ответы API на вызовы кронов ── */}
           <div className="card" style={{ marginBottom: 20 }}>
             <h2 style={{ marginTop: 0 }}>Ответы API (net._http_response, последние 60)</h2>
             <p className="muted" style={{ fontSize: 13 }}>
@@ -204,7 +331,7 @@ export default function DbStatePage() {
             )}
           </div>
 
-          {/* ── 4. Сводка AI-джоб ── */}
+          {/* ── 5. Сводка AI-джоб ── */}
           <div className="card" style={{ marginBottom: 20 }}>
             <h2 style={{ marginTop: 0 }}>AI-джобы (ai_jobs)</h2>
             {isError(state.aiJobs) ? (

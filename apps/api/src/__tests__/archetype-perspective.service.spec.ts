@@ -13,6 +13,18 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
+  // Пункт [partial-basis] 2026-09-04: одно условие для findMany и count —
+  // иначе доля будет посчитана о другом множестве, и проверка усечения
+  // превратится в проверку арифметики фейка.
+  function matchArguments(where: any) {
+    return argumentsStore.filter(
+      (a: any) =>
+        a.projectId === where.projectId &&
+        (where.targetPersonId === undefined ? true : a.targetPersonId === where.targetPersonId) &&
+        (where.stance === undefined ? true : a.stance === where.stance),
+    );
+  }
+
   return {
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedArgument(a: any) { argumentsStore.push(a); },
@@ -31,13 +43,11 @@ function createFakePrisma() {
       },
     },
     argument: {
-      findMany: async ({ where }: any) =>
-        argumentsStore.filter(
-          (a) =>
-            a.projectId === where.projectId &&
-            (where.targetPersonId === undefined ? true : a.targetPersonId === where.targetPersonId) &&
-            (where.stance === undefined ? true : a.stance === where.stance),
-        ),
+      findMany: async ({ where, take }: any) => {
+        const rows = matchArguments(where);
+        return take ? rows.slice(0, take) : rows;
+      },
+      count: async ({ where }: any) => matchArguments(where).length,
     },
     promptVersion: {
       findFirst: async () => null,
@@ -57,7 +67,17 @@ function createFakePrisma() {
       findMany: async ({ where }: any) => relationships.filter((r) => r.personAId === where.OR[0].personAId || r.personBId === where.OR[1].personBId),
     },
     behaviorPrecedent: {
-      findMany: async ({ where }: any) => precedents.filter((p) => p.personId === where.personId),
+      // Пункт [partial-basis] 2026-09-04: фейк ЧЕСТНО обрезает по take и
+      // умеет count — иначе проверка усечения проверяла бы поведение
+      // фейка, а не сервиса.
+      findMany: async ({ where, take }: any) => {
+        const rows = precedents.filter((p) => p.personId === where.personId);
+        return take ? rows.slice(0, take) : rows;
+      },
+      count: async ({ where, take }: any) => {
+        const n = precedents.filter((p) => p.personId === where.personId).length;
+        return take ? Math.min(n, take) : n;
+      },
     },
     archetypePerspective: {
       create: async ({ data }: any) => {
@@ -351,6 +371,28 @@ async function run() {
     const result = await svc.generate(USER_ID, PROJECT_ID, 'LAWYER' as any);
     assertEqual(result.focusOnOwnPositionWeaknesses, false, 'по умолчанию обычный режим');
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Контраргумент виден в обычном режиме'), true, 'в обычном режиме CON-аргументы тоже видны (не фильтруются)');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [partial-basis]: и аргументы, и прецеденты названы срезом', async () => {
+    // «Ключевые аргументы» — пять самых весомых, «известные прецеденты» —
+    // пять последних. Оба слова обещали полноту, которой не было.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'в?', goal: null });
+    prisma._seedPerson({ id: 'person-1', displayName: 'Начальник Иван' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: 'person-1' });
+    for (let i = 0; i < 6; i++) {
+      prisma._seedArgument({ projectId: PROJECT_ID, targetPersonId: null, text: `аргумент ${i}`, stance: 'PRO', weight: i });
+      prisma._seedPrecedent({ personId: 'person-1', precedentDescription: `случай ${i}` });
+    }
+    const fakeRouter = new FakeAIRouterService();
+    fakeRouter.responseText = JSON.stringify({ reaction: 'x' });
+    const svc = new ArchetypePerspectiveService(prisma as any, fakeRouter as any);
+
+    const created = await svc.generate(USER_ID, PROJECT_ID, 'REAL_PERSON' as any, undefined, 'person-1');
+    const prompt = fakeRouter.lastRequest.userPrompt;
+    assertEqual(prompt.includes('5 самых весомых из 6'), true, 'модели не сказано, что аргументы — срез');
+    assertEqual(prompt.includes('последние 5 из 6'), true, 'модели не сказано, что прецеденты — срез');
+    assertEqual((created.basisNote ?? '').includes('прецеденты поведения'), true, 'человеку не сказано, на чём построена перспектива');
   });
 
   for (const [name, fn] of scenarios) {

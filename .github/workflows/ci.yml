@@ -1,0 +1,85 @@
+# CI монорепозитория — Пункт [lint-ci-strict] (аудит 2026-09-01).
+#
+# Что здесь проверяется и почему именно это:
+#   lint      — ESLint с type-aware правилами; ядро — no-floating-promises
+#               (забытый await в async-кодовой базе тайпчек не видит).
+#   typecheck — tsc по всем четырём приложениям. С этого прохода спеки
+#               ВНУТРИ тайпчека: раньше исключение **/*spec.ts скрывало
+#               рассинхрон тестов с сигнатурами сервисов.
+#   test      — jest + собственный standalone-раннер (63 спеки, которые
+#               jest запускать не умеет — см. scripts/run-standalone-specs.js).
+#   build     — nest build + next build трёх приложений: единственная
+#               проверка, которая ловит ошибки уровня сборки Next.
+#   prisma    — prisma validate: синтаксис и связность schema.prisma.
+#               Конвенции схемы (индексы под FK и т.п.) проверяет
+#               отдельный тест schema-conventions.spec.ts в джобе test.
+#
+# Джобы намеренно раздельные: красный CI должен сразу говорить, ЧТО
+# сломано, а не «что-то в пайплайне». Общий шаг установки вынесен в
+# composite-действие .github/actions/setup.
+
+name: CI
+
+on:
+  # Только основная ветка + все PR: `branches: ['**']` вместе с
+  # pull_request давал бы двойной прогон всех пяти джоб на каждый PR
+  # внутри репозитория (concurrency их не схлопывает — refs/heads/x и
+  # refs/pull/N/merge это разные группы).
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Prisma генерирует клиент на каждом шаге установки; ключи и реальная
+  # БД для этого не нужны — URL-заглушка валидного формата.
+  DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npm run lint
+
+  typecheck:
+    name: Typecheck (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npm run typecheck
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npm test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npm run build --workspace=apps/api
+      - run: npm run build --workspace=apps/tma
+      - run: npm run build --workspace=apps/admin
+      - run: npm run build --workspace=apps/landing
+
+  prisma:
+    name: Prisma schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npm run prisma:validate --workspace=apps/api

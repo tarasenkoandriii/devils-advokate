@@ -4,25 +4,32 @@
 // приглашение / вступить / взнос / прогресс) и major-purchase (локация
 // варианта: поиск по тексту, геолокация устройства с согласием LOCATION).
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from '../NotLoadedNotice';
 import { domainApi } from '../../lib/domains/api';
 import { EntityForm } from './EntityForm';
 
 import { haptic } from '../../lib/telegram';
 import { ShareLinkView } from './InterviewPoolWorkspace';
+import { LOCATION_PURPOSES, locationConsentText } from '../../lib/location-purposes';
 
 export function InvestmentGroupPanel({ projectId, config }: { projectId: string; config: any }) {
   const [group, setGroup] = useState<any>(null);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: сбой загрузки
+  // ставил пустой список и молчал — экран показывал «ничего нет»
+  // там, где ответа не было вовсе.
+  const [notLoaded, setNotLoaded] = useState(false);
   const [invite, setInvite] = useState<{ link: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [myGroups, setMyGroups] = useState<any[] | null>(null);
-  useEffect(() => { domainApi.getJson('/investment-groups').then(setMyGroups).catch(() => setMyGroups([])); }, [tick]);
+  useEffect(() => { domainApi.getJson('/investment-groups').then((v) => { setMyGroups(v); setNotLoaded(false); }).catch(() => { setMyGroups([]); setNotLoaded(true); }); }, [tick]);
   const groupId: string | undefined = group?.id ?? config.investmentGroupId ?? config.project?.investmentGroupId ?? (myGroups && myGroups.length === 1 ? myGroups[0].id : undefined);
 
   return (
     <div className="domain-panel">
+      {notLoaded && <NotLoadedNotice what="данные раздела" />}
       <p className="card-section__empty">Совместные инвестиции: участники группы объявляют взносы, прогресс сбора виден всем. Суммы — в валюте конфига, между валютами не складываются.</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {myGroups && myGroups.length > 0 && (
         <ul className="dtp-access-log">{myGroups.map((g) => <li key={g.id}><strong>{g.name}</strong> · {g._count?.members ?? '?'} чел.{g.pledgedAmount != null && ` · мой взнос ${g.pledgedAmount}`}{g.id === groupId && ' · текущая'}{g.id !== groupId && <> <button type="button" className="secondary" onClick={() => setGroup(g)}>выбрать</button></>}</li>)}</ul>
       )}
@@ -53,7 +60,12 @@ export function InvestmentGroupPanel({ projectId, config }: { projectId: string;
 
 function GroupProgress({ projectId, tick }: { projectId: string; tick: number }) {
   const [data, setData] = useState<{ targetBudget: number | null; currency: string | null; totalPledged: number; members: Array<{ id: string; userId: string; pledgedAmount: number | null; role?: string }> } | null>(null);
-  useEffect(() => { domainApi.getJson(`/investment/projects/${projectId}/group-progress`).then(setData).catch(() => setData(null)); }, [projectId, tick]);
+  // Пункт [empty-looked-like-an-answer] 2026-09-24: при сбое `data`
+  // оставалась `null`, и экран показывал «Прогресс: загрузка…» ВЕЧНО —
+  // человек ждёт то, что уже не придёт.
+  const [notLoaded, setNotLoaded] = useState(false);
+  useEffect(() => { domainApi.getJson(`/investment/projects/${projectId}/group-progress`).then((v) => { setData(v); setNotLoaded(false); }).catch(() => { setData(null); setNotLoaded(true); }); }, [projectId, tick]);
+  if (notLoaded && !data) return <NotLoadedNotice what="прогресс сбора взносов" />;
   if (!data) return <p className="dtp-muted">Прогресс: загрузка…</p>;
   const pct = data.targetBudget ? Math.min(100, Math.round((data.totalPledged / data.targetBudget) * 100)) : null;
   return (
@@ -87,7 +99,12 @@ export function VariantLocationPanel({ configId }: { configId: string }) {
     try { return await fn(); }
     catch (e: any) {
       if (e?.httpStatus === 403 || /consent|соглас|згод/i.test(String(e?.message))) {
-        if (!window.confirm('Для определения расстояний и маршрутов нужно согласие на обработку геолокации. Дать согласие?')) throw e;
+        // Пункт [consent-purpose] 2026-09-05: здесь была ВТОРАЯ дверь к
+        // тому же согласию, и её текст говорил только про «расстояния и
+        // маршруты» — ни слова о том, что координаты осмотра
+        // сохраняются в карточке варианта. Слова берутся из общего
+        // словаря применений, ровно те же, что на экранном согласии.
+        if (!window.confirm(`${locationConsentText([LOCATION_PURPOSES.MAJOR_PURCHASE])}\n\nДать согласие?`)) throw e;
         await domainApi.postJson('/major-purchase/location-consent', { version: LOCATION_CONSENT_VERSION });
         return fn();
       }
@@ -128,7 +145,7 @@ export function VariantLocationPanel({ configId }: { configId: string }) {
   return (
     <div className="domain-panel">
       <p className="card-section__empty">Где находится каждый вариант — чтобы сравнивать расстояния. Координаты хранятся только с вашего согласия на геолокацию.</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {variants.length === 0 && <p className="card-section__empty">Сначала добавьте варианты во вкладке «Варианты».</p>}
       <ul className="domain-entities">
         {variants.map((v) => (
@@ -164,7 +181,7 @@ export function ShareAllPanel({ projectId }: { projectId: string }) {
   return (
     <div className="domain-panel">
       <p className="card-section__empty">Передать профили заказчику можно только для кандидатов, чьё согласие вы подтверждаете явно — по одному.</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {candidates.map((s) => (
         <label key={s.id}><input type="checkbox" checked={Boolean(checked[s.candidateProfileId])} onChange={(e) => setChecked({ ...checked, [s.candidateProfileId]: e.target.checked })} /> {s.candidateProfile?.displayName ?? s.candidateProfileId} — согласие подтверждаю</label>
       ))}

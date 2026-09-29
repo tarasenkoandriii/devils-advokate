@@ -14,6 +14,7 @@ import type {
   TelemetrySummaryRow,
   TelemetryByModelRow,
   AIJobDetail,
+  AuditLogRow,
 } from './types';
 
 // ── Аутентификация (devils-advocate-admin-panel-tz.md §4.1) ──
@@ -209,7 +210,7 @@ export function getTelemetryTaskDetail(taskType: string, limit = 50, status?: st
 }
 
 // ── Доменные сценарии / intake / media-review (фаза F) ──
-import type { DomainSummaryRow, DomainProjectList, DomainProjectDetail, IntakeSummary, AdminMediaReviewQueue } from './types';
+import type { DomainSummaryRow, DomainProjectList, DomainProjectDetail, IntakeSummary, AdminMediaReviewQueues } from './types';
 
 export function getDomainsSummary() {
   return apiGet<DomainSummaryRow[]>('/admin/domains/summary');
@@ -226,7 +227,7 @@ export function getIntakeSummary() {
   return apiGet<IntakeSummary>('/admin/intake/summary');
 }
 export function listAdminMediaReviewQueues() {
-  return apiGet<AdminMediaReviewQueue[]>('/admin/media-review/queues');
+  return apiGet<AdminMediaReviewQueues>('/admin/media-review/queues');
 }
 export function setDomainProjectFrozen(domain: string, id: string, frozen: boolean, note?: string) {
   return apiPatch<{ id: string; frozenAt: string | null; frozenNote: string | null }>(`/admin/domains/${domain}/projects/${id}/freeze`, { frozen, note });
@@ -552,9 +553,90 @@ export function sandboxJsStatistics(projectId: string) {
   return apiGet<SandboxJsStatistics>(`/admin/sandbox/job-search/statistics/${projectId}`);
 }
 
+// ── Sandbox: найм v2 (Пункт [job-domain-v2]) — лист условий соискателя и
+// цепочка работодателя. Сводки листа — числа, не содержимое.
+export interface SandboxSheetSummary {
+  sheetId: string;
+  kind: string;
+  status: string;
+  title: string;
+  clauses: { employer: number; candidate: number; drafts: number; rejected: number };
+  positions: { confirmed: number; drafts: number };
+  counters: Record<string, number>;
+  agenda: number;
+}
+export function sandboxTsOpenForVacancy(vacancyId: string) {
+  return apiPost<SandboxSheetSummary & { resumed: boolean }>('/admin/sandbox/terms-sheets/open-for-vacancy', { vacancyId });
+}
+export function sandboxTsConfirmAll(sheetId: string) {
+  return apiPost<SandboxSheetSummary & { clausesConfirmed: number; positionsConfirmed: number }>('/admin/sandbox/terms-sheets/confirm-all', { sheetId });
+}
+export function sandboxTsPropose(sheetId: string, text: string, evidenceKind: string, bySide: 'EMPLOYER' | 'CANDIDATE') {
+  return apiPost<SandboxSheetSummary & { proposed: number; sample: Array<{ clauseId: string; coverage: string | null; stance: string | null; quote: string | null }> }>('/admin/sandbox/terms-sheets/propose', { sheetId, text, evidenceKind, bySide });
+}
+export function sandboxTsCvVariant(sheetId: string) {
+  return apiPost<{ variantId: string; highlights: number; cvText: string; note: string | null }>('/admin/sandbox/terms-sheets/cv-variant', { sheetId });
+}
+export function sandboxTsOfferDraft(sheetId: string) {
+  return apiPost<{ text: string; [k: string]: unknown }>('/admin/sandbox/terms-sheets/offer-draft', { sheetId });
+}
+export function sandboxEhProject(question: string) {
+  return apiPost<{ projectId: string; mode: string; draft: boolean; note: string }>('/admin/sandbox/employer-hiring/project', { question });
+}
+export function sandboxEhCompany(projectId: string, dto: { legalName?: string; registryCode?: string; domain?: string }) {
+  return apiPost<{ dossierId: string; legalName: string | null; registryCode: string | null; domain: string | null; draft: boolean }>('/admin/sandbox/employer-hiring/company', { projectId, ...dto });
+}
+export function sandboxEhBrief(projectId: string, rawText: string) {
+  return apiPost<SandboxSheetSummary & { briefId: string; proposedClauses: number }>('/admin/sandbox/employer-hiring/brief', { projectId, rawText });
+}
+export function sandboxEhConfig(projectId: string, jobTitle: string, salaryRange?: string) {
+  return apiPost<{ configId: string; jobTitle: string }>('/admin/sandbox/employer-hiring/config', { projectId, jobTitle, salaryRange });
+}
+export function sandboxEhQuestionnaire(projectId: string) {
+  return apiPost<Partial<SandboxSheetSummary> & { questions: number; sheetId: string | null }>('/admin/sandbox/employer-hiring/questionnaire', { projectId });
+}
+export function sandboxEhPosting(projectId: string) {
+  return apiPost<{ postingId: string; revisionId: string; textLength: number; complianceFlags: number; checklistOpen: string[]; note: string }>('/admin/sandbox/employer-hiring/posting', { projectId });
+}
+export function sandboxEhCandidate(projectId: string, displayName: string, resumeText?: string) {
+  return apiPost<SandboxSheetSummary & { candidateProfileId: string; statusId: string; proposedPositions: number }>('/admin/sandbox/employer-hiring/candidate', { projectId, displayName, resumeText });
+}
+export function sandboxEhMatrix(projectId: string) {
+  return apiGet<{ columns: number; rows: Array<{ displayName: string; covered: number; unknown: number }>; note: string }>(`/admin/sandbox/employer-hiring/matrix/${projectId}`);
+}
+
 // ── Sandbox: голосовая заметка ru/uk (Пункт [voice-note-ru] 2026-09-01) ──
 // Стриминг AssemblyAI не поддерживает русский/украинский — короткая
 // запись уходит async-путём (universal). Аудио у нас не персистуется.
 export function sandboxVoiceNote(base64Content: string, languageCode?: string) {
   return apiPost<{ text: string; language: string | null }>('/admin/sandbox/voice-note', { base64Content, languageCode });
+}
+
+// ── Журнал действий (Пункт [dead-code-audit] 2026-09-03) ──
+// Фильтры необязательны: без них отдаются последние записи (потолок 200
+// стоит на сервере).
+export function getAuditLog(filters: { resource?: string; resourceId?: string; actorId?: string } = {}) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  // Сверка чтений без потолка 2026-09-04: журнал приходит с потолком и
+  // флагом «есть ещё» — экран обязан сказать, что список неполный.
+  return apiGet<{ items: AuditLogRow[]; hasMore: boolean; limit: number }>(`/admin/audit-log${suffix}`);
+}
+
+// ── Пункт [operator-left-a-trace-unsaid] 2026-09-25 ──
+// Что оставляет после себя решение оператора и увидит ли это человек.
+// Считается на сервере из тех же реестров, что питают экран человека:
+// пять экранов админки держали бы пять копий этого текста, и первое же
+// изменение области журнала развело бы их.
+export interface OperatorTrace {
+  action: string;
+  what: string;
+  resource: string;
+  visibleToPerson: boolean;
+  whyNotVisible: string | null;
+}
+
+export function getOperatorTraces() {
+  return apiGet<{ traces: OperatorTrace[]; always: string }>('/admin/audit-log/operator-traces');
 }

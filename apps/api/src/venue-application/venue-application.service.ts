@@ -14,6 +14,7 @@
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { MoneyLike, sumMoney } from '../common/money';
 import { SecretsService } from '../secrets/secrets.service';
 import { getPlaceDetails, searchByText } from '../venue-recommendation/google-places-client';
@@ -22,13 +23,17 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 
-export interface SubmitApplicationInput {
-  name: string;
-  address: string;
-  phone?: string;
-  openingHours?: string[];
-  googlePlaceId?: string;
-  photoReferences?: string[];
+// Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
+// исчезает при компиляции, и ValidationPipe для него бессилен
+// структурно. Разбор и происхождение потолков — common/request-body-classes.ts.
+export class SubmitApplicationInput {
+  @IsString() @MinLength(1) @MaxLength(300) name!: string;
+  @IsString() @MinLength(1) @MaxLength(500) address!: string;
+  @IsOptional() @IsString() @MaxLength(50) phone?: string;
+  // Семь строк расписания — по одной на день недели, с запасом.
+  @IsOptional() @IsArray() @ArrayMaxSize(14) @IsString({ each: true }) @MaxLength(200, { each: true }) openingHours?: string[];
+  @IsOptional() @IsString() @MaxLength(300) googlePlaceId?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @MaxLength(2000, { each: true }) photoReferences?: string[];
 }
 
 @Injectable()
@@ -121,7 +126,7 @@ export class VenueApplicationService {
       throw new NotFoundException(`VenueApplication ${applicationId} not found`);
     }
     if (application.status !== VenueApplicationStatus.PENDING) {
-      throw new BadRequestException(`VenueApplication ${applicationId} already moderated (status=${application.status})`);
+      throw new BadRequestException(`Эту заявку уже рассмотрели (${application.status}) — повторная модерация ничего не изменит`);
     }
 
     if (decision === 'REJECT') {
@@ -184,12 +189,51 @@ export class VenueApplicationService {
 
   // ── public (без аутентификации — "публичная карточка", буквально ТЗ) ──
 
+  /** Пункт [public-row-whole] 2026-09-06 — что именно видит витрина.
+   *
+   * ЧТО БЫЛО. Оба метода отдавали СТРОКУ ЦЕЛИКОМ, а зовёт их
+   * контроллер `public/venues` — БЕЗ АУТЕНТИФИКАЦИИ ВООБЩЕ, намеренно
+   * («публичная карточка», §3.23 ТЗ). Вместе с названием и адресом
+   * наружу уходило:
+   *
+   *  • `referralFeeAmount` — сумма реферальной платы, СОГЛАСОВАННАЯ С
+   *    КОНКРЕТНЫМ ЗАВЕДЕНИЕМ. Коммерческое условие между продуктом и
+   *    заведением, доступное любому в интернете: соседнее заведение
+   *    видит, сколько платит это, а это — что платит больше соседнего;
+   *  • `applicationId` — ссылка на заявку, сама заявка публичной не
+   *    является.
+   *
+   * Витрине не нужно ни то, ни другое. Комиссия остаётся там, где ей
+   * место: `approved-venues/:id/commission-summary` под операторским
+   * guard'ом.
+   *
+   * Поля перечислены поимённо, а не «всё, кроме»: новое поле у
+   * заведения должно попадать в публичную витрину СОЗНАТЕЛЬНО. Именно
+   * «всё, кроме» здесь и не было — была строка целиком. */
+  private static readonly PUBLIC_VENUE_FIELDS = {
+    id: true,
+    name: true,
+    address: true,
+    phone: true,
+    openingHours: true,
+    photoReferences: true,
+    rating: true,
+    isPriorityPartner: true,
+    createdAt: true,
+  } as const;
+
   async listApprovedVenues() {
-    return this.prisma.approvedVenue.findMany({ orderBy: { createdAt: 'desc' } });
+    return this.prisma.approvedVenue.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: VenueApplicationService.PUBLIC_VENUE_FIELDS,
+    });
   }
 
   async getApprovedVenue(id: string) {
-    const venue = await this.prisma.approvedVenue.findUnique({ where: { id } });
+    const venue = await this.prisma.approvedVenue.findUnique({
+      where: { id },
+      select: VenueApplicationService.PUBLIC_VENUE_FIELDS,
+    });
     if (!venue) {
       throw new NotFoundException(`ApprovedVenue ${id} not found`);
     }
@@ -202,11 +246,26 @@ export class VenueApplicationService {
    * одобрения — переговоры с заведением могут занять время. */
   async setReferralFee(userId: string, approvedVenueId: string, referralFeeAmount: number | null) {
     await this.assertModerator(userId);
-    await this.assertVenueExists(approvedVenueId);
-    return this.prisma.approvedVenue.update({
+    const before = await this.assertVenueExists(approvedVenueId);
+    const updated = await this.prisma.approvedVenue.update({
       where: { id: approvedVenueId },
       data: { referralFeeAmount },
     });
+    // Пункт [operator-money-untraced] 2026-09-24: этого следа не было.
+    // Одобрение и отклонение заявки заведения аудировались с самого
+    // начала, а согласование ПЛАТЫ — нет, при том что это решение
+    // оператора о деньгах с внешней стороной. Отсутствие следа здесь
+    // хуже, чем где-либо ещё на операторской поверхности: у остальных
+    // действий спорить можно о последствиях, у этого — о сумме.
+    await this.auditLog.record({
+      actorId: userId,
+      action: 'approved_venue.referral_fee_set',
+      resource: 'ApprovedVenue',
+      resourceId: approvedVenueId,
+      before: { referralFeeAmount: before.referralFeeAmount ?? null },
+      after: { referralFeeAmount },
+    });
+    return updated;
   }
 
   /** "Приоритетное размещение... промаркировано как реклама" (§3.22
@@ -214,11 +273,27 @@ export class VenueApplicationService {
    * такие карточки в публичной выдаче. */
   async setPriorityPartner(userId: string, approvedVenueId: string, isPriorityPartner: boolean) {
     await this.assertModerator(userId);
-    await this.assertVenueExists(approvedVenueId);
-    return this.prisma.approvedVenue.update({
+    const before = await this.assertVenueExists(approvedVenueId);
+    const updated = await this.prisma.approvedVenue.update({
       where: { id: approvedVenueId },
       data: { isPriorityPartner },
     });
+    // Пункт [operator-money-untraced] 2026-09-24. Этот флаг поднимает
+    // заведение НАД органической выдачей — экран рисует такие карточки
+    // отдельным списком с пометкой «Реклама». То есть оператор одним
+    // переключателем меняет то, что человек увидит первым, и до этой
+    // правки не оставлял следа. Пометка «реклама» честна перед
+    // читателем, но она не отвечает на вопрос «кто и когда решил» —
+    // а платное продвижение ровно этот вопрос и порождает.
+    await this.auditLog.record({
+      actorId: userId,
+      action: 'approved_venue.priority_partner_set',
+      resource: 'ApprovedVenue',
+      resourceId: approvedVenueId,
+      before: { isPriorityPartner: before.isPriorityPartner },
+      after: { isPriorityPartner },
+    });
+    return updated;
   }
 
   /** "Комиссия... за бронь, сделанную через сервис" (§3.22 ТЗ) —
@@ -229,6 +304,42 @@ export class VenueApplicationService {
    * сбора платежей. */
   async confirmBooking(userId: string, approvedVenueId: string, scheduledConversationId?: string) {
     const venue = await this.assertVenueExists(approvedVenueId);
+    // Аудит 2026-09-03 (сверка доступа): ссылка на встречу приходила из
+    // тела запроса и не проверялась — в собственное подтверждение можно
+    // было записать чужой scheduledConversationId. Прочитать по нему
+    // ничего нельзя (поле нигде не читается), но чужой идентификатор в
+    // своей строке — это заготовка утечки для того, кто однажды начнёт
+    // это поле читать.
+    if (scheduledConversationId) {
+      const own = await this.prisma.scheduledConversation.findFirst({
+        where: { id: scheduledConversationId, project: { ownerId: userId } },
+        select: { id: true },
+      });
+      if (!own) throw new NotFoundException(`ScheduledConversation ${scheduledConversationId} not found`);
+    }
+    // Пункт [self-reported-money] 2026-09-05 — одна отметка на человека
+    // в день на заведение.
+    //
+    // НАЙДЕНО: `confirmBooking` создавал строку на КАЖДЫЙ вызов. Человек
+    // мог нажать «я забронировал» десять раз подряд — и сумма, которую
+    // оператор видит как «к оплате» для заведения, вырастала в десять
+    // раз. Заведение при этом не подтверждало ничего и о цифре не знало.
+    //
+    // Это НЕ проверка брони: продукт не умеет её проверить и делать вид,
+    // что умеет, не будет. Это только защита от очевидного умножения —
+    // тот же приём, что в пункте [click-count], где доля о человеке
+    // росла от нажатий.
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const already = await this.prisma.venueBookingConfirmation.findFirst({
+      where: { approvedVenueId, confirmedByUserId: userId, createdAt: { gte: dayStart } },
+    });
+    if (already) {
+      throw new BadRequestException(
+        'Вы уже отмечали бронь в этом заведении сегодня. Повторная отметка ничего не добавит — это ваша пометка о состоявшейся брони, а не счёт заведению.',
+      );
+    }
+
     return this.prisma.venueBookingConfirmation.create({
       data: {
         approvedVenueId,
@@ -252,7 +363,17 @@ export class VenueApplicationService {
     await this.assertVenueExists(approvedVenueId);
     const confirmations = await this.prisma.venueBookingConfirmation.findMany({ where: { approvedVenueId } });
     const totalFeesOwed = sumMoney(confirmations.map((c: { referralFeeOwed: MoneyLike }) => c.referralFeeOwed));
-    return { totalBookingsConfirmed: confirmations.length, totalFeesOwed };
+    // Пункт [self-reported-money] 2026-09-05: число и сумма приходят из
+    // САМООТЧЁТОВ пользователей. Заведение их не подтверждало и о них не
+    // знает; платёжной инфраструктуры в проекте нет. Оператор видел
+    // «броней / к оплате» — вид бухгалтерского факта. Происхождение
+    // теперь едет вместе с числами, а не остаётся в комментарии к коду.
+    return {
+      totalBookingsConfirmed: confirmations.length,
+      totalFeesOwed,
+      basis: 'self-reported' as const,
+      distinctReporters: new Set(confirmations.map((c: { confirmedByUserId: string }) => c.confirmedByUserId)).size,
+    };
   }
 
   private async assertVenueExists(approvedVenueId: string) {

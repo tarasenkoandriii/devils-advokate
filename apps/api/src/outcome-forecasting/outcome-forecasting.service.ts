@@ -24,6 +24,12 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ScenarioConfidence, ScenarioType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
+import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
+
+/** Пункт [partial-basis] 2026-09-04 — лимиты законны, молчание о них нет. */
+const TOP_ARGUMENTS_LIMIT = 5;
+const PRECEDENTS_LIMIT = 5;
 
 const TASK_TYPE = 'outcome-forecasting';
 
@@ -77,8 +83,13 @@ export class OutcomeForecastingService {
   async generateScenarios(userId: string, projectId: string, userScenarioDescriptions: string[] = [], engineId?: string) {
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
 
-    const [topArguments, decisionMakerLink, protectedNotes] = await Promise.all([
-      this.prisma.argument.findMany({ where: { projectId, targetPersonId: null }, orderBy: { weight: 'desc' }, take: 5 }),
+    // Пункт [partial-basis] 2026-09-04: и аргументы, и прецеденты
+    // берутся срезом, а назывались «ключевыми» и «известными» — модель
+    // не могла знать, что видит часть. Счёт по тому же условию, что и
+    // выборка, иначе доля будет о другом множестве.
+    const [topArguments, argumentsTotal, decisionMakerLink, protectedNotes] = await Promise.all([
+      this.prisma.argument.findMany({ where: { projectId, targetPersonId: null }, orderBy: [{ weight: 'desc' }, { id: 'desc' }], take: TOP_ARGUMENTS_LIMIT }),
+      this.prisma.argument.count({ where: { projectId, targetPersonId: null } }),
       this.prisma.projectPerson.findFirst({ where: { projectId, stakeholderRole: 'DECISION_MAKER' }, include: { person: true } }),
       this.prisma.protectedNote.findMany({ where: { projectId } }),
     ]);
@@ -88,22 +99,51 @@ export class OutcomeForecastingService {
         ? topArguments.map((a: { text: string; stance: string }) => `(${a.stance}) ${a.text}`).join('\n')
         : '(аргументы пока не собраны)';
 
+    const bases: PartialBasis[] = [partialBasis('аргументы', topArguments.length, argumentsTotal, 'weight')];
+    const argumentsBasis = bases[0];
+
     let decisionMakerContext = '(ключевой решающий человек ещё не определён в карте круга лиц — прогноз общий, не персонализированный)';
     if (decisionMakerLink) {
       const personId = decisionMakerLink.personId;
       const [traits, relationships, precedents] = await Promise.all([
         this.prisma.personCommunicationTrait.findMany({ where: { personId } }),
         this.prisma.relationship.findMany({ where: { OR: [{ personAId: personId }, { personBId: personId }] } }),
-        this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: 5, orderBy: { createdAt: 'desc' } }),
+        // Пункт [tie-is-random] 2026-09-06 — у среза должен быть
+        // определённый порядок. Прецеденты создаются ПАЧКОЙ, одной
+        // транзакцией, а `now()` в Postgres — время НАЧАЛА транзакции:
+        // у всех строк одного поиска `createdAt` совпадает до
+        // миллисекунды. Сортировка по нему одна не задаёт порядка, и с
+        // потолком `take` СОСТАВ среза определялся планировщиком базы —
+        // то есть мог отличаться от запроса к запросу. Вывод о человеке
+        // строился каждый раз на другой опоре и подавался как один и
+        // тот же. Добавлен `id` вторым ключом: cuid начинается с метки
+        // времени, поэтому порядок внутри одной метки устойчив.
+        this.prisma.behaviorPrecedent.findMany({ where: { personId }, take: PRECEDENTS_LIMIT, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }),
       ]);
-      const traitsText = traits.map((t: { traitType: string; value: string }) => `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`).join('; ');
+      const precedentsTotal = await this.prisma.behaviorPrecedent.count({ where: { personId } });
+      const precedentsBasis = partialBasis('прецеденты поведения', precedents.length, precedentsTotal, 'recent');
+      bases.push(precedentsBasis);
+      // Пункт [inference-as-observation] 2026-09-05: и профиль, и
+      // прецеденты решающего человека созданы моделью по расшифровкам.
+      const traitsText = derivedList(
+        traits.map((t: { traitType: string; value: string; observedFrom: string | null }) => ({
+          text: `${TRAIT_LABELS[t.traitType] ?? t.traitType}: ${t.value}`,
+          source: t.observedFrom,
+        })),
+      );
       const relationshipsText = relationships.map((r: { label: string }) => r.label).join('; ');
-      const precedentsText = precedents.map((p: { precedentDescription: string }) => p.precedentDescription).join('; ');
+      const precedentsText = derivedList(
+        precedents.map((p: { precedentDescription: string; sourceDescription: string | null }) => ({
+          text: p.precedentDescription,
+          source: p.sourceDescription,
+        })),
+      );
       decisionMakerContext = [
         `Ключевой решающий человек: ${decisionMakerLink.person.displayName ?? 'без имени'}.`,
         traitsText ? `Коммуникационный профиль: ${traitsText}.` : '',
         relationshipsText ? `Связи: ${relationshipsText}.` : '',
-        precedentsText ? `Известные прецеденты поведения: ${precedentsText}.` : '',
+        precedentsText ? `Прецеденты поведения, найденные разбором расшифровок${promptBasisNote(precedentsBasis)}: ${precedentsText}.` : '',
+        hasDerived(traits, precedents) ? DERIVED_CONTEXT_INSTRUCTION : '',
       ]
         .filter(Boolean)
         .join(' ');
@@ -121,7 +161,7 @@ export class OutcomeForecastingService {
     const userPrompt = [
       `Ситуация: ${project.question}`,
       project.goal ? `Цель пользователя: ${project.goal}` : '',
-      `Ключевые аргументы:\n${argumentsSummary}`,
+      `Ключевые аргументы${promptBasisNote(argumentsBasis)}:\n${argumentsSummary}`,
       decisionMakerContext,
       protectedNotesText ? `Защищённые заметки (туз в рукаве/план Б):\n${protectedNotesText}` : '',
       scenarioLines.join('\n'),
@@ -157,7 +197,7 @@ export class OutcomeForecastingService {
     }
 
     const rawScenarios: RawScenario[] = JSON.parse(result.text);
-    return this.prisma.$transaction(
+    const scenarios = await this.prisma.$transaction(
       rawScenarios.map((s) =>
         this.prisma.outcomeScenario.create({
           data: {
@@ -173,6 +213,13 @@ export class OutcomeForecastingService {
         }),
       ),
     );
+
+    // Пункт [partial-basis] 2026-09-04: на чём построен ИМЕННО ЭТОТ
+    // прогноз. В базе основания нет — колонки под него не существует, и
+    // ручную миграцию ради подписи под текстом мы не заводили; в списке
+    // сохранённых сценариев этого поля не будет, и экран говорит об этом
+    // прямо, а не делает вид, что помнит.
+    return { scenarios, basisNote: humanBasisNote(bases) };
   }
 
   /** "Сценарии сравниваются рядом друг с другом" (§3.12 ТЗ) —
@@ -198,7 +245,7 @@ export class OutcomeForecastingService {
     await assertProjectOwnership(this.prisma, userId, projectId);
     const scenario = await this.prisma.outcomeScenario.findFirst({ where: { id: scenarioId, projectId } });
     if (!scenario) {
-      throw new BadRequestException(`OutcomeScenario ${scenarioId} not found in project ${projectId}`);
+      throw new BadRequestException(`Сценарий исхода не найден в этом проекте`);
     }
     return this.prisma.outcomeScenario.update({
       where: { id: scenarioId },

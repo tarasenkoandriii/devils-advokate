@@ -115,7 +115,14 @@ async function run() {
       projectId: PROJECT_ID,
       owner: 'USER',
       description: 'Забрать мебель до конца месяца',
-      dueDate: new Date('2026-01-31'),
+      // Пункт [cascade-took-a-stranger] 2026-09-26, попутная находка.
+      // Здесь стояло ровно `+ 3 суток`, а `deadlineRelative` округляет
+      // ВНИЗ: к моменту вызова проходит хоть доля миллисекунды, и
+      // расстояние становится «через 2 дня». Тест зеленел только когда
+      // весь путь укладывался в одну миллисекунду — то есть по удаче, и
+      // однажды перестал. Половина суток запаса убирает гонку, ничего
+      // не ослабляя: «через 3 дня» проверяется по-прежнему.
+      dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000),
       person: { displayName: 'Бывший сосед' },
     });
     const fakeRouter = new FakeAIRouterService();
@@ -123,7 +130,13 @@ async function run() {
 
     await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Забрать мебель до конца месяца'), true, 'описание обязательства попало в промпт');
-    assertEqual(fakeRouter.lastRequest.userPrompt.includes('2026-01-31'), true, 'срок попал в промпт');
+    // Пункт [server-said-which-day] 2026-09-24: здесь проверялось, что в
+    // промпт попало КАЛЕНДАРНОЕ ЧИСЛО по UTC, — то самое, которого
+    // сервер не знает: срок хранится как конец местного дня человека, и
+    // его число по UTC у человека западнее Гринвича на сутки больше.
+    // Теперь в промпте расстояние во времени, и проверяется оно.
+    assertEqual(fakeRouter.lastRequest.userPrompt.includes('через 3 дня'), true, 'срок попал в промпт расстоянием во времени');
+    assertEqual(fakeRouter.lastRequest.userPrompt.includes('2026-'), false, 'календарного числа по UTC в промпте нет');
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('пользователь'), true, 'владелец обязательства (USER) переведён в читаемый текст');
   });
 

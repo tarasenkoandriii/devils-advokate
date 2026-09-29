@@ -28,6 +28,7 @@ import { SecretsService } from '../secrets/secrets.service';
 import { AIRouterService } from './ai-router.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { VoiceReplyReaperService } from '../stt/voice-reply-reaper.service';
+import { CacheRetentionService } from '../privacy-center/cache-retention.service';
 
 const DISPATCH_SECRET_REF = 'AI_JOB_DISPATCH_SECRET';
 
@@ -62,6 +63,7 @@ export class AIJobsDispatchController {
     private readonly conversations: ConversationsService,
     private readonly secrets: SecretsService,
     private readonly voiceReplies: VoiceReplyReaperService,
+    private readonly cacheRetention: CacheRetentionService,
   ) {}
 
   private async assertSecret(providedSecret: string) {
@@ -96,6 +98,10 @@ export class AIJobsDispatchController {
     // Аудит 2026-09-02: голосовые реплики без вебхука / с оборванным
     // обработчиком — тем же тиком (см. stt/voice-reply-reaper.service.ts).
     const voice = await this.voiceReplies.reapStale();
-    return { ...jobs, ...media, ...voice };
+    // Аудит удаления 2026-09-03: кэши, адресуемые содержимым, не
+    // принадлежат никому — их не касается ни каскад удаления аккаунта, ни
+    // удаление проекта. Срок жизни для них и есть механизм удаления.
+    const caches = await this.cacheRetention.sweep();
+    return { ...jobs, ...media, ...voice, ...caches };
   }
 }

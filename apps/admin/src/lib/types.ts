@@ -81,6 +81,11 @@ export interface ApprovedVenue {
 export interface CommissionSummary {
   totalBookingsConfirmed: number;
   totalFeesOwed: number;
+  // Пункт [self-reported-money] 2026-09-05 — происхождение чисел едет
+  // вместе с ними: обе цифры собраны из самоотчётов пользователей,
+  // заведение их не подтверждало.
+  basis: 'self-reported';
+  distinctReporters: number;
 }
 
 // ── Prompt Registry (devils-advocate-prompt-framework-tz.md §5.1) ──
@@ -142,11 +147,27 @@ export interface EvaluationRun {
 
 // ── Calibration (§5.3) ──
 
+export interface CalibrationBucket {
+  confidence: 'LOW' | 'MEDIUM' | 'HIGH';
+  sampleSize: number;
+  /** null — числа нет: выборки корзины (или всей выборки) не хватает.
+   * Пункт [uncalibrated-number] 2026-09-06 — это НЕ «точность нулевая». */
+  calibratedProbability: number | null;
+  calibrated: boolean;
+  threshold: number;
+  datasetReady: boolean;
+}
+
 export interface CalibrationStatus {
   sampleSize: number;
   brierScore: number | null;
   threshold: number;
   gatePassed: boolean;
+  /** Пункт [uncalibrated-number] 2026-09-06 — порог на корзину и
+   * разбивка по корзинам: одна общая выборка в 30 исходов не значит,
+   * что измерены все три корзины. */
+  bucketThreshold: number;
+  buckets: CalibrationBucket[];
 }
 
 // ── Telemetry (devils-advocate-telemetry-tz.md §4) ──
@@ -181,11 +202,23 @@ export interface AIJobDetail {
 // ── Доменные сценарии / intake / media-review (ТЗ domain-ui-and-voice-intake §1.4, фаза F) ──
 
 export interface DomainSummaryRow { domain: string; mode: string; total: number; last7: number; last30: number; withConfig: number; configRate: number | null }
-export interface DomainProjectRow { id: string; question: string; createdAt: string; updatedAt: string; frozenAt: string | null; owner: { id: string; telegramId: string }; config: { id: string; createdAt: string } | null }
+// Пункт [operator-read-the-question] 2026-09-25: `question` убран из
+// строки списка — слова человека отдаются только в карточке, и её
+// открытие пишется в журнал.
+export interface DomainProjectRow { id: string; createdAt: string; updatedAt: string; frozenAt: string | null; owner: { id: string; telegramId: string }; config: { id: string; createdAt: string } | null; conversations: number }
 export interface DomainProjectList { items: DomainProjectRow[]; total: number; take: number; skip: number }
-export interface DomainProjectDetail { id: string; question: string; goal: string | null; createdAt: string; updatedAt: string; frozenAt: string | null; frozenNote: string | null; owner: { id: string; telegramId: string; isRestricted: boolean; isBlocked: boolean }; config: Record<string, unknown> | null; _count: { conversations: number } }
+export interface DomainProjectDetail { id: string; question: string; goal: string | null; createdAt: string; updatedAt: string; frozenAt: string | null; frozenNote: string | null; owner: { id: string; telegramId: string; isRestricted: boolean; isBlocked: boolean }; config: Record<string, unknown> | null; _count: { conversations: number }; operatorViewLogged?: boolean }
 export interface IntakeSummary { windowDays: number; total: number; byStatus: Record<string, number>; dispatched: number; mismatches: number; mismatchRate: number | null; avgConfidence: number | null; avgFollowUps: number | null; suggestedVsChosen: Record<string, Record<string, number>> }
 export interface AdminMediaReviewQueue { id: string; title: string; createdAt: string; ownerTelegramId: string; totalItems: number; byStatus: Record<string, number>; stuckProcessing: number }
+// Пункт [ceiling-hid-inside-a-total] 2026-09-24: `queues` — срез с
+// объявленным потолком, `totals` — итоги по ВСЕЙ базе. Раньше экран
+// складывал срез и подписывал сумму как итог.
+export interface AdminMediaReviewQueues {
+  queues: AdminMediaReviewQueue[];
+  hasMore: boolean;
+  limit: number;
+  totals: { queues: number; items: number; byStatus: Record<string, number>; stuckProcessing: number };
+}
 
 // ── Sandbox (пункт [admin-sandbox] 2026-08-31) ──
 
@@ -421,7 +454,9 @@ export interface SandboxFlDraft {
 }
 export interface SandboxFlBudget {
   lineItems: Array<{ id: string; category: string; direction: string; amount: number; currency: string | null; description: string | null }>;
-  byCurrency: Array<{ currency: string; totalExpense: number; totalCoverage: number; netBudget: number }>;
+  // Пункт [budget-invented-a-currency] 2026-09-24: `null` — валюта не
+  // указана ни у строки, ни у проекта. Слова-заглушки здесь больше нет.
+  byCurrency: Array<{ currency: string | null; totalExpense: number; totalCoverage: number; netBudget: number; targetComparison: 'over' | 'within' | 'not-comparable' }>;
   targetBudget: number | null;
   currency: string | null;
 }
@@ -538,12 +573,54 @@ export interface DbStateAiJobs {
     updatedAt: string;
   }>;
 }
+// Пункт [background-jobs] 2026-09-04 — сверка ожидаемых крон-джоб с тем,
+// что реально стоит на инстансе. Список ожидаемого живёт в API
+// (admin-db-state/expected-cron-jobs.ts) и держится тестом на совпадение
+// с prisma/manual-migrations/pg_cron_*.sql.
+export interface CronJobPresence {
+  jobname: string;
+  schedule: string;
+  file: string;
+  breaksWhenMissing: string;
+  actualSchedule: string | null;
+  active: boolean | null;
+}
+export interface DbStateExpectedCron {
+  jobs: CronJobPresence[];
+  missing: string[];
+  mismatched: string[];
+  disabled: string[];
+}
+// Пункт [latest-migration-was-from-memory] 2026-09-24: три ответа, а не
+// два. «По схеме не видно» — честный третий: часть миграций снимает
+// NOT NULL или меняет внешний ключ, и по наличию колонки сказать нельзя
+// ничего.
+export interface DbStateMigration {
+  file: string;
+  state: 'applied' | 'missing' | 'not-observable';
+  why?: string;
+  breaksWhenMissing: string;
+}
+/** Пункт [deploy-step-did-nothing] 2026-09-26 — сверка имён таблиц со
+ * схемой. `notChecked` едет вместе с ответом: список того, чего сверка НЕ
+ * проверяет, обязан стоять рядом с её результатом, иначе «совпало»
+ * читается как «база соответствует схеме». */
+export interface DbStateSchemaTables {
+  missingInDatabase: Array<{ model: string; table: string }>;
+  unknownInSchema: string[];
+  declaredCount: number;
+  observedCount: number;
+  notChecked: string[];
+}
 export interface AdminDbState {
   generatedAt: string;
+  schemaTables: DbStateSection<DbStateSchemaTables>;
   cronJobs: DbStateSection<DbStateCronJob[]>;
+  expectedCron: DbStateSection<DbStateExpectedCron>;
   cronRuns: DbStateSection<DbStateCronRun[]>;
   httpResponses: DbStateSection<DbStateHttpResponse[]>;
   aiJobs: DbStateSection<DbStateAiJobs>;
+  manualMigrations: DbStateSection<DbStateMigration[]>;
 }
 export interface SandboxFactCheck {
   language: string | null;
@@ -554,4 +631,20 @@ export interface SandboxFactCheck {
   aiCheckedSegments: number;
   aiError: string | null;
   results: FactCheckSegmentResult[];
+}
+
+// Пункт [dead-code-audit] 2026-09-03 — вкладка «Аудит». Маршрут
+// GET /admin/audit-log существовал и был закрыт правом оператора, но
+// экрана к нему не было: журнал решений оператора можно было прочитать
+// только запросом к API руками.
+export interface AuditLogRow {
+  id: string;
+  actorId: string | null;
+  action: string;
+  resource: string;
+  resourceId: string;
+  before: unknown;
+  after: unknown;
+  requestId: string | null;
+  createdAt: string;
 }

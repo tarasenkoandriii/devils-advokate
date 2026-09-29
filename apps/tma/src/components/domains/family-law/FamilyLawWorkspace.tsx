@@ -26,7 +26,7 @@ function Parties({ configId, manifest }: { configId: string; manifest: DomainMan
   const { data, error } = useList<Party>(`/family-law/configs/${configId}/parties`, tick);
   return (
     <section className="dtp-section">
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {data && !data.some((p) => p.role === 'SELF') && <p className="dtp-hint">Добавьте себя (роль «Я») и вторую сторону — без этого раздел имущества не к кому привязать.</p>}
       {data?.map((p) => (
         <div key={p.id} className="dtp-card"><div className="dtp-card__head dtp-card__head--static">
@@ -51,7 +51,7 @@ function Assets({ configId, manifest }: { configId: string; manifest: DomainMani
   return (
     <section className="dtp-section">
       <p className="dtp-hint">Совместно нажитое делится по умолчанию, личное — нет. Пометка «совместно нажитое» — ваша, юрист может с ней не согласиться: это и будет видно в сверке.</p>
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {totals.size > 0 && <div className="domain-budget__summary">{[...totals.entries()].map(([cur, t]) => <div key={cur} className="domain-budget__currency"><strong>{cur}</strong><span>совместное {money(t.marital)}</span><span>личное {money(t.personal)}</span></div>)}</div>}
       {data?.map((a) => (
         <div key={a.id} className="dtp-card"><div className="dtp-card__head dtp-card__head--static">
@@ -74,7 +74,7 @@ function Statuses({ configId, manifest }: { configId: string; manifest: DomainMa
   const official = sorted.find((d) => d.isOfficial);
   return (
     <section className="dtp-section">
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
       {official ? <p className="dtp-status dtp-status--ok">Официально: <strong>{official.statusText}</strong> · {STATUS_SOURCE_LABEL[official.source] ?? official.source} · {dateOnly(official.determinedAt)}</p> : <p className="dtp-status dtp-status--warn">Официального статуса (решение суда, нотариальное удостоверение) пока нет — всё ниже мнения и договорённости.</p>}
       <ol className="dtp-timeline">{sorted.map((d) => <li key={d.id} className={d.isOfficial ? 'dtp-timeline__item dtp-timeline__item--official' : 'dtp-timeline__item'}><time>{dateOnly(d.determinedAt)}</time><div><strong>{d.statusText}</strong><br /><span className="dtp-muted">{STATUS_SOURCE_LABEL[d.source] ?? d.source}{d.isOfficial ? ' · официально' : ' · мнение'}{d.referenceDocumentNumber && ` · № ${d.referenceDocumentNumber}`}</span></div></li>)}</ol>
       {adding ? <EntityForm fields={spec.fields} submitLabel="Добавить запись" onCancel={() => setAdding(false)} onSubmit={async (v) => { await domainApi.postJson(spec.createRoute(configId), v); setAdding(false); setTick((t) => t + 1); }} />
@@ -127,7 +127,7 @@ export function FamilyLawWorkspace({ config, manifest, onConfigUpdated }: { conf
       {tab === 'assets' && <Assets configId={config.id} manifest={manifest} />}
       {tab === 'advisors' && (
         <section className="dtp-section">
-          {advError && <p className="generation-error">{advError}</p>}
+          {advError && <p role="alert" className="generation-error">{advError}</p>}
           {advisors && advisors.length === 0 && <p className="card-section__empty">Юристов пока нет.</p>}
           {advisors?.map((a) => (
             <SourceCard key={a.id} source={a} subtitle={a.advisorName} badge={a.role} criteria={config.criteria} spec={advisorsSpec} routes={routes}>

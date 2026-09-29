@@ -14,8 +14,15 @@ const { spawnSync } = require('node:child_process');
 
 const dir = resolve(process.argv[2] || 'src/__tests__');
 const typeCheck = process.argv.includes('--type-check');
+// `react-jsx`, а не `react` (пункт [machine-text] 2026-09-04): компоненты
+// TMA написаны под автоматический рантайм Next.js и `React` в области
+// видимости не держат. Со старым `jsx: 'react'` любой спек, который
+// РИСУЕТ компонент, падал на `ReferenceError: React is not defined` — то
+// есть проверить настоящую разметку было нельзя в принципе, и все
+// проверки интерфейса поневоле оставались чтением исходников регулярками.
+// Существующие спеки компонентов не рисовали, поэтому и не замечали.
 const extraTsNodeArgs = process.argv.includes('--tma')
-  ? ['--compiler-options', JSON.stringify({ module: 'commonjs', moduleResolution: 'node', jsx: 'react' })]
+  ? ['--compiler-options', JSON.stringify({ module: 'commonjs', moduleResolution: 'node', jsx: 'react-jsx' })]
   : [];
 
 const files = readdirSync(dir)

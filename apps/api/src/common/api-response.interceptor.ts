@@ -27,6 +27,11 @@ export interface ApiErrorResponse {
   error: {
     message: string;
     code?: string;
+    /** Пункт [job-domain-v2]: машиночитаемые детали HttpException
+     * (existingSheetId у 409 «лист уже открыт» и т. п.) — без них экран
+     * не мог отличить «уже есть» от ошибки. Только для ожидаемых
+     * исключений; текст Prisma/стек сюда не попадает никогда. */
+    details?: Record<string, unknown>;
   };
 }
 

@@ -5,7 +5,13 @@
 import { ExternalArtifactsCleanupService } from '../common/external-artifacts/external-artifacts-cleanup.service';
 
 jest.mock('../common/vercel-blob', () => ({
-  deleteBlob: jest.fn(async (_token: string, url: string) => { if (url.includes('fail')) throw new Error('403'); }),
+  // Пункт [delete-says-done] 2026-09-06: `deleteBlob` больше не
+  // бросает и не молчит — она ВОЗВРАЩАЕТ исход. Заглушка обязана знать
+  // ту же форму: прежняя бросала исключение, которого production-код
+  // не бросает никогда, и потому проверяла не то, что вызывается.
+  deleteBlob: jest.fn(async (_token: string, url: string) =>
+    url.includes('fail') ? { deleted: false, reason: 'хранилище ответило 403 Forbidden' } : { deleted: true, reason: null },
+  ),
 }));
 
 function make(data: { evidence?: any[]; conversations?: any[]; sparring?: any[]; material?: any[]; token?: string | null } = {}) {

@@ -33,6 +33,7 @@ import { PublicDiscussionSection } from '../../../components/PublicDiscussionSec
 import { LibrarySubmitSection } from '../../../components/LibrarySubmitSection';
 import { AgendaSection } from '../../../components/AgendaSection';
 import { ProtectedNotesSection } from '../../../components/ProtectedNotesSection';
+import { ProjectDeletionSection } from '../../../components/ProjectDeletionSection';
 import { useBackButton } from '../../../hooks/useBackButton';
 import { haptic } from '../../../lib/telegram';
 
@@ -86,7 +87,7 @@ export default function ProjectDetailPage() {
       )}
 
       {loading && <p>Загрузка…</p>}
-      {error && <p className="generation-error">{error}</p>}
+      {error && <p role="alert" className="generation-error">{error}</p>}
 
       {project && (
         <>
@@ -128,6 +129,10 @@ export default function ProjectDetailPage() {
           <WorkingMaterialsSection projectId={project.id} />
           <PublicDiscussionSection projectId={project.id} publicShareToken={project.publicShareToken} />
           <LibrarySubmitSection projectId={project.id} hasLibraryEntry={project.libraryEntry !== null} />
+          {/* Пункт [delete-project] 2026-09-04 — последним на странице
+              намеренно: разрушающее действие не должно попадаться под
+              руку раньше того, ради чего человек сюда пришёл. */}
+          <ProjectDeletionSection projectId={project.id} />
         </>
       )}
     </main>
