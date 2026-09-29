@@ -42,6 +42,7 @@ import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { allFilled } from '../common/claim-substance';
+import { isEnumValue } from '../common/enum-values';
 
 /** Пункт [partial-basis] 2026-09-04 — лимит законен, молчание о нём нет. */
 const PRECEDENTS_LIMIT = 5;
@@ -77,7 +78,7 @@ export function isValidMotivePayload(text: string): boolean {
         // требовали от самой гипотезы и не требовали от её основания — в
         // одном выражении, через строчку.
         allFilled(item, ['explanation', 'supportingFactsSummary']) &&
-        ['LOW', 'MEDIUM', 'HIGH'].includes(item.confidence),
+        isEnumValue(MotiveConfidenceLevel, item.confidence),
     );
   } catch {
     return false;

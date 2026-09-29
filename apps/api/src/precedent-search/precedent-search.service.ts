@@ -29,6 +29,7 @@ import { factsBlockWithInstruction } from '../common/fact-provenance';
 import { orderLabel } from '../common/server-time';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
+import { isEnumValue } from '../common/enum-values';
 
 const TASK_TYPE = 'precedent-search';
 
@@ -38,7 +39,9 @@ interface RawPrecedent {
   sourceDescription: string;
 }
 
-function isValidPrecedentPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidPrecedentPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
@@ -46,7 +49,7 @@ function isValidPrecedentPayload(text: string): boolean {
       (item) =>
         typeof item.precedentDescription === 'string' &&
         item.precedentDescription.trim().length > 0 &&
-        ['ANALOGOUS', 'PARTIALLY_SIMILAR', 'CONTRASTING'].includes(item.similarity) &&
+        isEnumValue(PrecedentSimilarity, item.similarity) &&
         typeof item.sourceDescription === 'string' &&
         item.sourceDescription.trim().length > 0,
     );

@@ -2,6 +2,8 @@ import { Body, Controller, Delete, Get, Param, Post, Query, UseInterceptors } fr
 import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { PublicDiscussionService } from './public-discussion.service';
+import { subsetOf } from '../common/enum-values';
+import { ArgumentStance } from '@prisma/client';
 
 // Пункт [outside-input] 2026-09-04. Эти четыре DTO не имели НИ ОДНОГО
 // декоратора — при том, что за ними стоят маршруты записи, доступные
@@ -24,9 +26,20 @@ export class JoinDto {
   @IsOptional() @IsString() @MaxLength(100) displayName?: string;
 }
 
+const PUBLIC_STANCES = subsetOf(
+  ArgumentStance,
+  [ArgumentStance.PRO, ArgumentStance.CON],
+  'приглашённый по ссылке предлагает довод за или против; примирительные и компромиссные категории продукт заводит сам и постороннему не предлагает',
+);
+
 export class SubmitArgumentDto {
   @IsString() @MinLength(1) @MaxLength(4000) text!: string;
-  @IsIn(['PRO', 'CON']) stance!: 'PRO' | 'CON';
+  // Пункт [enum-copy-drifted] 2026-09-29: сужение перечисления, а не его
+  // копия. Приглашённому по ссылке доступны только «за» и «против»:
+  // RECONCILIATION и COMPROMISE_PROPOSAL — категории, которые продукт
+  // заводит сам, из религиозных первоисточников и из листа компромиссов,
+  // и предлагать их постороннему нечем.
+  @IsIn([...PUBLIC_STANCES]) stance!: 'PRO' | 'CON';
   @IsOptional() @IsString() @MaxLength(100) participantId?: string;
 }
 

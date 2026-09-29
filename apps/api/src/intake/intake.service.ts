@@ -5,7 +5,7 @@
 // ответы через appendAnswer() домена — extract() домена дальше работает
 // на них как на своих. Ниже порога — универсальный сценарий, не ошибка.
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { IntakeStatus } from '@prisma/client';
+import { FamilyLawContractType, IntakeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ProjectsService } from '../projects/projects.service';
@@ -18,6 +18,7 @@ import { MajorPurchaseOnboardingService } from '../major-purchase/major-purchase
 import { JobSearchOnboardingService } from '../job-search/job-search-onboarding.service';
 import { EmployerHiringService } from '../employer-hiring/employer-hiring.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { isEnumValue } from '../common/enum-values';
 
 export const INTAKE_TASK_TYPE = 'intake-classify';
 /** Порог уверенности, ниже которого — UNIVERSAL (ТЗ §2.2 п.4; тест на границу). */
@@ -159,7 +160,7 @@ export class IntakeService {
         question: parsed.extracted.question.trim(),
         goal: parsed.extracted.goal?.trim() || null,
         facts: parsed.extracted.facts.filter((f) => typeof f === 'string' && f.trim()).map((f) => f.trim()),
-        contractType: parsed.extracted.contractType === 'PRENUP' || parsed.extracted.contractType === 'DIVORCE_SETTLEMENT' ? parsed.extracted.contractType : null,
+        contractType: isEnumValue(FamilyLawContractType, parsed.extracted.contractType) ? parsed.extracted.contractType : null,
       },
     };
   }

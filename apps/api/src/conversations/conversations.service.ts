@@ -32,9 +32,10 @@ import { ParalinguisticsService } from './paralinguistics.service';
 import { MEDIA_LEASE_MAX_AGE_MS } from '../ai-router/ai-provider-client';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
-import { ConversationProcessingStatus } from '@prisma/client';
+import { ConversationProcessingStatus, ConversationSignalType } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
 import { spendLimit } from '../common/spend-limits';
+import { subsetOf } from '../common/enum-values';
 
 /** Сколько отметка о заборе вебхука считается живой. Больше, чем
  * maxDuration функции (60 с) с запасом на холодный старт и на ретрай
@@ -52,6 +53,16 @@ const MEDIA_LEASE_REAP_BATCH = 100;
  * что у озвучки (`tts.synthesized`) — счётчик расхода живёт в журнале
  * действий, без содержимого записи. */
 const TRANSCRIPTION_USAGE_ACTION = 'transcription.requested';
+
+/** Сигналы, которые показывает раздел подачи речи: расхождение слов с
+ * подачей и смена тона. Пункт [enum-copy-drifted] 2026-09-29 — сужение
+ * объявлено от самого перечисления, а не переписано списком литералов:
+ * иначе отставшая копия и намеренное сужение выглядят одинаково. */
+const PARALINGUISTIC_SIGNALS = subsetOf(
+  ConversationSignalType,
+  [ConversationSignalType.DELIVERY_INCONGRUENCE, ConversationSignalType.EMOTIONAL_SHIFT],
+  'раздел подачи речи показывает только то, что слышно в голосе; остальные пять видов сигнала приходят из текстового разбора и живут на других экранах',
+);
 
 @Injectable()
 export class ConversationsService implements OnModuleInit {
@@ -700,7 +711,7 @@ export class ConversationsService implements OnModuleInit {
     const conversation = await this.findOwnedConversation(userId, conversationId);
     const signals = await this.prisma.conversationSignal.findMany({
       where: {
-        signalType: { in: ['DELIVERY_INCONGRUENCE', 'EMOTIONAL_SHIFT'] },
+        signalType: { in: [...PARALINGUISTIC_SIGNALS] },
         transcriptSegment: { transcript: { conversationId: conversation.id } },
         // Только сигналы с paralinguisticChannel или из паралингвистики:
         // EMOTIONAL_SHIFT умеет создавать и текстовый конвейер, панель

@@ -254,6 +254,7 @@ export const DELETION_REPORT_LABEL: Record<string, string> = {
   mediaQueues: 'очередей разбора медиа',
   aiInferences: 'сохранённых ответов AI',
   aiJobsCancelled: 'отменённых фоновых AI-задач',
+  aiJobsAnonymised: 'обезличенных записей AI-вызовов',
   auditEntriesScrubbed: 'записей журнала, из которых вычищены заметки о вас',
 };
 

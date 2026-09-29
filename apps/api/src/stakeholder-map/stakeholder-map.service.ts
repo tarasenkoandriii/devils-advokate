@@ -29,6 +29,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, StakeholderRole } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled, filled, substanceSite } from '../common/claim-substance';
+import { isEnumValue } from '../common/enum-values';
 
 const SUGGEST_ROLES_TASK_TYPE = 'stakeholder-role-suggestion';
 const TARGETED_ARGUMENTS_TASK_TYPE = 'stakeholder-argument-generation';
@@ -64,14 +65,13 @@ export function isValidSuggestRolesPayload(text: string): boolean {
     const parsed = JSON.parse(text);
     if (typeof parsed !== 'object' || parsed === null) return false;
     if (!Array.isArray(parsed.roleSuggestions) || !Array.isArray(parsed.gapSuggestions)) return false;
-    const validRoles = ['DECISION_MAKER', 'ADVISOR', 'BLOCKER', 'ALLY'];
     // Пункт [finding-without-substance-2] 2026-09-26: `personId` с
     // неизвестным значением уже отфильтровывается по знакомым id, а
     // обоснования — нет. Роль человеку предлагают ВМЕСТЕ с доводом:
     // предложение без довода — утверждение о человеке без опоры.
     return (
       parsed.roleSuggestions.every(
-        (r: any) => typeof r.personId === 'string' && validRoles.includes(r.role) && filled(r.reasoning),
+        (r: any) => typeof r.personId === 'string' && isEnumValue(StakeholderRole, r.role) && filled(r.reasoning),
       ) &&
       parsed.gapSuggestions.every((g: any) => filled(g.roleHint) && filled(g.reasoning))
     );

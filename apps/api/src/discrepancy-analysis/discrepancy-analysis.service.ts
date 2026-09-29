@@ -61,6 +61,7 @@ import { fetchWithTimeout } from '../common/fetch-with-timeout';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote } from '../common/partial-basis';
 import { orderLabel } from '../common/server-time';
+import { isEnumValue } from '../common/enum-values';
 
 // Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
 // Google Fact Check Tools API — четвёртый источник сверки §3.16 ТЗ
@@ -124,7 +125,9 @@ interface RawAiFallbackItem {
   sources?: string[];
 }
 
-function isValidAiFallbackPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidAiFallbackPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed) || parsed.length === 0) return false;
@@ -185,14 +188,16 @@ interface RawDiscrepancy {
   potentialImpact: string; // Пункт 42: для чего нужна проверка / на что может повлиять / риск эскалации — заполняется тем же AI-вызовом, что и остальные поля, не отдельным запросом при экспорте
 }
 
-function isValidDiscrepancyPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidDiscrepancyPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
     return parsed.every((item) => {
       if (
         typeof item.segmentId !== 'string' ||
-        !['INACCURACY', 'DISCREPANCY', 'STRONG_DISCREPANCY'].includes(item.severity) ||
+        !isEnumValue(SignalSeverity, item.severity) ||
         typeof item.sourceDescription !== 'string' ||
         typeof item.potentialImpact !== 'string' ||
         item.potentialImpact.trim().length === 0
@@ -231,14 +236,15 @@ interface RawSourceCheckResult {
   potentialImpact?: string; // Пункт 42: обязателен только при outcome=CONTRADICTED, тот же принцип, что и severity
 }
 
-function isValidSourceCheckPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ (Пункт [enum-copy-drifted]).
+export function isValidSourceCheckPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (typeof parsed !== 'object' || parsed === null) return false;
     if (!['CONFIRMED', 'CONTRADICTED', 'INSUFFICIENT'].includes(parsed.outcome)) return false;
     if (typeof parsed.explanation !== 'string' || parsed.explanation.trim().length === 0) return false;
     if (parsed.outcome === 'CONTRADICTED') {
-      if (!['INACCURACY', 'DISCREPANCY', 'STRONG_DISCREPANCY'].includes(parsed.severity)) return false;
+      if (!isEnumValue(SignalSeverity, parsed.severity)) return false;
       if (typeof parsed.potentialImpact !== 'string' || parsed.potentialImpact.trim().length === 0) return false;
     }
     return true;

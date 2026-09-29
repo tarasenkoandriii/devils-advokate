@@ -33,6 +33,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
+import { subsetOf } from '../common/enum-values';
 
 const TASK_TYPE = 'turning-point-detection';
 
@@ -50,7 +51,7 @@ export function isValidTurningPointsPayload(text: string): boolean {
     return parsed.every(
       (item) =>
         typeof item.segmentId === 'string' &&
-        (item.signalType === 'EMOTIONAL_SHIFT' || item.signalType === 'ARGUMENT_ACCEPTANCE') &&
+        (TURNING_POINT_SIGNALS as readonly string[]).includes(item.signalType) &&
         // Пункт [finding-without-substance] 2026-09-25: signalType называет
         // вид перелома, описание — что именно произошло. Без описания на
         // экране остаётся ярлык.
@@ -64,6 +65,16 @@ export function isValidTurningPointsPayload(text: string): boolean {
 
 const DEFAULT_SYSTEM_PROMPT =
   'Ты анализируешь транскрипт разговора построчно, с указанием говорящего и id реплики. Найди моменты, где направление разговора решающе изменилось: (1) EMOTIONAL_SHIFT — момент, после которого напряжённость разговора необратимо выросла или снизилась; (2) ARGUMENT_ACCEPTANCE — момент, где собеседник явно сдвинул позицию или согласился с чем-то. Для каждого найденного момента укажи id ИМЕННО ТОЙ реплики (segmentId), после которой произошёл перелом. Ответь СТРОГО валидным JSON-массивом объектов вида {"segmentId": string, "signalType": "EMOTIONAL_SHIFT"|"ARGUMENT_ACCEPTANCE", "description": string, "confidence": number от 0 до 1}. Если переломных моментов нет — верни пустой массив []. Без пояснений вне JSON.';
+
+/** Виды сигнала, которые находит разбор переломов. Пункт
+ * [enum-copy-drifted] 2026-09-29: остальные пять видов заводят другие
+ * разборы (манипуляции, прощупывание, риск для себя, расхождение фактов,
+ * расхождение слов с подачей) — это сужение, а не отставшая копия. */
+const TURNING_POINT_SIGNALS = subsetOf(
+  ConversationSignalType,
+  [ConversationSignalType.EMOTIONAL_SHIFT, ConversationSignalType.ARGUMENT_ACCEPTANCE],
+  'перелом в разговоре — это смена тона или принятие довода; остальные виды сигнала находят другие разборы и заводят сами',
+);
 
 @Injectable()
 export class TurningPointsService {

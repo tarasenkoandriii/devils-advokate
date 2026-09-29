@@ -12,6 +12,7 @@ import { assertInterviewPoolProjectAccess } from './interview-pool-access';
 import { consentRevoked } from './consent-revocation';
 import { TermsSheetService } from '../terms-sheet/terms-sheet.service';
 import { allFilled, allStringsFilled, itemFields, substanceSite } from '../common/claim-substance';
+import { subsetOf } from '../common/enum-values';
 
 const TASK_TYPE = 'interview-pool-relevance';
 
@@ -52,7 +53,7 @@ export function isValidAssessment(text: string): boolean {
     return parsed.criteriaBreakdown.every(
       (c: any) =>
         typeof c?.questionnaireItemId === 'string' &&
-        ['covered', 'partial', 'not_covered'].includes(c?.coverage) &&
+        (ASSESSED_COVERAGE as readonly string[]).includes(c?.coverage) &&
         // Пункт [finding-without-substance-2] 2026-09-26: «частично» без
         // обоснования — вывод о кандидате, который нечем проверить.
         allFilled(c, itemFields(substanceSite('isValidAssessment').required)),
@@ -76,6 +77,16 @@ const SYSTEM_PROMPT =
   'і followUpRequests — конкретні прогалини, які закриваються документом/прикладом роботи (не загальні побажання). ' +
   'КРИТИЧНО ВАЖЛИВО: НІКОЛИ не використовуй расу, стать, вік, релігію, інвалідність, вагітність, національність, сексуальну орієнтацію чи будь-які непрямі проксі-ознаки цих категорій (наприклад назва навчального закладу як маркер соціального класу, географія походження тощо) як підставу для жодного висновку — якщо в транскрипті це прозвучало, ІГНОРУЙ це повністю при оцінці. ' +
   'Відповідай СТРОГО валідним JSON вида {"criteriaBreakdown": [{"questionnaireItemId": string, "coverage": string, "note": string, "sourceSegmentId": string|null}], "attentionPoints": string[], "followUpRequests": string[]}. Без пояснень поза ним.';
+
+/** Покрытие, которое может назвать разбор собеседования. Пункт
+ * [enum-copy-drifted] 2026-09-29: `unknown` сюда НЕ входит намеренно —
+ * это значение означает «вопрос не разбирали», и приходит оно не от
+ * модели, а от отсутствия позиции вовсе. */
+const ASSESSED_COVERAGE = subsetOf(
+  ClauseCoverage,
+  [ClauseCoverage.covered, ClauseCoverage.partial, ClauseCoverage.not_covered],
+  'модель отвечает о том, что в разговоре прозвучало; «не разбирали» — не её ответ, а отсутствие ответа',
+);
 
 @Injectable()
 export class InterviewPoolRelevanceService {

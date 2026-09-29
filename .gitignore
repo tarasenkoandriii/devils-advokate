@@ -4,8 +4,11 @@
 # монорепо, не по одному на каждый apps/* — npm workspaces имеют общий
 # node_modules в корне, паттерны ниже покрывают все apps/* через **/.
 
-# Claude outputs
-Claude/outputs/
+# Папка, в которую приложение Claude складывает отданные в чат файлы.
+# Правило было написано как `Claude/outputs/` и не работало: это путь
+# «папка Claude → папка outputs», а настоящая папка называется
+# «Claude outputs», через пробел. Проверено `git check-ignore`.
+Claude outputs/
 
 # Зависимости
 node_modules/

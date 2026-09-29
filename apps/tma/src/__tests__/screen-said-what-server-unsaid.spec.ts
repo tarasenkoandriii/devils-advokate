@@ -64,7 +64,7 @@ function withoutComments(src: string): string {
 
 const FULL_RESULT: AccountDeletionResult = {
   deleted: true,
-  removed: { projects: 4, conversations: 11, people: 3, consents: 6, intakeSessions: 0, mediaQueues: 0, aiInferences: 12, aiJobsCancelled: 2, auditEntriesScrubbed: 5 },
+  removed: { projects: 4, conversations: 11, people: 3, consents: 6, intakeSessions: 0, mediaQueues: 0, aiInferences: 12, aiJobsCancelled: 2, aiJobsAnonymised: 2, auditEntriesScrubbed: 5 },
   externalArtifacts: { evidenceBlobs: 2, deleted: 2, failed: 1, conversationAudioBlobs: 7, sttJobsDiscarded: 3 },
   notRemovedHere: serverNotRemovedHere(),
   // Пункт [cascade-took-a-stranger] 2026-09-26: по умолчанию пусто —
@@ -83,7 +83,7 @@ const scenarios: Array<[string, () => void | Promise<void>]> = [
     // оставив ключевые тесты почти пустыми.
     const keys = serverRemovedKeys();
     const lines = serverNotRemovedHere();
-    assert(keys.length === 9, `реестр ключей с сервера разобран как ${keys.length} штук — дальнейшие проверки ничего не значат`);
+    assert(keys.length === 10, `реестр ключей с сервера разобран как ${keys.length} штук — дальнейшие проверки ничего не значат`);
     assert(lines.length === 6, `список «что остаётся» разобран как ${lines.length} строк`);
     assert(lines.every((l) => l.length > 60), 'строки списка разобраны обрывками');
   }],

@@ -26,6 +26,7 @@ import { ScenarioConfidence, ScenarioType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
 import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
+import { isEnumValue } from '../common/enum-values';
 
 /** Пункт [partial-basis] 2026-09-04 — лимиты законны, молчание о них нет. */
 const TOP_ARGUMENTS_LIMIT = 5;
@@ -51,18 +52,18 @@ interface RawScenario {
   confidence: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
-function isValidScenarioPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidScenarioPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
-    const validTypes = ['DO_NOTHING', 'ASSUME_HARM', 'ASSUME_HELP', 'USER_DEFINED'];
-    const validConfidence = ['LOW', 'MEDIUM', 'HIGH'];
     return parsed.every(
       (item) =>
-        validTypes.includes(item.scenarioType) &&
+        isEnumValue(ScenarioType, item.scenarioType) &&
         typeof item.outcomeDescription === 'string' &&
         item.outcomeDescription.trim().length > 0 &&
-        validConfidence.includes(item.confidence) &&
+        isEnumValue(ScenarioConfidence, item.confidence) &&
         (item.scenarioType !== 'USER_DEFINED' || typeof item.userDescription === 'string'),
     );
   } catch {

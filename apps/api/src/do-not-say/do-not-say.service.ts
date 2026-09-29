@@ -41,6 +41,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SelfRiskCategory } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
+import { isEnumValue } from '../common/enum-values';
 
 const TASK_TYPE = 'do-not-say-detection';
 
@@ -58,7 +59,7 @@ export function isValidDoNotSayPayload(text: string): boolean {
     return parsed.every(
       (item) =>
         typeof item.segmentId === 'string' &&
-        (item.riskCategory === 'ESCALATION' || item.riskCategory === 'LEVERAGE') &&
+        isEnumValue(SelfRiskCategory, item.riskCategory) &&
         // Пункт [finding-without-substance] 2026-09-25: «совет без причины»
         // запрещён комментарием ниже по потоку, но проверялся там только для
         // выдуманного сегмента. Пустое why давало ровно такой совет.

@@ -30,6 +30,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, ArgumentTrackingState, LiveArgumentTrackingStatus } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { isEnumValue } from '../common/enum-values';
 
 const TASK_TYPE = 'live-argument-tracking';
 
@@ -51,14 +52,16 @@ interface RawArgumentUpdate {
   status: 'NOT_MENTIONED' | 'NEEDS_REPEAT' | 'SUFFICIENTLY_MENTIONED' | 'GENUINELY_ACCEPTED';
 }
 
-function isValidTrackingPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidTrackingPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
     return parsed.every(
       (item) =>
         typeof item.argumentId === 'string' &&
-        ['NOT_MENTIONED', 'NEEDS_REPEAT', 'SUFFICIENTLY_MENTIONED', 'GENUINELY_ACCEPTED'].includes(item.status),
+        isEnumValue(ArgumentTrackingState, item.status),
     );
   } catch {
     return false;

@@ -30,7 +30,7 @@ import { createHash } from 'node:crypto';
 import { ExternalArtifactsCleanupService } from '../common/external-artifacts/external-artifacts-cleanup.service';
 import { AIJobStatus, Prisma } from '@prisma/client';
 import { describeDecision } from './decision-labels';
-import { ACCOUNT_NOT_REMOVED_HERE } from './deletion-report';
+import { ACCOUNT_NOT_REMOVED_HERE, SCRUBBED_INPUT_HASH } from './deletion-report';
 import { ownScopeIds, DECISIONS_OUT_OF_SCOPE } from './decision-scope';
 import { thirdPartyLosses, THIRD_PARTY_LOSSES_NOTE } from './deletion-impact';
 
@@ -141,6 +141,7 @@ export class PrivacyCenterService {
         ...counts,
         aiInferences: aiTraces.inferencesDeleted,
         aiJobsCancelled: aiTraces.jobsCancelled,
+        aiJobsAnonymised: aiTraces.jobsAnonymised,
         auditEntriesScrubbed: auditScrub.auditEntriesScrubbed,
       },
       externalArtifacts: {
@@ -161,11 +162,14 @@ export class PrivacyCenterService {
   /** Содержимое AI-вызовов пользователя: выводы удаляются, неисполненные
    * джобы отменяются (воркер их больше не возьмёт: submitQueued/pollRunning
    * выбирают только QUEUED/RUNNING), сериализованные запросы и обрывки
-   * ответов обнуляются. Строки джоб остаются — телеметрия без содержимого. */
+   * ответов обнуляются, а сами строки ОБЕЗЛИЧИВАЮТСЯ — снимаются
+   * `requestUserId`, `inputHash` и `externalInteractionId`. Строки
+   * остаются: на них стои́т телеметрия по фиче, и в них после этого нет
+   * ни содержимого, ни указания на человека. */
   private async scrubAiTraces(userId: string) {
     const jobs = await this.prisma.aIJob.findMany({ where: { requestUserId: userId }, select: { id: true } });
     const jobIds = jobs.map((j) => j.id);
-    if (jobIds.length === 0) return { inferencesDeleted: 0, jobsCancelled: 0 };
+    if (jobIds.length === 0) return { inferencesDeleted: 0, jobsCancelled: 0, jobsAnonymised: 0 };
 
     // Сверка «половины операции» 2026-09-04: четыре шага шли подряд, и
     // сбой между ними оставлял часть следов — например, инференсы уже
@@ -189,7 +193,28 @@ export class PrivacyCenterService {
           where: { id: { in: jobIds }, status: { not: AIJobStatus.CANCELLED } },
           data: { partialResult: null },
         });
-        return { inferencesDeleted: inferences.count, jobsCancelled: cancelled.count };
+        // Пункт [anonymised-was-not-anonymous] 2026-09-29. До этого шага
+        // строка джобы оставалась ПРИВЯЗАННОЙ К ЧЕЛОВЕКУ, хотя отчёт
+        // называл её обезличенной: `requestUserId` — его идентификатор,
+        // `inputHash` — sha256 его запроса (по нему подтверждается, что
+        // присылал именно он), `externalInteractionId` — ссылка на
+        // задачу у провайдера. Удалять строку нельзя (на ней стои́т
+        // телеметрия по фиче), поэтому снимается ровно то, чем она
+        // указывает на человека, и остаётся то, чем считают: тип
+        // задачи, статус, время, версия модели.
+        const anonymised = await tx.aIJob.updateMany({
+          where: { id: { in: jobIds } },
+          data: {
+            requestUserId: null,
+            externalInteractionId: null,
+            inputHash: SCRUBBED_INPUT_HASH,
+          },
+        });
+        return {
+          inferencesDeleted: inferences.count,
+          jobsCancelled: cancelled.count,
+          jobsAnonymised: anonymised.count,
+        };
       });
     } catch (err) {
       // Аккаунта уже нет — пожаловаться некому. Запись в аудит с перечнем

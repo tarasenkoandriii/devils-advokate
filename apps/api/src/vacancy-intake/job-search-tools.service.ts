@@ -18,7 +18,7 @@
 import { quoteIsFromSource } from '../common/quote-match';
 import { NotChecked } from '../common/not-checked';
 import { BadGatewayException, BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { ClauseCoverage, JobVacancyLocationMatch, TermsClauseKind, TermsSheetKind, TermsSide } from '@prisma/client';
+import { ClauseCoverage, JobSearchCriterionCategory, JobVacancyLocationMatch, TermsClauseKind, TermsSheetKind, TermsSide } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError, AsyncJobOutcome } from '../ai-router/ai-router.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
@@ -31,6 +31,7 @@ import type { CvDraft } from '../job-search/job-search.service';
 import { keywords } from '../vacancy-posting/posting-checks';
 import { takeSource, promptIntakeNote, AI_PROMPT_CHARS, type SourceIntake } from '../common/source-intake';
 import { spendLimit } from '../common/spend-limits';
+import { isEnumValue } from '../common/enum-values';
 
 export const BATCH_MATCH_TASK_TYPE = 'job-search-batch-match';
 export const QUERY_BUILDER_TASK_TYPE = 'job-search-query-builder';
@@ -241,7 +242,7 @@ export class JobSearchToolsService {
         where: { id: vacancy.id },
         data: {
           title: parsed.title,
-          locationMatch: (['MATCHES', 'DIFFERENT', 'UNKNOWN'].includes(parsed.locationMatch) ? parsed.locationMatch : 'UNKNOWN') as JobVacancyLocationMatch,
+          locationMatch: isEnumValue(JobVacancyLocationMatch, parsed.locationMatch) ? parsed.locationMatch : JobVacancyLocationMatch.UNKNOWN,
           salaryMentioned: parsed.salaryMentioned ?? null,
           matchBreakdown: parsed.matchBreakdown.filter((b) => known.has(b.criterionId)) as never,
           matchNotes: parsed.notes,
@@ -344,14 +345,14 @@ export class JobSearchToolsService {
     // `common/quote-match.ts`.
     const { kept: suggestions, skippedWithoutQuote } = keepQuoted(
       (JSON.parse(out.text) as { suggestions: Array<{ text: string; category: string; quote: string }> }).suggestions,
-      (s) => quoteIsFromSource(s.quote, transcript) && ['ROLE_FIT', 'COMPENSATION', 'LOCATION', 'CONDITIONS', 'OTHER'].includes(s.category),
+      (s) => quoteIsFromSource(s.quote, transcript) && isEnumValue(JobSearchCriterionCategory, s.category),
     );
     return { suggestions, skippedWithoutQuote };
   }
 
   async acceptCriterion(userId: string, projectId: string, dto: { text: string; category: string; isRequired: boolean }) {
     const config = await this.ctx(userId, projectId);
-    if (!['ROLE_FIT', 'COMPENSATION', 'LOCATION', 'CONDITIONS', 'OTHER'].includes(dto.category)) throw new BadRequestException('Неизвестная категория');
+    if (!isEnumValue(JobSearchCriterionCategory, dto.category)) throw new BadRequestException('Неизвестная категория');
     const last = config.criteria[config.criteria.length - 1];
     return this.prisma.jobSearchCriterion.create({ data: { configId: config.id, text: dto.text.trim().slice(0, 300), category: dto.category as never, isRequired: dto.isRequired, orderIndex: (last?.orderIndex ?? -1) + 1 } });
   }

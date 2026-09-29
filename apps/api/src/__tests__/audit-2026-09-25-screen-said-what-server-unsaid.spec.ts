@@ -48,8 +48,10 @@ describe('Пункт [screen-said-what-server-unsaid] 2026-09-25: один те�
 
   it('реестр ключей отчёта перечисляет ровно то, что складывает сервис', () => {
     // Числа счётчиков собираются в двух местах: countUserData (шесть) и
-    // scrub-шаги (три). Реестр существует, чтобы новый ключ был замечен
-    // здесь, а не вылез на экран машинным именем.
+    // scrub-шаги (четыре). Реестр существует, чтобы новый ключ был
+    // замечен здесь, а не вылез на экран машинным именем — и он
+    // сработал: `aiJobsAnonymised` завёл Пункт
+    // [anonymised-was-not-anonymous] 2026-09-29.
     expect(ACCOUNT_REMOVED_KEYS).toEqual([
       'projects',
       'conversations',
@@ -59,6 +61,7 @@ describe('Пункт [screen-said-what-server-unsaid] 2026-09-25: один те�
       'mediaQueues',
       'aiInferences',
       'aiJobsCancelled',
+      'aiJobsAnonymised',
       'auditEntriesScrubbed',
     ]);
   });

@@ -24,6 +24,7 @@ import { ConsentType, WeatherRecommendation } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { LOCATION_PURPOSES } from '../consent/location-purposes';
 import { instantUtc } from '../common/server-time';
+import { isEnumValue } from '../common/enum-values';
 
 const TASK_TYPE = 'weather-recommendation';
 const WINDY_API_KEY_REF = 'WINDY_API_KEY';
@@ -33,11 +34,13 @@ interface RawRecommendation {
   reason: string;
 }
 
-function isValidRecommendationPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidRecommendationPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     return (
-      (parsed.recommendation === 'PROCEED' || parsed.recommendation === 'RECONSIDER') &&
+      isEnumValue(WeatherRecommendation, parsed.recommendation) &&
       typeof parsed.reason === 'string' &&
       parsed.reason.trim().length > 0
     );

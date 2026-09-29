@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { AIJobStatus, ConversationProcessingStatus, MediaReviewItemStatus } from '@prisma/client';
 import { MediaReviewAutoService } from './media-review-auto.service';
+import { subsetOf } from '../common/enum-values';
 
 // Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
 // исчезает при компиляции, и ValidationPipe для него бессилен
@@ -35,6 +36,17 @@ export class CreateQueueItemInput {
 function mapConversationStatusToItemStatus(status: ConversationProcessingStatus): 'PROCESSING' | 'DONE' {
   return status === ConversationProcessingStatus.ANALYZED ? 'DONE' : 'PROCESSING';
 }
+
+/** Состояния, которые ещё имеет смысл синхронизировать с разговором.
+ * Пункт [enum-copy-drifted] 2026-09-29: `AWAITING_UPLOAD` синхронизировать
+ * нечего (ролика ещё нет), `DONE` — уже нечего (разбор завершён). Раньше
+ * синхронизировался только `READY`, и элемент навсегда застревал в
+ * `PROCESSING` — находка прошлого аудита, покрытая тестом. */
+const SYNCABLE_STATUSES = subsetOf(
+  MediaReviewItemStatus,
+  [MediaReviewItemStatus.READY, MediaReviewItemStatus.PROCESSING],
+  'синхронизировать имеет смысл только то, что уже загружено и ещё не завершено; крайние состояния синхронизации не требуют',
+);
 
 @Injectable()
 export class MediaReviewService {
@@ -153,7 +165,7 @@ export class MediaReviewService {
         // GET после привязки, PROCESSING→DONE — когда Conversation.status стал
         // ANALYZED. Раньше синхронизировался только READY, и элемент навсегда
         // застревал в PROCESSING (найдено аудитом, покрыто тестом).
-        if ((item.status === 'READY' || item.status === 'PROCESSING') && item.conversation) {
+        if ((SYNCABLE_STATUSES as readonly string[]).includes(item.status) && item.conversation) {
           // Пункт [multimodal] §6.4 [R2] — ветка FAILED. Общий маппинг
           // ниже сводит FAILED в PROCESSING (осознанное упрощение
           // ручного флоу), но для автоматического разбора это вернуло

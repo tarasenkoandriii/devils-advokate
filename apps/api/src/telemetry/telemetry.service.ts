@@ -14,11 +14,21 @@
 
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { subsetOf } from '../common/enum-values';
+import { AIJobStatus } from '@prisma/client';
 
 const NULL_GROUP_KEY = '__NULL_TASK_TYPE__';
 
-type StatusKey = 'COMPLETED' | 'FAILED' | 'TIMEOUT' | 'CANCELLED';
-const STATUS_KEYS: StatusKey[] = ['COMPLETED', 'FAILED', 'TIMEOUT', 'CANCELLED'];
+/** Конечные состояния задачи — те, по которым считается сводка. Пункт
+ * [enum-copy-drifted] 2026-09-29: QUEUED и RUNNING сюда не входят
+ * намеренно, это состояния «ещё идёт», и складывать их с исходами
+ * значило бы считать незавершённое завершённым. */
+const STATUS_KEYS = subsetOf(
+  AIJobStatus,
+  [AIJobStatus.COMPLETED, AIJobStatus.FAILED, AIJobStatus.TIMEOUT, AIJobStatus.CANCELLED],
+  'сводка считает ИСХОДЫ задач; QUEUED и RUNNING исходами не являются — задача ещё идёт',
+);
+type StatusKey = (typeof STATUS_KEYS)[number];
 
 export interface TelemetrySummaryRow {
   taskType: string | null;

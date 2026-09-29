@@ -34,6 +34,7 @@ import { assertEveryElementHasEvidence } from './cv-evidence';
 // Чистая функция, не сервис: импорт односторонний и DI не задевает
 // (vacancy-intake сам импортирует только job-search-access).
 import { contentHashOf } from '../vacancy-intake/vacancy-intake.service';
+import { isEnumValue } from '../common/enum-values';
 
 const CV_TASK_TYPE = 'job-search-cv-draft';
 const MATCH_TASK_TYPE = 'job-search-vacancy-match';
@@ -88,15 +89,17 @@ interface RawMatch {
   notes: string;
 }
 
-function isValidMatch(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidMatch(text: string): boolean {
   try {
     const p = JSON.parse(text);
     if (typeof p !== 'object' || p === null) return false;
     if (typeof p.title !== 'string' || p.title.trim().length === 0) return false;
-    if (!['MATCHES', 'DIFFERENT', 'UNKNOWN'].includes(p.locationMatch)) return false;
+    if (!isEnumValue(JobVacancyLocationMatch, p.locationMatch)) return false;
     if (p.salaryMentioned !== null && typeof p.salaryMentioned !== 'string') return false;
     if (!Array.isArray(p.matchBreakdown)) return false;
-    if (!p.matchBreakdown.every((b: any) => typeof b?.criterionId === 'string' && ['covered', 'partial', 'not_covered', 'unknown'].includes(b?.coverage) && typeof b?.note === 'string')) return false;
+    if (!p.matchBreakdown.every((b: any) => typeof b?.criterionId === 'string' && isEnumValue(ClauseCoverage, b?.coverage) && typeof b?.note === 'string')) return false;
     return typeof p.notes === 'string';
   } catch {
     return false;

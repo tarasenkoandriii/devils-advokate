@@ -20,6 +20,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentLifecycleStatus, ArgumentStance, LiveHintType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { subsetOf } from '../common/enum-values';
 
 const TASK_TYPE = 'live-hint';
 const INTERVIEW_TASK_TYPE = 'live-hint-interview';
@@ -53,12 +54,14 @@ interface RawHint {
   suggestedArgumentIndex?: number; // индекс в списке переданных кандидатов, не сам id (AI не должен придумывать id)
 }
 
-function isValidHintPayload(text: string): boolean {
+// Экспортируется ради проверки на ПОВЕДЕНИИ: сверка принимает КАЖДОЕ
+// значение перечисления (Пункт [enum-copy-drifted] 2026-09-29).
+export function isValidHintPayload(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (parsed === null) return true; // "нет уместной подсказки в этом цикле" — валидный честный ответ
     return (
-      (parsed.hintType === 'ARGUMENT_SUGGESTION' || parsed.hintType === 'TOPIC_REPETITION') &&
+      (QUIET_HINT_TYPES as readonly string[]).includes(parsed.hintType) &&
       typeof parsed.hintText === 'string' &&
       parsed.hintText.trim().length > 0
     );
@@ -69,6 +72,17 @@ function isValidHintPayload(text: string): boolean {
 
 const SYSTEM_PROMPT =
   'Тебе дан ПОСЛЕДНИЙ фрагмент транскрипта живого разговора (не весь разговор, только недавнее окно) и список аргументов, которые пользователь подготовил заранее, но ещё не озвучил. Реши, стоит ли дать ОДНУ тихую подсказку прямо сейчас — ТОЛЬКО если это действительно уместно, не для каждого цикла. Два возможных типа: (1) ARGUMENT_SUGGESTION — сейчас подходящий момент упомянуть один из непрозвучавших аргументов (укажи suggestedArgumentIndex — номер этого аргумента в переданном списке, начиная с 0); (2) TOPIC_REPETITION — собеседник явно повторно (минимум второй раз в этом фрагменте) возвращается к одной и той же теме — не игнорировать. Если ни один из двух случаев явно не подходит — верни JSON null, не выдумывай подсказку ради подсказки. Ответь СТРОГО валидным JSON: либо null, либо объектом вида {"hintType": "ARGUMENT_SUGGESTION"|"TOPIC_REPETITION", "hintText": string, "suggestedArgumentIndex": number}. Без пояснений вне JSON.';
+
+/** Типы тихой подсказки, которые может предложить ЭТА модель. Пункт
+ * [enum-copy-drifted] 2026-09-29: `UNASKED_QUESTION` сюда не входит
+ * намеренно — его заводят два других пути (незаданный вопрос по листу
+ * условий в `hiring-extras` и отдельный разбор ниже в этом же файле), и
+ * промпт этой модели о нём не спрашивает. */
+const QUIET_HINT_TYPES = subsetOf(
+  LiveHintType,
+  [LiveHintType.ARGUMENT_SUGGESTION, LiveHintType.TOPIC_REPETITION],
+  'промпт тихой подсказки предлагает модели ровно два случая; незаданный вопрос находит другой разбор, по листу условий',
+);
 
 @Injectable()
 export class LiveHintsService {
