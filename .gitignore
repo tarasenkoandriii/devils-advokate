@@ -4,6 +4,9 @@
 # монорепо, не по одному на каждый apps/* — npm workspaces имеют общий
 # node_modules в корне, паттерны ниже покрывают все apps/* через **/.
 
+# Claude outputs
+Claude/outputs/
+
 # Зависимости
 node_modules/
 **/node_modules/
