@@ -3,7 +3,7 @@
 // пересылка боту) — за x-dispatch-secret, как остальные /internal.
 import { JobVacancyResponseStatus } from '@prisma/client';
 import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UnauthorizedException, UseGuards, UseInterceptors } from '@nestjs/common';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -25,8 +25,8 @@ class EmailAlertDto {
 }
 class PastedDto {
   @IsString() @MinLength(20) @MaxLength(20_000) text!: string;
-  @IsOptional() @IsString() @MaxLength(200) title?: string | null;
-  @IsOptional() @IsString() @MaxLength(2048) sourceUrl?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200) title?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(2048) sourceUrl?: string | null;
 }
 class ResponsesDto {
   @IsString() @MinLength(1) @MaxLength(200_000) text!: string;
@@ -42,11 +42,11 @@ class FavoriteDto {
   @IsBoolean() favorite!: boolean;
 }
 class BatchDto {
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @IsString({ each: true }) vacancyIds!: string[];
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @IsString({ each: true }) @IsNotEmpty({ each: true }) vacancyIds!: string[];
 }
 class CriterionDto {
   @IsString() @MinLength(1) @MaxLength(300) text!: string;
-  @IsString() category!: string;
+  @IsString() @IsNotEmpty() category!: string;
   @IsBoolean() isRequired!: boolean;
 }
 class CoverLetterDto {
@@ -55,7 +55,7 @@ class CoverLetterDto {
 }
 class PackageDto {
   @IsIn(['name_honestly', 'skip']) notCoveredHandling!: 'name_honestly' | 'skip';
-  @IsOptional() @IsArray() @ArrayMaxSize(8) @IsString({ each: true }) questions?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(8) @IsString({ each: true }) @IsNotEmpty({ each: true }) questions?: string[];
 }
 class ForwardedDto {
   @IsString() telegramId!: string;

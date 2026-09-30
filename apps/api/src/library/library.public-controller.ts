@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, UseInterceptors } from '@nestjs/common';
-import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { LibraryService } from './library.service';
 
@@ -14,7 +14,7 @@ export class LibraryVoteDto {
 
 export class AddExperienceDto {
   @IsString() @MinLength(1) @MaxLength(4000) text!: string;
-  @IsOptional() @IsString() @MaxLength(100) authorDisplayName?: string;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(100) authorDisplayName?: string;
 }
 
 // НАМЕРЕННО БЕЗ @UseGuards(TelegramAuthGuard) — один из трёх публичных

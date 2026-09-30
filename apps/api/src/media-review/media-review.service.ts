@@ -6,7 +6,7 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength , IsNotEmpty} from 'class-validator';
 import { AIJobStatus, ConversationProcessingStatus, MediaReviewItemStatus } from '@prisma/client';
 import { MediaReviewAutoService } from './media-review-auto.service';
 import { subsetOf } from '../common/enum-values';
@@ -20,7 +20,7 @@ export class CreateQueueItemInput {
   @IsString() @Matches(/^[A-Za-z0-9_-]{11}$/) youtubeVideoId!: string;
   @IsString() @MinLength(1) @MaxLength(500) title!: string;
   @IsString() @MinLength(1) @MaxLength(200) channelName!: string;
-  @IsString() @MaxLength(2000) thumbnailUrl!: string;
+  @IsString() @IsNotEmpty() @MaxLength(2000) thumbnailUrl!: string;
   // Двенадцать часов — верх для ролика; больше означает ошибку ввода.
   @IsOptional() @IsInt() @Min(0) @Max(43_200) durationSeconds?: number;
   @IsOptional() @IsISO8601() publishedAt?: string;

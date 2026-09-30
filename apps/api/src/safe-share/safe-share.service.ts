@@ -19,7 +19,7 @@
 
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { ContentScanService } from '../content-scan/content-scan.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ScanTargetType } from '@prisma/client';
@@ -31,7 +31,7 @@ export class PreflightInput {
   // Текст уходит в сканирование содержимого, то есть в платный вызов —
   // потолок тот же, что у длинных пользовательских текстов проекта.
   @IsString() @MinLength(1) @MaxLength(60_000) text!: string;
-  @IsString() @MaxLength(100) contentType!: string;
+  @IsString() @IsNotEmpty() @MaxLength(100) contentType!: string;
   @IsOptional() @IsString() @MaxLength(100) projectId?: string;
 }
 

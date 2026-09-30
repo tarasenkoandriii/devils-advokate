@@ -4,7 +4,7 @@
 // 'engagements', 'offers'.
 import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { EmploymentLoad, ProjectMode, WorkArrangement } from '@prisma/client';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEnum, IsOptional, IsString, MaxLength, MinLength, IsNotEmpty } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { getOnboardingAnswers, listDomainProjects } from '../common/domain-onboarding-reads';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
@@ -31,10 +31,10 @@ class ConfigDto {
   @IsOptional() @IsEnum(WorkArrangement) workArrangement?: WorkArrangement | null;
   @IsOptional() @IsString() @MaxLength(200) officeLocation?: string | null;
   @IsOptional() @IsString() @MaxLength(200) employmentFormat?: string | null;
-  @IsOptional() @IsArray() @IsString({ each: true }) perks?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) @IsNotEmpty({ each: true }) perks?: string[];
 }
 class InviteDto {
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(4) @IsString({ each: true }) sharedItems!: string[];
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(4) @IsString({ each: true }) @IsNotEmpty({ each: true }) sharedItems!: string[];
   @IsOptional() @IsString() expiresAt?: string | null;
 }
 class AcceptDto {

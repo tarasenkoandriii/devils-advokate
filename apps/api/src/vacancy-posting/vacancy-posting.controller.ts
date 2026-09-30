@@ -1,7 +1,7 @@
 // Пункт [job-domain-v2] §6.5 — текст вакансии (агентство и работодатель) и
 // публичное согласование по токену (А-30).
 import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from '@nestjs/common';
-import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength, IsNotEmpty } from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -12,8 +12,8 @@ class RevisionDto {
   @IsString() @MinLength(1) @MaxLength(MAX_POSTING_CHARS) text!: string;
 }
 class VariantsDto {
-  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsString({ each: true }) channels?: string[];
-  @IsOptional() @IsArray() @ArrayMaxSize(5) @IsString({ each: true }) langs?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsString({ each: true }) @IsNotEmpty({ each: true }) channels?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(5) @IsString({ each: true }) @IsNotEmpty({ each: true }) langs?: string[];
 }
 class ReasonDto {
   @IsString() @MinLength(1) @MaxLength(300) reason!: string;

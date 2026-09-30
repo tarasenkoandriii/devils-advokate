@@ -1,7 +1,7 @@
 // Пункт [job-domain-v2] §6.5 — бриф (агентство: внешний; работодатель: внутренний).
 import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ClientBriefOrigin } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -10,7 +10,7 @@ import { ClientBriefService, MAX_BRIEF_CHARS } from './client-brief.service';
 
 class IngestDto {
   @IsString() @MinLength(1) @MaxLength(MAX_BRIEF_CHARS) rawText!: string;
-  @IsOptional() @IsString() @MaxLength(200) source?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200) source?: string | null;
   @IsOptional() @IsEnum(ClientBriefOrigin) origin?: ClientBriefOrigin;
 }
 

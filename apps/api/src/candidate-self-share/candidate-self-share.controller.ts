@@ -1,7 +1,7 @@
 // Пункт [job-domain-v2] К-8 — самошеринг соискателя: создание/отзыв в
 // job-search, публичное превью и приём — в candidate-shares.
 import { Body, Controller, Get, Param, Post, UseGuards, UseInterceptors } from '@nestjs/common';
-import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MinLength, IsNotEmpty } from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -10,7 +10,7 @@ import { CandidateSelfShareService, ShareEdge } from './candidate-self-share.ser
 
 class CreateSelfShareDto {
   @IsString() cvVariantId!: string;
-  @IsArray() @ArrayMaxSize(200) @IsString({ each: true }) visibleClauseIds!: string[];
+  @IsArray() @ArrayMaxSize(200) @IsString({ each: true }) @IsNotEmpty({ each: true }) visibleClauseIds!: string[];
   @IsIn(['to_agency', 'to_employer']) edge!: ShareEdge;
   @IsOptional() @IsString() consentVersion?: string | null;
   @IsOptional() @IsString() expiresAt?: string | null;

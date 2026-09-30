@@ -14,7 +14,7 @@
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { MoneyLike, sumMoney } from '../common/money';
 import { SecretsService } from '../secrets/secrets.service';
 import { getPlaceDetails, searchByText } from '../venue-recommendation/google-places-client';
@@ -29,11 +29,11 @@ const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 export class SubmitApplicationInput {
   @IsString() @MinLength(1) @MaxLength(300) name!: string;
   @IsString() @MinLength(1) @MaxLength(500) address!: string;
-  @IsOptional() @IsString() @MaxLength(50) phone?: string;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(50) phone?: string;
   // Семь строк расписания — по одной на день недели, с запасом.
-  @IsOptional() @IsArray() @ArrayMaxSize(14) @IsString({ each: true }) @MaxLength(200, { each: true }) openingHours?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(14) @IsString({ each: true }) @IsNotEmpty({ each: true }) @MaxLength(200, { each: true }) openingHours?: string[];
   @IsOptional() @IsString() @MaxLength(300) googlePlaceId?: string;
-  @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @MaxLength(2000, { each: true }) photoReferences?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @IsNotEmpty({ each: true }) @MaxLength(2000, { each: true }) photoReferences?: string[];
 }
 
 @Injectable()

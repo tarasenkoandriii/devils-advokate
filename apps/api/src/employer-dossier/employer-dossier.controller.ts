@@ -1,7 +1,7 @@
 // Пункт [job-domain-v2] §6.5 — компания (все роли; у работодателя — досье на себя).
 import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { EmployerFactCategory } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEnum, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -26,8 +26,8 @@ class SourceDto {
 
 class RepresentativeDto {
   @IsString() @MinLength(1) @MaxLength(120) displayName!: string;
-  @IsOptional() @IsString() @MaxLength(120) claimedRole?: string | null;
-  @IsOptional() @IsString() @MaxLength(253) contactDomain?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(120) claimedRole?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(253) contactDomain?: string | null;
   @IsOptional() @IsString() personId?: string | null;
 }
 

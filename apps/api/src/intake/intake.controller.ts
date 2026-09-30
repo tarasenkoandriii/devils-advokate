@@ -7,7 +7,7 @@ import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SecretsService } from '../secrets/secrets.service';
 import { IntakeScenario, IntakeService } from './intake.service';
 import { safeSecretEqual } from '../common/timing-safe-equal';
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength, MinLength} from 'class-validator';
 
 export class TextDto {
   // Пункт [validation] 2026-09-01: ответ квиза уходит в LLM-контекст —
@@ -30,6 +30,11 @@ export class TextDto {
   source?: string;
 
   @IsOptional()
+  // Пункт [the-question-was-asked-of-the-neighbour] 2026-09-30: сюда был
+  // добавлен `@IsNotEmpty()`, и мутация показала, что он НЕ НУЖЕН —
+  // шаблон ниже пустую строку и так не пропускает (`+`, а не `*`).
+  // Откачено: правило, которое ничего не держит, врёт следующему
+  // читателю о том, чем поле защищено.
   @IsString()
   @MaxLength(64)
   @Matches(/^[A-Za-z0-9_-]+$/, { message: 'campaign: допустимы только A-Za-z0-9_-' })

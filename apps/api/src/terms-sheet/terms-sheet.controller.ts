@@ -4,7 +4,7 @@
 
 import { Body, Controller, Get, Param, Patch, Post, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ClauseCoverage, ClauseStance, EvidenceKind, TermsClauseKind, TermsSheetStatus, TermsSide } from '@prisma/client';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsEnum, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -14,7 +14,7 @@ import { CvVariantService, HighlightMapEntry } from './cv-variant.service';
 import { CvDialogueService } from './cv-dialogue.service';
 
 class IdsDto {
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(200) @IsString({ each: true })
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(200) @IsString({ each: true }) @IsNotEmpty({ each: true })
   ids!: string[];
 }
 
@@ -22,7 +22,7 @@ class AddClauseDto {
   @IsEnum(TermsSide) side!: TermsSide;
   @IsEnum(TermsClauseKind) kind!: TermsClauseKind;
   @IsString() @MinLength(1) @MaxLength(500) text!: string;
-  @IsOptional() @IsString() @MaxLength(80) category?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(80) category?: string | null;
   @IsOptional() @IsBoolean() isRequired?: boolean;
 }
 
@@ -42,13 +42,13 @@ class AddPositionDto {
   @IsEnum(TermsSide) bySide!: TermsSide;
   @IsOptional() @IsEnum(ClauseCoverage) coverage?: ClauseCoverage | null;
   @IsOptional() @IsEnum(ClauseStance) stance?: ClauseStance | null;
-  @IsOptional() @IsString() @MaxLength(600) note?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(600) note?: string | null;
   @IsString() @MinLength(1) @MaxLength(500) evidenceQuote!: string;
 }
 
 class AddOfferDto {
   @IsString() @MinLength(1) @MaxLength(20_000) rawText!: string;
-  @IsOptional() @IsString() @MaxLength(200) source?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(200) source?: string | null;
 }
 
 class StatusDto {
@@ -61,7 +61,7 @@ class CompileDto {
 }
 
 class RefsDto {
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @IsString({ each: true })
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(50) @IsString({ each: true }) @IsNotEmpty({ each: true })
   refs!: string[];
 }
 

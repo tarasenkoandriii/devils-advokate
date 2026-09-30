@@ -6,7 +6,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, IsNotEmpty } from 'class-validator';
 import { assertProjectOwnership } from '../common/project-ownership';
 
 // Пункт [body-classes] 2026-09-04: КЛАСС, а не интерфейс — интерфейс
@@ -19,10 +19,10 @@ export class SaveDecisionObjectiveInput {
   @IsOptional() @IsString() @MaxLength(4000) unacceptableOutcome?: string;
   @IsOptional() @IsString() @MaxLength(200) deadline?: string;
   // Массив без потолка — тот же безлимитный текст, только в другой обёртке.
-  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) constraints?: string[];
-  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) nonNegotiables?: string[];
-  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) negotiables?: string[];
-  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @MaxLength(1000, { each: true }) doNotSay?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @IsNotEmpty({ each: true }) @MaxLength(1000, { each: true }) constraints?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @IsNotEmpty({ each: true }) @MaxLength(1000, { each: true }) nonNegotiables?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @IsNotEmpty({ each: true }) @MaxLength(1000, { each: true }) negotiables?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(50) @IsString({ each: true }) @IsNotEmpty({ each: true }) @MaxLength(1000, { each: true }) doNotSay?: string[];
 }
 
 @Injectable()

@@ -8,7 +8,7 @@
 // два согласия и приём ответов.
 import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested , IsNotEmpty} from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
@@ -33,7 +33,7 @@ class PredictionDto {
 }
 class PromiseDto {
   @IsString() @MinLength(1) @MaxLength(1000) description!: string;
-  @IsOptional() @IsString() dueDate?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() dueDate?: string | null;
 }
 class ExistingCandidateDto {
   @IsString() @MinLength(1) candidateProfileId!: string;

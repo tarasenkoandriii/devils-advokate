@@ -21,7 +21,7 @@
 
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength , IsNotEmpty} from 'class-validator';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ProtectedNoteType } from '@prisma/client';
 
@@ -32,7 +32,7 @@ export class CreateProtectedNoteInput {
   @IsEnum(ProtectedNoteType) type!: ProtectedNoteType;
   @IsString() @MinLength(1) @MaxLength(4000) content!: string;
   // осмысленно только для FALLBACK_PLAN
-  @IsOptional() @IsString() @MaxLength(1000) triggerCondition?: string;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(1000) triggerCondition?: string;
   // осмысленно только для FALLBACK_PLAN
   @IsOptional() @IsInt() @Min(1) @Max(100) planOrder?: number;
 }
@@ -40,7 +40,7 @@ export class CreateProtectedNoteInput {
 export class UpdateProtectedNoteInput {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(4000) content?: string;
   // null здесь осмыслен — это очистка поля, а не «не трогать».
-  @IsOptional() @IsString() @MaxLength(1000) triggerCondition?: string | null;
+  @IsOptional() @IsString() @IsNotEmpty() @MaxLength(1000) triggerCondition?: string | null;
   @IsOptional() @IsInt() @Min(1) @Max(100) planOrder?: number | null;
 }
 
