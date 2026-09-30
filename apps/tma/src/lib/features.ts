@@ -1,4 +1,7 @@
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, handle } from './api';
+// Пункт [green-deploy-pointed-at-localhost] 2026-09-30: пять локальных
+// копий дефолта адреса заменены одним общим местом с проверкой.
+import { API_BASE_URL } from './api-base-url';
 import type { LiveTranscriptionCredentials } from './live-transcription';
 
 /** Пункт [stt-multi] 2026-09-02: шаг загрузки говорит, КОМУ ушли байты
@@ -566,7 +569,6 @@ export async function uploadConversationAudio(
   file: File,
 ): Promise<{ audioUrl: string }> {
   const { getAuthHeaders } = await import('./telegram');
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
   const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/upload`, {
     method: 'POST',
@@ -614,7 +616,6 @@ export async function uploadConversationAudioToBlob(
 ): Promise<{ pathname: string; sizeBytes: number }> {
   const { upload } = await import('@vercel/blob/client');
   const { getAuthHeaders } = await import('./telegram');
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
   // Префикс обязан совпадать с AUDIO_PREFIX в
   // apps/api/src/conversations/audio-blob.service.ts — бэкенд
@@ -1033,7 +1034,6 @@ export interface PhotoVerificationUploadResult {
 
 export async function uploadPhotoForVerification(personFactId: string, file: File): Promise<PhotoVerificationUploadResult> {
   const { getAuthHeaders } = await import('./telegram');
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
   // Тот же паттерн, что uploadConversationAudio() — потоковая
   // передача файла напрямую как body, не JSON, разбор ответа
@@ -1162,7 +1162,6 @@ export function endSparringSession(sessionId: string): Promise<SparringSession> 
 // как body у fetch() передаётся потоково нативно, не через apiPost.
 export async function uploadSparringVoiceReply(sessionId: string, file: File): Promise<VoiceUploadResult> {
   const { getAuthHeaders } = await import('./telegram');
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
   const response = await fetch(`${API_BASE_URL}/sparring-sessions/${sessionId}/voice-upload`, {
     method: 'POST',
@@ -1698,7 +1697,6 @@ export function endMaterialChatSession(sessionId: string): Promise<MaterialChatS
 // (Пункт 69) — File как body у fetch() передаётся потоково нативно.
 export async function uploadMaterialChatVoiceReply(sessionId: string, file: File): Promise<VoiceUploadResult> {
   const { getAuthHeaders } = await import('./telegram');
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
 
   const response = await fetch(`${API_BASE_URL}/material-chat-sessions/${sessionId}/voice-upload`, {
     method: 'POST',

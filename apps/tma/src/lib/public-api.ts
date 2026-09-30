@@ -9,7 +9,9 @@
 import { handle } from './api';
 import { PublicDiscussionView, PublicParticipant, PublicArgumentSubmission, LibraryEntry, LibraryExperience, ApprovedVenue } from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+// Пункт [green-deploy-pointed-at-localhost] 2026-09-30: адрес API —
+// одно место на приложение, с проверкой на платформе.
+import { API_BASE_URL } from './api-base-url';
 
 async function publicReq<T>(path: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {

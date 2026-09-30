@@ -63,6 +63,33 @@ function cronJobsInSqlFiles(): Array<{ jobname: string; schedule: string; file: 
   return out;
 }
 
+/** Код без комментариев — для сверок, которые меряют РАССТОЯНИЕ между
+ *  выражениями или ищут выражение по образцу. Комментарий и удлиняет
+ *  окно, и умеет изображать код: обе беды снимаются одной чисткой. */
+function withoutComments(src: string): string {
+  let out = '';
+  let state: 'code' | 'line' | 'block' | '"' | "'" | '`' = 'code';
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const two = src.slice(i, i + 2);
+    if (state === 'code') {
+      if (two === '//') { state = 'line'; i++; continue; }
+      if (two === '/*') { state = 'block'; i++; continue; }
+      if (c === '"' || c === "'" || c === '`') { state = c; out += c; continue; }
+      out += c;
+    } else if (state === 'line') {
+      if (c === '\n') { state = 'code'; out += c; }
+    } else if (state === 'block') {
+      if (two === '*/') { state = 'code'; i++; }
+    } else {
+      if (c === '\\') { out += src.slice(i, i + 2); i++; continue; }
+      if (c === state) state = 'code';
+      out += c;
+    }
+  }
+  return out;
+}
+
 describe('Фоновые задачи: то, что работает, пока никто не смотрит', () => {
   it('КЛЮЧЕВОЙ ТЕСТ: список ожидаемых плановых задач совпадает с pg_cron_*.sql — имя, расписание и файл', () => {
     // Этот тест и есть механизм, который не даёт списку отстать. Раньше
@@ -150,7 +177,16 @@ describe('Фоновые задачи: то, что работает, пока �
     ];
     const unbounded: string[] = [];
     for (const b of bounded) {
-      const src = readFileSync(join(API_SRC, b.file), 'utf8');
+      // Пункт [the-retry-killed-the-record] 2026-09-30: КОММЕНТАРИИ
+      // ВЫБРАСЫВАЮТСЯ ПЕРЕД СВЕРКОЙ. Окно между фильтром и потолком
+      // меряется в знаках, и без чистки его переполняет объяснение,
+      // дописанное рядом: правка, добавившая к `reapExpired` четыре
+      // строки комментария, уронила эту сверку, ничего не изменив в
+      // поведении. Сверка, наказывающая за объяснение рядом с кодом, — в
+      // проекте, где объяснение обязано быть рядом с кодом, — сторожит
+      // не то. Обратная сторона той же чистки важнее: закомментированный
+      // `take: REAP_BATCH` теперь не может изобразить потолок.
+      const src = withoutComments(readFileSync(join(API_SRC, b.file), 'utf8'));
       if (!b.marker.test(src)) unbounded.push(`${b.file} → ${b.method}`);
     }
     expect(unbounded).toEqual([]);

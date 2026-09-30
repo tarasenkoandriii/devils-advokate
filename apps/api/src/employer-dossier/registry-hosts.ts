@@ -38,15 +38,38 @@ export const DEFAULT_REGISTRY_HOSTS: Record<string, RegistryHost[]> = {
   ],
 };
 
+// Пункт [typo-looked-like-a-decision] 2026-09-30. Битый JSON в
+// переменной молча заменялся полным списком по умолчанию — без строки в
+// логе. Владелец, СУЗИВШИЙ список реестров (например убравший
+// агрегаторы `opendatabot.ua` и `youcontrol.com.ua`) и поставивший
+// лишнюю запятую, получал ровно то, что убирал, и ни одного признака
+// того, что его настройку не прочитали. «Опечатался» и «решил так»
+// выглядели одинаково — та же порода, что «пробел выглядит как
+// полнота», только на стороне оператора. Дефолт остаётся дефолтом
+// (падать на старте из-за переменной, у которой есть осмысленное
+// умолчание, хуже), но теперь он назван вслух.
+function registryHostsFallbackReason(reason: string): Record<string, RegistryHost[]> {
+  console.error(
+    `EMPLOYER_REGISTRY_HOSTS не прочитана (${reason}) — взят список реестров по умолчанию. ` +
+      'Если список задавался намеренно, он СЕЙЧАС НЕ ДЕЙСТВУЕТ.',
+  );
+  return DEFAULT_REGISTRY_HOSTS;
+}
+
 export function loadRegistryHosts(env: NodeJS.ProcessEnv = process.env): Record<string, RegistryHost[]> {
   const raw = env.EMPLOYER_REGISTRY_HOSTS;
+  // Не выставлена — это не ошибка, а обычный случай: молчим.
   if (!raw) return DEFAULT_REGISTRY_HOSTS;
   try {
     const parsed = JSON.parse(raw) as Record<string, RegistryHost[]>;
-    if (typeof parsed !== 'object' || parsed === null) return DEFAULT_REGISTRY_HOSTS;
+    if (typeof parsed !== 'object' || parsed === null) {
+      return registryHostsFallbackReason('разобранное значение не объект');
+    }
     return parsed;
-  } catch {
-    return DEFAULT_REGISTRY_HOSTS;
+  } catch (err) {
+    return registryHostsFallbackReason(
+      `JSON не разобран: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

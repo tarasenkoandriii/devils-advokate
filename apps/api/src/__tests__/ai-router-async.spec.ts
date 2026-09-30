@@ -697,9 +697,14 @@ describe('AIRouterService — воркер', () => {
   it('сторожевая различает QUEUED (воркер не поставил) и RUNNING (провайдер молчит)', async () => {
     const deps = makeDeps();
     const router = makeRouter(deps);
+    // Пункт [the-retry-killed-the-record] 2026-09-30: `pendingRequest` в
+    // строках обязателен — именно по нему сторожевая отличает
+    // асинхронную полосу от синхронной, а настоящий `select` это поле
+    // всегда возвращает. Фикстура без него описывала состояние, которого
+    // в базе не бывает.
     deps.prisma.aIJob.findMany = jest.fn(async (): Promise<any[]> => [
-      { id: 'q1', status: 'QUEUED', taskType: 't' },
-      { id: 'r1', status: 'RUNNING', taskType: 't' },
+      { id: 'q1', status: 'QUEUED', taskType: 't', pendingRequest: { userId: USER, taskType: 't' } },
+      { id: 'r1', status: 'RUNNING', taskType: 't', pendingRequest: { userId: USER, taskType: 't' } },
     ]);
     deps.prisma._jobs.set('q1', { id: 'q1', status: 'QUEUED' });
     deps.prisma._jobs.set('r1', { id: 'r1', status: 'RUNNING' });

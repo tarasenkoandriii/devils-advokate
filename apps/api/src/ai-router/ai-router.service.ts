@@ -29,6 +29,12 @@ import {
   EXTERNAL_INTERACTION_MAX_WAIT_MS,
   ProviderHttpError,
 } from './ai-provider-client';
+import {
+  FUNCTION_MAX_DURATION_MS,
+  SYNC_LEASE_MS,
+  fitsAnotherProviderCall,
+  msLeftForOutcome,
+} from './sync-budget';
 import { MediaUriResolverService } from './media-uri-resolver.service';
 import { MAX_USER_PROMPT_CHARS, assertWithinLimit } from './prompt-limits';
 import {
@@ -238,17 +244,25 @@ export class AIRouterService {
       return prepared.reused;
     }
 
+    // Пункт [the-retry-killed-the-record] 2026-09-30: начало отсчёта
+    // бюджета функции. Берётся ПОСЛЕ пролога намеренно — пролог
+    // (согласие, скан, потолки) наружу не ходит и в предел функции
+    // укладывается всегда, а занижение остатка отменило бы осмысленные
+    // повторы.
+    const startedAtMs = Date.now();
+
     try {
       return await this.attemptWithRetryAndFallback(
         prepared.job!.id,
         prepared.modelVersion,
         prepared.sanitizedRequest,
         prepared.maxRetries,
+        startedAtMs,
       );
     } catch (err) {
       await this.prisma.aIJob.update({
         where: { id: prepared.job!.id },
-        data: { status: AIJobStatus.FAILED, completedAt: new Date() },
+        data: { status: AIJobStatus.FAILED, completedAt: new Date(), leaseExpiresAt: null },
       });
       throw err;
     }
@@ -455,6 +469,13 @@ export class AIRouterService {
         // что без него требование §4.4 о проверке владения выполнить
         // нечем: pendingRequest обнуляется при завершении.
         requestUserId: sanitizedRequest.userId,
+        // Пункт [the-retry-killed-the-record] 2026-09-30: срок аренды
+        // для СИНХРОННОЙ полосы. Без него сторожевая не видела джобу,
+        // убитую пределом функции (условие `lt: now` для NULL не
+        // выполняется), и та оставалась RUNNING навсегда. Асинхронная
+        // полоса свой, более короткий срок забора выставляет ниже, в
+        // enqueue(), — поэтому здесь NULL, а не общее значение.
+        leaseExpiresAt: lane === 'sync' ? new Date(Date.now() + SYNC_LEASE_MS) : null,
       },
     });
 
@@ -698,6 +719,9 @@ export class AIRouterService {
     modelVersion: ModelVersionWithProvider,
     request: AIRouterRequest,
     maxRetries: number,
+    /** Начало отсчёта бюджета функции. Пункт
+     *  [the-retry-killed-the-record] 2026-09-30. */
+    startedAtMs: number,
   ): Promise<AIRouterResult> {
     await this.prisma.aIJob.update({
       where: { id: jobId },
@@ -726,6 +750,24 @@ export class AIRouterService {
         if (err instanceof ProviderHttpError && !err.isRetryable) {
           break;
         }
+        // Пункт [the-retry-killed-the-record] 2026-09-30 — повтор
+        // только если его исход успеет попасть в базу.
+        //
+        // Раньше здесь решал НОМЕР попытки, и это было решение без
+        // фактов: попытка, упёршаяся в свой потолок 45 с, оставляла до
+        // предела функции 15 с, а следующая просила снова 45 — то есть
+        // повтор гарантированно доводил функцию до обрыва платформой, в
+        // котором не исполняется ни один catch и причина провала не
+        // записывается НИКУДА. Повтор уничтожал ровно то, ради чего
+        // нужен. Теперь решает ОСТАТОК: быстрый отказ (401, 429,
+        // обрыв сети) повтор оставляет, истёкший потолок — нет.
+        if (!fitsAnotherProviderCall(startedAtMs, Date.now())) {
+          this.logger.warn(
+            `Job ${jobId}: повтор отменён — до предела функции ${FUNCTION_MAX_DURATION_MS} мс ` +
+              `осталось ${msLeftForOutcome(startedAtMs, Date.now())} мс, этого не хватит на ещё один вызов провайдера`,
+          );
+          break;
+        }
         // Экспоненциальная пауза между попытками (500мс, 1с, 2с…) —
         // мгновенный повтор в перегруженный провайдер лишь усугубляет
         // 429. Нулевая в тестах (jest выставляет NODE_ENV=test).
@@ -751,7 +793,10 @@ export class AIRouterService {
         where: { id: job.fallbackModelVersionId },
         include: { model: { include: { provider: true } } },
       });
-      if (fallbackVersion) {
+      // Тот же бюджет, что у повтора: запасной движок — это ещё одно
+      // обращение к провайдеру, и без времени на запись исхода оно
+      // стоит столько же, сколько повтор, то есть уничтожает запись.
+      if (fallbackVersion && fitsAnotherProviderCall(startedAtMs, Date.now())) {
         try {
           this.logger.warn(`Job ${jobId} falling back to ${fallbackVersion.model.name}`);
           return await this.callAndPersist(jobId, fallbackVersion, request, maxRetries + 1);
@@ -845,6 +890,10 @@ export class AIRouterService {
         status: AIJobStatus.COMPLETED,
         schemaValidation: SchemaValidationResult.PASS,
         completedAt: new Date(),
+        // Срок аренды снимается вместе с завершением: сторожевая
+        // смотрит только на QUEUED/RUNNING, но оставленный срок читался
+        // бы как «эта джоба когда-то зависала».
+        leaseExpiresAt: null,
       },
     });
 
@@ -857,7 +906,11 @@ export class AIRouterService {
   // Наша функция НИКОГДА не ждёт модель: submitQueued ставит задачу
   // провайдеру (background: true, ~1 c), pollRunning забирает статус
   // (~1 c). Ожидание целиком на стороне Google — сколько бы ролик ни
-  // считался, в maxDuration: 10 мы укладываемся всегда.
+  // считался, в предел одного вызова функции мы укладываемся всегда.
+  // (До 2026-09-30 здесь стояло «в maxDuration: 10»: в `vercel.json`
+  // уже год 60, и число в комментарии расходилось с числом в конфиге —
+  // ровно то, из-за чего предел теперь живёт одной константой в
+  // `sync-budget.ts` и сверяется с конфигом проверкой.)
   //
   // AIJob при этом остаётся единицей УЧЁТА, а не ожидания: провенанс
   // (AIInference), телеметрия по taskType, ретраи с fallback,
@@ -1377,19 +1430,43 @@ export class AIRouterService {
         status: { in: [AIJobStatus.QUEUED, AIJobStatus.RUNNING] },
         leaseExpiresAt: { lt: new Date() },
       },
-      select: { id: true, status: true, taskType: true },
+      // pendingRequest различает полосы и уже несёт эту роль в коде:
+      // воркер забирает только `QUEUED AND "pendingRequest" IS NOT
+      // NULL`, а обнуляется поле лишь при завершении. Значит у живой
+      // джобы непустое поле = асинхронная полоса, пустое = синхронная.
+      select: { id: true, status: true, taskType: true, pendingRequest: true },
       orderBy: [{ leaseExpiresAt: 'asc' }, { id: 'asc' }],
       take: REAP_BATCH,
     });
     let reaped = 0;
     let reapFailed = 0;
     for (const job of expired) {
-      const reason =
-        job.status === AIJobStatus.QUEUED
+      // Пункт [the-retry-killed-the-record] 2026-09-30 — третья
+      // причина. Синхронную полосу сторожевая раньше не видела вообще
+      // (срок аренды у неё не выставлялся), и, начав видеть, назвала бы
+      // её причинами асинхронной: «воркер не поставил задачу» про
+      // полосу без воркера — это отправить оператора проверять
+      // pg_cron-джобы, которые тут ни при чём.
+      // Сравнение покрывает и undefined: живая джоба асинхронной полосы
+      // без сериализованного запроса невозможна (воркер забирает только
+      // `pendingRequest IS NOT NULL`), поэтому «нет значения» в любом
+      // виде означает синхронную полосу, а не «не выбрали поле».
+      const syncLane = job.pendingRequest === null || job.pendingRequest === undefined;
+      const reason = syncLane
+        ? failureText(
+            'function-cut-off',
+            'функция оборвана платформой до записи исхода (предел одного вызова) — запрос человека не завершён и не помечен; цепочка вызовов этой фичи в предел не укладывается',
+          )
+        : job.status === AIJobStatus.QUEUED
           ? failureText('worker-never-sent', 'воркер не поставил задачу провайдеру до истечения lease — проверьте pg_cron-джобы ai_jobs')
           : failureText('provider-timeout', 'провайдер не завершил задачу за EXTERNAL_INTERACTION_MAX_WAIT_MS; задача могла остаться у провайдера');
+      const operatorKind = syncLane
+        ? 'function-cut-off'
+        : reason.operator.startsWith('worker-never-sent')
+          ? 'worker-never-sent'
+          : 'provider-timeout';
       try {
-        const outcome = await this.failJob(job.id, reason, reason.operator.startsWith('worker-never-sent') ? 'worker-never-sent' : 'provider-timeout');
+        const outcome = await this.failJob(job.id, reason, operatorKind);
         await this.notifyCompletion(job.taskType, outcome);
         reaped++;
       } catch (err) {

@@ -5,7 +5,9 @@
 
 import { getAuthHeaders } from './telegram';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+// Пункт [green-deploy-pointed-at-localhost] 2026-09-30: адрес API —
+// одно место на приложение, с проверкой на платформе.
+import { API_BASE_URL } from './api-base-url';
 
 export interface ApiSuccessResponse<T> {
   success: true;
@@ -66,6 +68,40 @@ export function humanizeApiError(message: string, httpStatus: number): string {
   return HUMAN_BY_STATUS[httpStatus] ?? HUMAN_FALLBACK;
 }
 
+// Пункт [cut-off-was-called-malformed] 2026-09-30 — что человек читает,
+// когда платформа обрывает запрос по времени.
+//
+// НАЙДЕННОЕ. Тело, которое не разобралось как JSON, давало ОДНУ фразу
+// на все случаи: «Сервер вернул некорректный ответ». Самый частый
+// случай при этом — не некорректный ответ, а ОТСУТСТВИЕ ответа:
+// предел одного вызова функции 60 с, а один шаг модели с повтором
+// просил до 90 с (см. `apps/api/src/ai-router/sync-budget.ts`), и
+// платформа отдаёт свою страницу 504 — не JSON. Человек читал
+// утверждение о сервере, которое не было правдой: ничего некорректного
+// сервер не вернул, запрос был прерван. Хуже того, фраза с кириллицей
+// возвращается из `humanizeApiError` дословно, то есть ветка «сбой на
+// нашей стороне» для статусов 5xx при платформенном обрыве не
+// достигалась НИКОГДА.
+//
+// И вторая половина, важная для доверия: расход отмечается ДО платного
+// шага (иначе недосчёт при отказе провайдера), поэтому оборванная
+// попытка суточный потолок уже израсходовала. Говорить «попробуйте
+// ещё раз», не сказав этого, — отправлять человека тратить второй раз.
+const CUT_OFF_STATUSES = new Set([408, 502, 503, 504, 524]);
+
+/** Текст для ответа, который не разобрался как JSON. Разделяет «нет
+ *  ответа» и «ответ не разобран»: это разные события, и делать человеку
+ *  из них одно — врать в одном из двух случаев. */
+export function nonJsonMessage(httpStatus: number): string {
+  if (CUT_OFF_STATUSES.has(httpStatus)) {
+    return 'Запрос был прерван по времени: ответ не пришёл. Часть работы могла успеть выполниться, а суточный лимит за эту попытку уже учтён — прежде чем повторять, проверьте состояние. Если повторяется, дело на нашей стороне.';
+  }
+  if (httpStatus >= 500) {
+    return 'Сбой на нашей стороне: ответ не разобран. Повторите позже.';
+  }
+  return HUMAN_BY_STATUS[httpStatus] ?? 'Ответ сервера не удалось разобрать. Если повторяется, дело на нашей стороне.';
+}
+
 export class ApiRequestError extends Error {
   /** Исходный текст ответа API. Совпадает с `message`, когда сообщение
    * писалось для человека; иначе — то инженерное, что заменено. */
@@ -116,7 +152,7 @@ export async function handle<T>(response: Response): Promise<T> {
   try {
     body = await response.json();
   } catch {
-    throw new ApiRequestError('Сервер вернул некорректный ответ', response.status);
+    throw new ApiRequestError(nonJsonMessage(response.status), response.status);
   }
 
   if (!body.success) {

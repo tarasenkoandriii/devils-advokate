@@ -8,7 +8,9 @@
 // не отправит cookie в cross-origin запросе на api-домен (см.
 // admin-auth.controller.ts и create-app.ts, credentials: true в CORS).
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000';
+// Пункт [green-deploy-pointed-at-localhost] 2026-09-30: адрес API —
+// одно место на приложение, с проверкой на платформе.
+import { API_BASE_URL } from './api-base-url';
 
 export interface ApiSuccessResponse<T> {
   success: true;
@@ -21,6 +23,29 @@ export interface ApiErrorResponse {
 }
 
 export type ApiResponse<T> = ApiSuccessResponse<T> | ApiErrorResponse;
+
+// Пункт [cut-off-was-called-malformed] 2026-09-30 — вторая копия
+// правила из `apps/tma/src/lib/api.ts`. Обе копии обязаны различать
+// «ответа нет» и «ответ не разобран»; что список статусов обрыва в них
+// один и тот же, держит
+// `apps/api/src/__tests__/audit-2026-09-30-cut-off-was-called-malformed.spec.ts`.
+//
+// Текст здесь адресован ОПЕРАТОРУ, а не человеку в мини-приложении:
+// про суточный потолок он не говорит (операторские действия его не
+// тратят), зато прямо называет, что действие могло выполниться
+// частично, — для оператора это решение «повторять или сверить».
+const CUT_OFF_STATUSES = new Set([408, 502, 503, 504, 524]);
+
+/** Текст для ответа, который не разобрался как JSON. */
+export function nonJsonMessage(httpStatus: number): string {
+  if (CUT_OFF_STATUSES.has(httpStatus)) {
+    return 'Запрос прерван по времени: ответа нет. Действие могло выполниться частично — сверьте состояние, прежде чем повторять.';
+  }
+  if (httpStatus >= 500) {
+    return 'Сбой на стороне API: ответ не разобран. Повторите позже.';
+  }
+  return 'Ответ API не удалось разобрать.';
+}
 
 export class ApiRequestError extends Error {
   constructor(
@@ -51,7 +76,7 @@ export async function handle<T>(response: Response): Promise<T> {
   try {
     body = await response.json();
   } catch {
-    throw new ApiRequestError('Сервер вернул некорректный ответ', response.status);
+    throw new ApiRequestError(nonJsonMessage(response.status), response.status);
   }
 
   if (!body.success) {
