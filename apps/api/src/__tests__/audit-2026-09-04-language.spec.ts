@@ -30,17 +30,18 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
+import { PROPER_NOUNS, SPOKEN_FIELDS, UKRAINIAN_ONLY, isProperNoun, spokenStrings } from '../common/interface-language';
+
 const API_SRC = join(__dirname, '..');
 const TMA_SRC = join(__dirname, '..', '..', '..', 'tma', 'src');
 
-/** Буквы, которых нет в русском алфавите. Обратное направление (русские
- * ъ/ы/э в украинском тексте) здесь не проверяется: интерфейс русский, и
- * появление русской буквы — это норма, а не смесь. */
-const UKRAINIAN_ONLY = /[іїєґІЇЄҐ]/;
-
-/** Собственные имена украинских реестров и норм: они остаются на языке
- * оригинала в любом интерфейсе — как «Bundesbank» не переводят. */
-const PROPER_NOUNS = /ЄДРПОУ|РНОКПП|Дія|Прозорро/;
+// Пункт [computed-for-the-person-never-shown] 2026-09-30: правило и
+// список собственных имён переехали в `common/interface-language.ts` —
+// сверка перестала быть единственным местом, где они записаны, и
+// расширилась с сообщений об ошибках на все поля, которыми продукт
+// обращается к человеку. Обратное направление (русские ъ/ы/э в
+// украинском тексте) по-прежнему не проверяется: интерфейс русский, и
+// появление русской буквы — норма, а не смесь.
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -52,21 +53,13 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Строки, которые уходят человеку: тексты исключений. Остальное
- * (промпты модели, комментарии, названия задач) сюда не входит — промпт
- * читает модель, а язык ЕЁ ответа задаётся отдельно, из `languageCode`. */
+/** Строки, которые уходят человеку: тексты исключений И значения полей,
+ * которыми продукт к человеку обращается. Остальное (промпты модели,
+ * комментарии, названия задач) сюда не входит — промпт читает модель, а
+ * язык ЕЁ ответа задаётся отдельно, из `languageCode`. */
 function userFacingMessages(file: string): string[] {
   const src = readFileSync(file, 'utf8');
-  const out: string[] = [];
-  for (const line of src.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
-    if (!/Exception\(/.test(line)) continue;
-    for (const m of line.matchAll(/'([^'\n]{6,})'|"([^"\n]{6,})"/g)) {
-      out.push(m[1] ?? m[2]);
-    }
-  }
-  return out;
+  return src.split('\n').flatMap((line) => spokenStrings(line));
 }
 
 describe('Язык: сервер говорит с человеком на одном языке', () => {
@@ -75,7 +68,7 @@ describe('Язык: сервер говорит с человеком на од�
     for (const file of walk(API_SRC)) {
       for (const message of userFacingMessages(file)) {
         if (!UKRAINIAN_ONLY.test(message)) continue;
-        if (PROPER_NOUNS.test(message)) continue; // название реестра — не перевод
+        if (isProperNoun(message)) continue; // название реестра — не перевод
         offenders.push(`${file.slice(API_SRC.length + 1)}: ${message.slice(0, 70)}`);
       }
     }
@@ -88,6 +81,33 @@ describe('Язык: сервер говорит с человеком на од�
     // сверка.
     const total = walk(API_SRC).reduce((n, f) => n + userFacingMessages(f).length, 0);
     expect(total).toBeGreaterThan(300);
+  });
+
+  it('расширение 2026-09-30 не пустое: продукт говорит с человеком не только ошибками', () => {
+    // Без этой проверки правило можно было бы «расширить» так, что новая
+    // половина не находит ничего, и сторож остался бы прежним — при том
+    // что комментарий обещал бы большее.
+    const onlyFields = walk(API_SRC).reduce((n, f) => {
+      const src = readFileSync(f, 'utf8');
+      return n + src.split('\n').filter((l) => !/Exception\(/.test(l)).flatMap((l) => spokenStrings(l)).length;
+    }, 0);
+    expect(onlyFields).toBeGreaterThan(100);
+  });
+
+  it('проба разбора: поле, которым продукт обращается к человеку, находится', () => {
+    const found = spokenStrings("      return { note: 'Отмечено с ваших слов' };");
+    expect(found).toEqual(['Отмечено с ваших слов']);
+    // А промпт модели — не находится: он не в списке полей.
+    expect(spokenStrings("      const userPrompt = 'Проанализируй этот разговор целиком';")).toEqual([]);
+  });
+
+  it('каждое собственное имя объяснено, и список не подменён одной регуляркой', () => {
+    expect(PROPER_NOUNS.filter((n) => n.why.trim().length === 0)).toEqual([]);
+    expect(PROPER_NOUNS.length).toBe(12);
+    expect(SPOKEN_FIELDS.length).toBe(19);
+    // Проба: имя реестра пропускается, а украинское описание — нет.
+    expect(isProperNoun('Єдиний державний реєстр судових рішень')).toBe(true);
+    expect(isProperNoun('релевантність для поточної позиції')).toBe(false);
   });
 
   it('ИЗМЕРЕНИЕ (не требование): приложение по-прежнему одноязычное, и это записано в TODO.md', () => {

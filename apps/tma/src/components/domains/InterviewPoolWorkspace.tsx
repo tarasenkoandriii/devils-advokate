@@ -123,6 +123,23 @@ export function ShareLinkView({ link, expiresAt, onClose }: { link: string; expi
   );
 }
 
+/** Пункт [computed-for-the-person-never-shown] 2026-09-30 — предупреждение
+ *  «история с другой вакансии».
+ *
+ *  Отдельным компонентом НАРОЧНО: собственный раннер проверок рисует
+ *  разметку статически, и вынесенный компонент можно нарисовать с
+ *  текстом и без него. Внутри панели это был бы шов, проверяемый только
+ *  чтением исходника. */
+export function HistoryDisclaimer({ text, onClose }: { text: string | null; onClose: () => void }) {
+  if (!text) return null;
+  return (
+    <p className="dtp-status dtp-status--warn" role="status">
+      {text}{' '}
+      <button type="button" className="link-button" onClick={onClose}>Понятно</button>
+    </p>
+  );
+}
+
 export function CandidatesPanel({ projectId, config, employer = false }: { projectId: string; config: any; employer?: boolean }) {
   const { data: statuses, error, refresh } = useJson<any[]>(`${P(projectId)}/candidates`);
   const [mode, setMode] = useState<'none' | 'new' | 'existing'>('none');
@@ -131,12 +148,22 @@ export function CandidatesPanel({ projectId, config, employer = false }: { proje
   const [err, setErr] = useState<unknown>(null);
   const stages: any[] = config.interviewStages ?? [];
 
+  // Пункт [computed-for-the-person-never-shown] 2026-09-30: ответ
+  // добавления кандидата ВЫБРАСЫВАЛСЯ целиком. В нём приходит
+  // `historyDisclaimer` — предупреждение, что история взята с
+  // собеседования на ДРУГУЮ вакансию. Продукт его составлял и не
+  // показывал никогда.
+  const [disclaimer, setDisclaimer] = useState<string | null>(null);
+
   async function addExisting(v: Record<string, unknown>) {
-    await domainApi.postJson(`${P(projectId)}/candidates`, v); setMode('none'); refresh();
+    const r = await domainApi.postJson(`${P(projectId)}/candidates`, v);
+    setDisclaimer(typeof r?.historyDisclaimer === 'string' ? r.historyDisclaimer : null);
+    setMode('none'); refresh();
   }
   async function createAndAdd(v: Record<string, unknown>) {
     const profile = await domainApi.postJson('/candidate-profiles', { ...v, recruitingTeamId: config.recruitingTeamId ?? undefined });
-    await domainApi.postJson(`${P(projectId)}/candidates`, { candidateProfileId: profile.id });
+    const r = await domainApi.postJson(`${P(projectId)}/candidates`, { candidateProfileId: profile.id });
+    setDisclaimer(typeof r?.historyDisclaimer === 'string' ? r.historyDisclaimer : null);
     setMode('none'); refresh();
   }
   const [shareLink, setShareLink] = useState<{ link: string; expiresAt: string } | null>(null);
@@ -173,6 +200,7 @@ export function CandidatesPanel({ projectId, config, employer = false }: { proje
     <div className="domain-panel">
       <AiErrorNotice error={error ?? err} onConsentGranted={() => setErr(null)} />
       {statuses && statuses.length === 0 && <p className="card-section__empty">Кандидатов пока нет.</p>}
+      <HistoryDisclaimer text={disclaimer} onClose={() => setDisclaimer(null)} />
       {shareLink && <ShareLinkView link={shareLink.link} expiresAt={shareLink.expiresAt} onClose={() => setShareLink(null)} />}
       <ul className="domain-entities">
         {(statuses ?? []).map((s: any) => {

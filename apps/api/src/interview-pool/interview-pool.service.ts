@@ -276,7 +276,11 @@ export class InterviewPoolService {
       );
       if (priorWithDifferentTitle) {
         const prevTitle = (priorWithDifferentTitle as any).project.interviewPoolConfig.jobTitle;
-        historyDisclaimer = `Ці дані зі співбесіди на іншу вакансію («${prevTitle}») — релевантність для поточної позиції може відрізнятися, перевірте вручну`;
+        // Пункт [computed-for-the-person-never-shown] 2026-09-30: текст
+        // был украинским внутри полностью русского интерфейса. Сторож
+        // языка его не видел — он читает только строки в строках с
+        // `Exception(`, а это не исключение, а поле ответа.
+        historyDisclaimer = `Эти данные — с собеседования на другую вакансию («${prevTitle}»). Насколько они относятся к текущей позиции, продукт не знает: проверьте сами.`;
       }
     }
 

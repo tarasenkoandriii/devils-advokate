@@ -28,12 +28,12 @@ export interface RegistryHost {
 export const DEFAULT_REGISTRY_HOSTS: Record<string, RegistryHost[]> = {
   UA: [
     { host: 'usr.minjust.gov.ua', category: EmployerFactCategory.REGISTRY, label: 'Єдиний державний реєстр (Мін’юст)' },
-    { host: 'opendatabot.ua', category: EmployerFactCategory.REGISTRY, urlTemplate: 'https://opendatabot.ua/c/{registryCode}', label: 'Opendatabot — агрегатор відкритих даних ЄДР' },
-    { host: 'youcontrol.com.ua', category: EmployerFactCategory.REGISTRY, urlTemplate: 'https://youcontrol.com.ua/catalog/company_details/{registryCode}/', label: 'YouControl — агрегатор відкритих даних ЄДР' },
+    { host: 'opendatabot.ua', category: EmployerFactCategory.REGISTRY, urlTemplate: 'https://opendatabot.ua/c/{registryCode}', label: 'Opendatabot — агрегатор открытых данных ЄДР' },
+    { host: 'youcontrol.com.ua', category: EmployerFactCategory.REGISTRY, urlTemplate: 'https://youcontrol.com.ua/catalog/company_details/{registryCode}/', label: 'YouControl — агрегатор открытых данных ЄДР' },
     { host: 'reyestr.court.gov.ua', category: EmployerFactCategory.COURT, label: 'Єдиний державний реєстр судових рішень' },
-    { host: 'cabinet.tax.gov.ua', category: EmployerFactCategory.TAX, label: 'ДПС — реєстр податкового боргу' },
+    { host: 'cabinet.tax.gov.ua', category: EmployerFactCategory.TAX, label: 'ДПС — реестр налогового долга' },
     { host: 'tax.gov.ua', category: EmployerFactCategory.TAX, label: 'ДПС' },
-    { host: 'sanctions.nazk.gov.ua', category: EmployerFactCategory.SANCTIONS, label: 'НАЗК — санкційні списки' },
+    { host: 'sanctions.nazk.gov.ua', category: EmployerFactCategory.SANCTIONS, label: 'НАЗК — санкционные списки' },
     { host: 'drs.nsdc.gov.ua', category: EmployerFactCategory.SANCTIONS, label: 'РНБО — Державний реєстр санкцій' },
   ],
 };

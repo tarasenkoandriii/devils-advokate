@@ -25,12 +25,52 @@ function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
   return { data, error, refresh: () => setTick((t) => t + 1) };
 }
 
+/** Пункт [computed-for-the-person-never-shown] 2026-09-30 — два текста,
+ *  которые сервер считал, а экран не показывал.
+ *
+ *  Отдельными компонентами НАРОЧНО: внутри панели их держит `useAsync`,
+ *  и нарисовать их в проверке было бы нечем — осталась бы сверка по
+ *  тексту исходника, то есть проверка УПОМИНАНИЯ, а не поведения.
+ *  Мутация «спрятать число за `false`» такую сверку проходила насквозь;
+ *  эти компоненты её роняют. */
+export function RevokedRowsNote({ count }: { count: number }) {
+  if (!count) return null;
+  return (
+    <p className="dtp-status dtp-status--warn" role="status">
+      Строк без покрытия из-за отозванного согласия: {count}. Это не пробел в данных — так выглядит исполненная просьба кандидата.
+    </p>
+  );
+}
+
+/** Первая ячейка строки кандидата. У отозвавшего согласие строка пустая
+ *  НАМЕРЕННО (Пункт [revocation-not-one-rule]) — и обязана объяснять,
+ *  почему она пустая, иначе читается как «по кандидату ничего нет». */
+export function CandidateCell({ row }: { row: { displayName?: string; stage?: string; consentRevoked?: boolean; note?: string; openQuestions?: unknown[] } }) {
+  const open = row.openQuestions?.length ?? 0;
+  return (
+    <td>
+      <strong>{row.displayName}</strong>
+      <br />
+      <span className="dtp-muted">{row.stage}</span>
+      {row.consentRevoked ? (
+        <><br /><span className="dtp-status dtp-status--warn">{row.note}</span></>
+      ) : open > 0 ? (
+        <><br /><span className="dtp-muted">не обсуждено: {open}</span></>
+      ) : null}
+    </td>
+  );
+}
+
 export function CoverageMatrixPanel({ projectId }: { projectId: string }) {
   const { data, error } = useAsync(() => sheetsApi.coverageMatrix(projectId), [projectId]);
   return (
     <section className="domain-panel">
       <AiErrorNotice error={error} />
       <p className="card-section__empty">Столбцы — требования вакансии, строки — кандидаты с открытым листом. В ячейке — отражено ли требование в источниках кандидата и чем. Столбца «итог» нет намеренно: сравнивать людей по сумме галочек — не задача приложения. Порядок строк вы меняете сами.</p>
+      {/* Число пустующих строк сервер считает с 2026-09-06 и никуда не
+          отдавал: матрица выглядела полной при том, что часть пула из
+          неё выпала. */}
+      <RevokedRowsNote count={data?.revokedRows ?? 0} />
       {!data && !error && <p className="dtp-muted">Загрузка…</p>}
       {data && data.rows.length === 0 && <p className="card-section__empty">Ни у одного кандидата ещё нет листа — откройте лист кандидата на вкладке «Кандидаты».</p>}
       {data && data.rows.length > 0 && (
@@ -40,7 +80,14 @@ export function CoverageMatrixPanel({ projectId }: { projectId: string }) {
             <tbody>
               {data.rows.map((r: any) => (
                 <tr key={r.candidateProfileId}>
-                  <td><strong>{r.displayName}</strong><br /><span className="dtp-muted">{r.stage}</span>{r.openQuestions.length > 0 && <><br /><span className="dtp-muted">не обсуждено: {r.openQuestions.length}</span></>}</td>
+                  {/* Пункт [computed-for-the-person-never-shown] 2026-09-30:
+                      строка отозвавшего согласие приходит с `consentRevoked`
+                      и текстом `note` — их завёл Пункт [revocation-not-one-rule]
+                      именно затем, чтобы пустая строка не читалась как «по
+                      кандидату ничего нет». Экран не рисовал ни то, ни
+                      другое: человек видел строку из одних прочерков без
+                      единого слова о причине. */}
+                  <CandidateCell row={r} />
                   {data.columns.map((c: any) => { const cell = r.cells[c.clauseId]; return <td key={c.clauseId} title={cell?.quote ?? ''}>{COVERAGE_LABEL[cell?.coverage] ?? '—'}{cell?.quote ? <><br /><span className="dtp-muted">«{cell.quote.slice(0, 60)}{cell.quote.length > 60 ? '…' : ''}»</span></> : null}</td>; })}
                 </tr>
               ))}

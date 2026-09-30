@@ -107,6 +107,12 @@ export function EmployerHiringWorkspace({ config, manifest, projectId, conversat
         <section className="dtp-overview">
           <p className="dtp-status dtp-status--warn">Приложение не отбирает за вас: оно собирает требования и условия в лист, сверяет с ним слова кандидатов и показывает, что обсуждено и чем подтверждено. Решения о найме принимают люди.</p>
           {state?.draft && <p className="dtp-status dtp-status--warn">{state.draftReason} — вкладка «Компания».</p>}
+          {/* Пункт [computed-for-the-person-never-shown] 2026-09-30:
+              сервер считал `companyChoice` с 2026-09-25 и никуда его не
+              показывал. Без этой строки в «Компании» стоял прочерк —
+              то есть продукт молчал ровно там, где предыдущая сверка
+              завела текст, чтобы он не молчал. */}
+          {state?.companyChoice && <p className="dtp-status dtp-status--warn" role="status">{state.companyChoice}</p>}
           {state && (
             <div className="dtp-facts">
               <div><span className="dtp-facts__label">Компания</span><strong>{state.company?.legalName ?? state.company?.domain ?? '—'}</strong></div>
