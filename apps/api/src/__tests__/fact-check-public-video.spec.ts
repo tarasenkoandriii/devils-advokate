@@ -16,6 +16,7 @@ function makeService(opts: {
   language?: string | null;
   hasKey?: boolean;
 }) {
+  const spendLog: any[] = [];
   const prisma = {
     conversation: {
       findUnique: jest.fn(async () => ({ id: 'conv-1', projectId: 'p1', project: { ownerId: 'user-1' } })),
@@ -36,6 +37,13 @@ function makeService(opts: {
     factCheckApiCache: {
       findUnique: jest.fn(async () => null),
       upsert: jest.fn(async () => ({})),
+    },
+    // Пункт [the-policy-was-obeyed-by-hope] 2026-09-30: фактчек под
+    // суточным потолком, расход считается по журналу — фейк обязан
+    // уметь его читать и писать.
+    auditLogEntry: {
+      count: jest.fn(async () => spendLog.length),
+      create: jest.fn(async ({ data }: any) => { spendLog.push(data); return data; }),
     },
   };
   const secrets = {

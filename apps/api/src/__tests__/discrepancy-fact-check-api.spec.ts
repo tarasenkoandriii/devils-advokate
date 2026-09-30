@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { DiscrepancyAnalysisService } from '../discrepancy-analysis/discrepancy-analysis.service';
 
 function createFakePrisma() {
+  const spendLog: any[] = [];
   const conversations = new Map<string, any>();
   const signals: any[] = [];
   const evidence: any[] = [];
@@ -60,6 +61,15 @@ function createFakePrisma() {
         return entry;
       },
     },
+    // Пункты [the-key-was-free-to-mint] / [the-policy-was-obeyed-by-hope]
+    // 2026-09-30: расход платных/квотируемых вызовов считается по
+    // журналу — фейк обязан уметь его читать и писать, иначе потолок
+    // просто не выполнится.
+    auditLogEntry: {
+      count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
+      create: async ({ data }: any) => { spendLog.push(data); return data; },
+    },
+    _spendLog: () => spendLog,
   };
   return fake;
 }

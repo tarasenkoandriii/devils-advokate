@@ -228,6 +228,10 @@ export const DECISION_RESOURCE: Record<string, string> = {
   'tts.synthesized': 'TtsCache',
   'places.request': 'GooglePlaces',
   'photo_verification.requested': 'PersonFact',
+  'stt.realtime_token': 'SttRealtimeToken',
+  'geocoding.request': 'Nominatim',
+  'weather.forecast': 'WeatherForecast',
+  'fact_check.request': 'FactCheck',
 };
 
 /** Увидит ли человек это решение в Центре приватности.

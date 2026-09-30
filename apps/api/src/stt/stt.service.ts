@@ -12,7 +12,7 @@
 // задачи, созданные до этой правки, читаются как есть — идентификатор
 // без префикса означает AssemblyAI. Миграции не нужно, откат не ломает
 // висящие задачи.
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { SecretsService } from '../secrets/secrets.service';
 import { resolveSttWebhookSecret } from '../common/webhook/stt-webhook.guard';
 import type { ParsedTranscript } from '../conversations/transcription.service';
@@ -31,6 +31,15 @@ import {
 } from './stt-language';
 
 /** Ссылка на секрет ключа провайдера в окружении. */
+/** Предел одного входа на путь коротких записей. Пункт
+ * [the-stream-had-no-bottom] 2026-09-30: предела не было вовсе, при
+ * том что стрим читается в память целиком. Число здесь, а не в
+ * реестре потолков расходов: это предел ОДНОГО ВХОДА, как
+ * `MAX_IMAGE_BYTES` у проверки фото и `MAX_EVIDENCE_BASE64_BYTES` у
+ * доказательств, а не суточный потолок — у реестра и единицы такой
+ * нет. */
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 const CREDENTIAL_REF: Record<SttProviderName, string> = {
   soniox: 'SONIOX_API_KEY',
   assemblyai: 'ASSEMBLYAI_API_KEY',
@@ -111,7 +120,29 @@ export class SttService {
   // строку над чистой sttProviderForLanguage(). Вызывающий код всегда
   // импортировал чистую функцию напрямую; обёртку не звал никто.
 
-  /** Загрузка байтов провайдеру, который затем возьмёт задачу. */
+  /** Загрузка байтов провайдеру, который затем возьмёт задачу.
+   *
+   * Пункт [the-stream-had-no-bottom] 2026-09-30 — здесь не было ни
+   * предела байтов, ни счёта.
+   *
+   * Стрим читается В ПАМЯТЬ ЦЕЛИКОМ (ниже, ради второй попытки у
+   * запасного провайдера), и до этого дня — без всякого предела: три
+   * маршрута (`conversations/:id/upload`,
+   * `sparring-sessions/:id/voice-upload`,
+   * `material-chat-sessions/:id/voice-upload`) отдавали провайдеру
+   * сколько угодно байтов и складывали их в память serverless-функции.
+   * Проверялись владение и согласие — то есть ПРАВО, а не размер.
+   *
+   * Асимметрия, которая и выдаёт пропуск: у прямой записи в Blob
+   * предел 500 МБ ЗАШИТ В ТОКЕН (`audio-blob.service.ts`), потому что
+   * там байты идут мимо нас и иначе их нечем ограничить. Здесь байты
+   * идут ЧЕРЕЗ нас — и предела не было вовсе.
+   *
+   * Число названо по назначению пути, а не взято круглым: это путь
+   * КОРОТКИХ записей (реплика, заметка), длинный разговор грузится
+   * прямо в приватный blob и сюда не приходит. 25 МБ — это около
+   * двадцати минут речи в обычном битрейте голосового сообщения, с
+   * запасом на несжатое; всё, что больше, шло не тем путём. */
   async uploadAudio(
     audio: ReadableStream<Uint8Array>,
     languageCode?: string | null,
@@ -134,10 +165,22 @@ export class SttService {
         if (buffered === null) {
           const chunks: Uint8Array[] = [];
           const reader = audio.getReader();
+          let totalBytes = 0;
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (value) chunks.push(value);
+            if (value) {
+              totalBytes += value.byteLength;
+              // Предел проверяется НА ЧТЕНИИ, а не после: иначе
+              // «слишком большой файл» означало бы «уже в памяти».
+              if (totalBytes > MAX_UPLOAD_BYTES) {
+                await reader.cancel().catch(() => undefined);
+                throw new BadRequestException(
+                  `Файл больше ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} МБ — это путь коротких записей. Длинный разговор загружается отдельным путём, через ссылку на хранилище.`,
+                );
+              }
+              chunks.push(value);
+            }
           }
           buffered = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
         }

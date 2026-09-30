@@ -53,6 +53,7 @@ import { intakeNote, type SourceIntake } from '../common/source-intake';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { FACT_CHECK_SPEND, spendOutwardCall } from '../common/outward-spend';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType, SignalSeverity } from '@prisma/client';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
@@ -563,7 +564,7 @@ export class DiscrepancyAnalysisService {
       );
     }
 
-    const claims = await this.fetchFactCheckClaims(claimText);
+    const claims = await this.fetchFactCheckClaims(userId, claimText);
 
     // Честная деградация (§3.16 ТЗ, тот же принцип, что уже применён
     // к checkAgainstUserSource): создаём сигнал ТОЛЬКО если найден
@@ -826,7 +827,7 @@ export class DiscrepancyAnalysisService {
         continue;
       }
       try {
-        const claims = await this.fetchFactCheckClaims(seg.text);
+        const claims = await this.fetchFactCheckClaims(userId, seg.text);
         results.push({
           segmentId: seg.id,
           startMs: seg.startMs,
@@ -982,7 +983,7 @@ export class DiscrepancyAnalysisService {
     });
   }
 
-  private async fetchFactCheckClaims(claimText: string): Promise<FactCheckClaim[]> {
+  private async fetchFactCheckClaims(userId: string, claimText: string): Promise<FactCheckClaim[]> {
     const normalized = claimText.trim().toLowerCase().replace(/\s+/g, ' ');
     const queryHash = createHash('sha256').update(normalized).digest('hex');
 
@@ -990,6 +991,21 @@ export class DiscrepancyAnalysisService {
     if (cached && cached.expiresAt > new Date()) {
       return cached.resultJson as unknown as FactCheckClaim[];
     }
+
+    // Пункт [the-policy-was-obeyed-by-hope] 2026-09-30: потолка не было
+    // вовсе. Кэш на 24 часа снимает только повторы ТОГО ЖЕ текста —
+    // число вызовов с новыми текстами не ограничивало ничто, а разбор
+    // транскрипта делает до `FACT_CHECK_PAGE_LIMIT` страниц на каждый
+    // из восьми сегментов, то есть до двадцати четырёх запросов за
+    // одно нажатие. Квота при этом ОБЩАЯ с OCR и поиском YouTube на
+    // один проект Google Cloud: исчерпание здесь ломает три функции.
+    //
+    // Потолок ПОСЛЕ кэша, как у озвучки: попадание в кэш наружу не
+    // ходит и платить за него нечем. Одна отметка на вызов
+    // `claims:search`-серии — страницы внутри одного вопроса считаются
+    // за один расход, и это сказано вслух: постраничный обход уже
+    // ограничен своим потолком в три страницы.
+    await spendOutwardCall(this.prisma, userId, FACT_CHECK_SPEND, 'fact-check/claims-search');
 
     const apiKey = await this.secrets.resolve(FACT_CHECK_API_KEY_REF);
     const claims = await this.fetchAllPages(claimText, apiKey);

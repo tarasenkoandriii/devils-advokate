@@ -80,6 +80,14 @@ export const DECISION_LABELS: Record<string, DecisionLabel> = {
   // человек видит запись в своём журнале и должен понимать, что это.
   'places.request': { what: 'Обращение к картам (поиск или карточка заведения)', by: 'вы сами' },
   'photo_verification.requested': { what: 'Запрошена проверка фото реверс-поиском', by: 'вы сами' },
+  // Пункты [the-key-was-free-to-mint] / [the-policy-was-obeyed-by-hope]
+  // 2026-09-30: четыре новых счётчика расхода. Содержимого в записях
+  // нет — только факт обращения; подпись всё равно обязательна,
+  // человек видит эти записи в своём журнале.
+  'stt.realtime_token': { what: 'Выдан ключ живой расшифровки речи', by: 'вы сами' },
+  'geocoding.request': { what: 'Определён город по вашей геолокации', by: 'вы сами' },
+  'weather.forecast': { what: 'Запрошен прогноз погоды', by: 'вы сами' },
+  'fact_check.request': { what: 'Утверждение проверено по внешней базе фактчека', by: 'вы сами' },
 };
 
 export interface DescribedDecision {

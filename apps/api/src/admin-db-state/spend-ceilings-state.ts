@@ -86,6 +86,13 @@ const ZERO_MEANS_OFF = new Set([
   // означает «не ограничивай обращения к картам» — как и у прочих
   // потолков расходов, а не «карты не спрашивать».
   'PLACES_REQUESTS_PER_USER_PER_DAY',
+  // Пункты [the-key-was-free-to-mint] / [the-policy-was-obeyed-by-hope]
+  // 2026-09-30: у всех трёх ноль означает «не ограничивай», как у
+  // прочих потолков расходов.
+  'REALTIME_TOKENS_PER_USER_PER_DAY',
+  'GEOCODING_REQUESTS_PER_USER_PER_DAY',
+  'WEATHER_FORECASTS_PER_USER_PER_DAY',
+  'FACT_CHECKS_PER_USER_PER_DAY',
 ]);
 
 export const CEILINGS_DOES_NOT_KNOW: readonly string[] = [

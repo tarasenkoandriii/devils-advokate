@@ -170,6 +170,28 @@ const MODEL_OUTPUT = JSON.stringify({
   ],
 });
 
+/** Фейк YouTube: ОТ ПРОВАЙДЕРА, а не со слов клиента.
+ *
+ * Пункт [the-lever-took-the-clients-word] 2026-09-30: потолок
+ * длительности — единственный рычаг стоимости медиа-разбора —
+ * проверялся против числа из тела запроса, которое сервер сам же
+ * получил от `videos.list` на шаге поиска, отдал клиенту и забыл.
+ * Теперь `tryEnqueueAnalysis` спрашивает провайдера, и в тестах
+ * значение задаётся ЗДЕСЬ, а не в поле элемента: поле элемента больше
+ * не решает ничего, и сценарии должны это показывать. */
+function fakeYouTube(durations: Record<string, number | null>) {
+  const calls: string[][] = [];
+  return {
+    calls,
+    service: {
+      fetchDurations: async (ids: string[]) => {
+        calls.push(ids);
+        return new Map(ids.map((id) => [id, durations[id] ?? null]));
+      },
+    },
+  };
+}
+
 describe('timecodeToMs / parseMediaReviewOutput', () => {
   it('MM:SS и H:MM:SS конвертируются на нашей стороне; числа принимаются как готовые мс', () => {
     expect(timecodeToMs('0:05')).toBe(5000);
@@ -196,7 +218,8 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
   it('ролик длиннее 20 минут получает отказ ДО вызова провайдера, элемент остаётся на ручном пути', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    const youtube = fakeYouTube({ v: MEDIA_REVIEW_MAX_DURATION_SECONDS + 1 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     prisma._store.items.set('item-1', { id: 'item-1' });
 
     await svc.tryEnqueueAnalysis(
@@ -212,7 +235,8 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
   it('[duration-limit-env]: env MEDIA_REVIEW_MAX_DURATION_SECONDS перекрывает дефолт; мусор в env падает на дефолт', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = { enqueue: jest.fn(async () => ({ jobId: 'job-1' })), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    const youtube = fakeYouTube({ v: 90 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     prisma._store.items.set('item-1', { id: 'item-1' });
 
     try {
@@ -240,7 +264,11 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
   it('неизвестная длительность — тоже отказ: лимит стоимости проверить нечем', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    // Провайдер не ответил (или ролик недоступен) — `fetchDurations`
+    // отдаёт пустую карту. До Пункта [the-lever-took-the-clients-word]
+    // «неизвестна» означало «клиент не прислал».
+    const youtube = fakeYouTube({});
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     prisma._store.items.set('item-1', { id: 'item-1' });
 
     await svc.tryEnqueueAnalysis(
@@ -253,6 +281,50 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
     expect(prisma._store.items.get('item-1').autoAnalysisError).toContain('неизвестна');
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ, Пункт [the-lever-took-the-clients-word] 2026-09-30: слово клиента больше не решает', async () => {
+    // Клиент присылает 60 для ролика, который у провайдера длится три
+    // часа. Прежде это проходило потолок целиком: ложь уезжала и в
+    // проверку стоимости, и в `Conversation.durationSeconds`, а
+    // останавливали её только 20 медиа-вызовов в сутки — то есть
+    // двадцать трёхчасовых роликов вместо расчётных двадцатиминутных.
+    const prisma = makeFakePrisma();
+    const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
+    const youtube = fakeYouTube({ v: 3 * 60 * 60 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
+    prisma._store.items.set('item-1', { id: 'item-1' });
+
+    await svc.tryEnqueueAnalysis(
+      'user-1',
+      { id: 'q1', projectId: 'p1' },
+      { id: 'item-1', youtubeVideoId: 'v', title: 't', durationSeconds: 60, publishedAt: null, createdAt: new Date() },
+    );
+
+    expect(aiRouter.enqueue).not.toHaveBeenCalled();
+    expect(prisma._store.items.get('item-1').autoAnalysisError).toContain('минут');
+    // И провайдера спросили именно про этот ролик.
+    expect(youtube.calls).toEqual([['v']]);
+  });
+
+  it('обратная сторона: клиент занизил, провайдер подтвердил короткий — постановка идёт, и в разговор уезжает число ПРОВАЙДЕРА', async () => {
+    // Иначе правка читалась бы как «перестали принимать медиа-разборы».
+    const prisma = makeFakePrisma();
+    const aiRouter = { enqueue: jest.fn(async () => ({ jobId: 'job-1' })), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
+    const youtube = fakeYouTube({ v: 420 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
+    prisma._store.items.set('item-1', { id: 'item-1' });
+
+    await svc.tryEnqueueAnalysis(
+      'user-1',
+      { id: 'q1', projectId: 'p1' },
+      // Клиент соврал в ДРУГУЮ сторону — прислал больше, чем есть.
+      { id: 'item-1', youtubeVideoId: 'v', title: 't', durationSeconds: 9_999, publishedAt: null, createdAt: new Date() },
+    );
+
+    expect(aiRouter.enqueue).toHaveBeenCalled();
+    const conv = [...prisma._store.conversations.values()][0];
+    expect(conv.durationSeconds).toBe(420);
+  });
+
   it('успешная постановка: Conversation(PUBLIC_VIDEO_URI, ANALYZING), медиа-блок ПЕРВЫМ, occurredAt из publishedAt', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = {
@@ -260,7 +332,8 @@ describe('tryEnqueueAnalysis — лимит длительности (§6.5)', (
       registerOutputValidator: jest.fn(),
       registerCompletionHandler: jest.fn(),
     };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    const youtube = fakeYouTube({ abc: 300 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     prisma._store.items.set('item-1', { id: 'item-1' });
     const publishedAt = new Date('2026-01-15T10:00:00Z');
 
@@ -304,7 +377,11 @@ describe('retryAnalysis — повторный запуск после 429/сб�
       registerOutputValidator: jest.fn(),
       registerCompletionHandler: jest.fn(),
     };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    // Все эти сценарии — про retry и про ретраи разговора, а не про
+    // длительность; провайдер подтверждает ту же длительность, что у
+    // засеянного элемента (300 сек), чтобы предмет теста не менялся.
+    const youtube = fakeYouTube({ abc: 300 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     seedFailedItem(prisma);
 
     const res = await svc.retryAnalysis('user-1', 'item-1');
@@ -323,7 +400,11 @@ describe('retryAnalysis — повторный запуск после 429/сб�
   it('активная джоба (QUEUED/RUNNING) → отказ: двойная постановка = двойной счёт провайдеру', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    // Все эти сценарии — про retry и про ретраи разговора, а не про
+    // длительность; провайдер подтверждает ту же длительность, что у
+    // засеянного элемента (300 сек), чтобы предмет теста не менялся.
+    const youtube = fakeYouTube({ abc: 300 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     seedFailedItem(prisma);
     prisma._store.jobs.set('job-old', { id: 'job-old', status: 'RUNNING' });
 
@@ -334,7 +415,11 @@ describe('retryAnalysis — повторный запуск после 429/сб�
   it('чужой элемент неотличим от несуществующего; DONE не перезапускается', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
-    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    // Все эти сценарии — про retry и про ретраи разговора, а не про
+    // длительность; провайдер подтверждает ту же длительность, что у
+    // засеянного элемента (300 сек), чтобы предмет теста не менялся.
+    const youtube = fakeYouTube({ abc: 300 });
+    const svc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
     seedFailedItem(prisma);
 
     await expect(svc.retryAnalysis('someone-else', 'item-1')).rejects.toThrow(/не найден/);
@@ -349,7 +434,11 @@ describe('СКВОЗНОЙ ОБЯЗАТЕЛЬНЫЙ ТЕСТ ТЗ: getSummary() 
   it('персистенс §6.2 → сводка очереди считает сигналы через сегменты', async () => {
     const prisma = makeFakePrisma();
     const aiRouter = { enqueue: jest.fn(), registerOutputValidator: jest.fn(), registerCompletionHandler: jest.fn() };
-    const autoSvc = new MediaReviewAutoService(prisma as any, aiRouter as any);
+    // Все эти сценарии — про retry и про ретраи разговора, а не про
+    // длительность; провайдер подтверждает ту же длительность, что у
+    // засеянного элемента (300 сек), чтобы предмет теста не менялся.
+    const youtube = fakeYouTube({ abc: 300 });
+    const autoSvc = new MediaReviewAutoService(prisma as any, aiRouter as any, youtube.service as any);
 
     // Состояние «джоба завершилась»: элемент PROCESSING с разговором.
     prisma._store.queues.set('q1', { id: 'q1', userId: 'user-1', projectId: 'p1' });

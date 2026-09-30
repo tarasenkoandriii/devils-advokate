@@ -31,8 +31,12 @@ describe('Пункт [door-opened-onto-a-corner] 2026-09-25: область жу
     // (обращения к картам и проверки фото). Содержимого в этих
     // записях нет, но в журнале человека они видны, и подпись им
     // обязательна.
-    expect(Object.keys(DECISION_LABELS).length).toBe(36);
-    expect(Object.keys(RESOURCE_OF).length).toBe(36);
+    // 2026-09-30, второй заход того же дня: стало 40 — прибавились
+    // четыре счётчика расхода (ключ живой расшифровки, геокодирование,
+    // прогноз погоды, фактчек). Содержимого в этих записях нет, но в
+    // журнале человека они видны, и подпись им обязательна.
+    expect(Object.keys(DECISION_LABELS).length).toBe(40);
+    expect(Object.keys(RESOURCE_OF).length).toBe(40);
     expect(DECISION_SCOPES.length).toBe(10);
     expect(DECISIONS_OUT_OF_SCOPE.length).toBe(5);
   });

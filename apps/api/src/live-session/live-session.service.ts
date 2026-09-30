@@ -21,6 +21,7 @@ import { Injectable, NotFoundException, BadGatewayException } from '@nestjs/comm
 import { SttService } from '../stt/stt.service';
 import type { SttRealtimeCredentials } from '../stt/stt-provider.interface';
 import { PrismaService } from '../prisma/prisma.service';
+import { REALTIME_TOKEN_SPEND, spendOutwardCall } from '../common/outward-spend';
 import { ConsentService } from '../consent/consent.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 
@@ -58,6 +59,16 @@ export class LiveSessionService {
     // — в ней же режим приватности, который здесь терялся (см. подробный
     // разбор над самим методом в ConsentService).
     await this.consent.assertRealtimeAudioAllowed(userId);
+
+    // Пункт [the-key-was-free-to-mint] 2026-09-30: выдача ключа
+    // проверяла ТОЛЬКО согласие — сколько ключей выдано за сутки, не
+    // считалось нигде. У Soniox ущерб ограничен самим провайдером
+    // (`single_use`, потолок сессии три часа), у AssemblyAI — нет: его
+    // токен, по словам провайдерского файла, «жил 5 минут и позволял
+    // открывать сколько угодно потоков». Считаем ВЫДАННЫЕ КЛЮЧИ, а не
+    // сессии: сколько сессий откроют по одному ключу, отсюда не видно,
+    // и это сказано вслух.
+    await spendOutwardCall(this.prisma, userId, REALTIME_TOKEN_SPEND, 'live-session/transcription-token');
 
     // Пункт [stt-multi] 2026-09-02: провайдера выбирает ЯЗЫК, а не
     // константа. Русский и украинский идут в Soniox (у AssemblyAI их

@@ -13,6 +13,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AsyncJobOutcome } from '../ai-router/ai-router.service';
+import { YouTubeSearchService } from './youtube-search.service';
 import {
   AIJobStatus,
   ConversationProcessingStatus,
@@ -179,6 +180,7 @@ export class MediaReviewAutoService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly youtube: YouTubeSearchService,
   ) {}
 
   onModuleInit(): void {
@@ -215,8 +217,34 @@ export class MediaReviewAutoService implements OnModuleInit {
   ): Promise<void> {
     // §6.5: длительность известна ДО вызова из метаданных YouTube —
     // отказ сразу, а не после неудачного (и оплаченного) вызова.
+    //
+    // Пункт [the-lever-took-the-clients-word] 2026-09-30 — а вот КАК
+    // она узнавалась, и это был единственный рычаг стоимости разбора.
+    //
+    // `item.durationSeconds` приходит из ТЕЛА ЗАПРОСА
+    // (`POST /media-review/queues/:id/items`), где провалидирован как
+    // `@IsInt() @Min(0) @Max(43_200)` — то есть по форме, а не по
+    // правде, и потолок формы в 36 раз выше потолка стоимости.
+    // Значение круговое: сервер получал настоящую длительность от
+    // `videos.list` на шаге поиска, отдавал её клиенту, НЕ СОХРАНЯЛ НИ
+    // В ОДНОМ ПОЛЕ и принимал обратно с его слов. Клиент, приславший
+    // `60` для трёхчасового ролика, проходил потолок целиком: ложь
+    // уезжала и сюда, и в `Conversation.durationSeconds`, и
+    // останавливали её только 20 медиа-вызовов в сутки — то есть
+    // двадцать трёхчасовых роликов вместо расчётных двадцати
+    // двадцатиминутных, ~3,24 млн токенов на ролик вместо ~360 тысяч.
+    //
+    // Спрашиваем провайдера. Это ОДНА единица квоты за пакетный
+    // запрос против ста у поиска — то есть проверка стоит один процент
+    // от того вызова, который и породил это число.
+    const verified = (await this.youtube.fetchDurations([item.youtubeVideoId])).get(item.youtubeVideoId) ?? null;
+    // Слово клиента не участвует в решении вовсе — ни как максимум, ни
+    // как минимум: «взять наибольшее из двух» выглядело бы
+    // осторожностью, а на деле оставило бы рычаг в руках того, чьё
+    // число мы и перестали принимать.
+    const durationSeconds = verified;
     const maxDurationSeconds = resolveMaxDurationSeconds();
-    if ((item.durationSeconds ?? 0) > maxDurationSeconds) {
+    if ((durationSeconds ?? 0) > maxDurationSeconds) {
       await this.prisma.mediaReviewQueueItem.update({
         where: { id: item.id },
         data: {
@@ -225,7 +253,12 @@ export class MediaReviewAutoService implements OnModuleInit {
       });
       return;
     }
-    if (item.durationSeconds === null) {
+    if (durationSeconds === null) {
+      // Ветка была и до Пункта [the-lever-took-the-clients-word] —
+      // изменился только источник: прежде «неизвестна» означало «клиент
+      // не прислал», теперь — «провайдер не ответил или ролик недоступен».
+      // Отказ тот же и по той же причине: без длительности лимит
+      // стоимости проверить нечем.
       await this.prisma.mediaReviewQueueItem.update({
         where: { id: item.id },
         data: {
@@ -256,7 +289,10 @@ export class MediaReviewAutoService implements OnModuleInit {
             sourceType: ConversationSourceType.PUBLIC_VIDEO_URI,
             status: ConversationProcessingStatus.ANALYZING,
             occurredAt: item.publishedAt ?? item.createdAt,
-            durationSeconds: item.durationSeconds,
+            // Длительность ОТ ПРОВАЙДЕРА, а не со слов клиента: прежде
+            // сюда уезжало его число, и запись разговора о трёхчасовом
+            // ролике говорила «шестьдесят секунд».
+            durationSeconds,
             // rawFileRef — «клиентская ссылка на первоисточник, не сам
             // файл»: YouTube-ссылка ложится в него по прямому назначению.
             rawFileRef: `https://www.youtube.com/watch?v=${item.youtubeVideoId}`,

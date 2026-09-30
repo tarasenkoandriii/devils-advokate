@@ -14,6 +14,7 @@
 
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { WEATHER_SPEND, spendOutwardCall } from '../common/outward-spend';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { SecretsService } from '../secrets/secrets.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -72,7 +73,26 @@ export class WeatherForecastService {
    * должен покрывать Windy надёжнее, чем наоборот (бесплатный сервис без
    * ключа не может отказать по причине "квота/биллинг", в отличие от
    * платного). */
-  private async getForecastWithFallback(coords: Coordinates, targetDate: Date): Promise<ForecastResult> {
+  private async getForecastWithFallback(
+    userId: string,
+    coords: Coordinates,
+    targetDate: Date,
+  ): Promise<ForecastResult> {
+    // Пункт [the-policy-was-obeyed-by-hope] 2026-09-30: потолка не было
+    // ни у одного из трёх маршрутов прогноза. Windy платный и
+    // вызывается ПЕРВЫМ, когда ключ задан, — то есть расход появлялся
+    // ровно в той конфигурации, где о нём никто не считал. Потолок
+    // стоит на ОБОИХ источниках: поставить его только на платный
+    // значило бы, что он исчезает у владельца, который ключ не
+    // выставил, — а квота и частота у бесплатного сервиса тоже не
+    // бесконечны.
+    //
+    // Отметка ДО обращения, как у остальных: неудачная попытка тоже
+    // считается. Один вызов этой функции — один расход, даже если
+    // внутри случится фоллбек с Windy на Open-Meteo: платный запрос
+    // уже сделан.
+    await spendOutwardCall(this.prisma, userId, WEATHER_SPEND, 'weather-forecast');
+
     const windyKey = await this.secrets.resolve(WINDY_API_KEY_REF).catch(() => null);
     if (windyKey) {
       try {
@@ -129,7 +149,7 @@ export class WeatherForecastService {
     cityLabel: string | null,
     engineId?: string,
   ) {
-    const forecast = await this.getForecastWithFallback(coords, scheduled.scheduledAt).catch((err) => {
+    const forecast = await this.getForecastWithFallback(userId, coords, scheduled.scheduledAt).catch((err) => {
       throw new BadGatewayException(err instanceof Error ? err.message : 'Не удалось получить прогноз погоды');
     });
 
@@ -272,7 +292,7 @@ export class WeatherForecastService {
     const coords = await geocodeCity(user.city).catch(() => null);
     if (!coords) return null;
 
-    const forecast = await this.getForecastWithFallback(coords, targetDate).catch(() => null);
+    const forecast = await this.getForecastWithFallback(userId, coords, targetDate).catch(() => null);
     if (!forecast) return null;
 
     // Пункт [forecast-without-source] 2026-09-06: предпросмотр честен

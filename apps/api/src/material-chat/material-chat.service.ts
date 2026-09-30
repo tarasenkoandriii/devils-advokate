@@ -292,6 +292,18 @@ export class MaterialChatService {
     // согласия, хотя отправляет голос пользователя внешнему провайдеру.
     await this.consent.assertAudioMayLeaveDevice(userId, session.workingMaterial.projectId);
     // Пункт [stt-multi] 2026-09-02 — байты уходят провайдеру языка.
+    // Пункт [the-stream-had-no-bottom] 2026-09-30: суточный потолок
+    // расшифровок проверяется и ЗДЕСЬ, на шаге приёма байтов, — но НЕ
+    // отмечается. Причина в том, чем эти два шага отличаются: отметка
+    // расхода принадлежит шагу, который отправляет задачу
+    // (`submitWebhookJob`), а здесь байты только принимаются. Если
+    // потолок на сегодня выбран, расшифровать их всё равно будет
+    // нельзя — принимать их значит взять с человека загрузку, у
+    // которой нет продолжения, и заодно отдать их провайдеру в его
+    // хранилище. Проверка без отметки: два вызова за один расход не
+    // засчитываются дважды.
+    await assertUnderDailyTranscriptionLimit(this.prisma, userId);
+
     const { audioUrl, provider } = await this.stt.uploadAudio(fileStream, await this.userLanguage(userId), contentType ?? null);
     return { audioUrl, sttProvider: provider };
   }

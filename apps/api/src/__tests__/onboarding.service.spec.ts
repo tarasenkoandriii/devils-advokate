@@ -33,11 +33,20 @@ class FakeAIRouterService {
 }
 
 function createFakePrisma() {
+  const spendLog: any[] = [];
   const users = new Map<string, any>();
   const consents: any[] = [];
   let idCounter = 0;
 
   return {
+    // Пункт [the-policy-was-obeyed-by-hope] 2026-09-30: обратное
+    // геокодирование теперь под суточным потолком — расход считается по
+    // журналу, и фейк обязан его уметь.
+    auditLogEntry: {
+      count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
+      create: async ({ data }: any) => { spendLog.push(data); return data; },
+    },
+    _spendLog: () => spendLog,
     _seedUser(u: any) { users.set(u.id, u); },
     _getConsents(userId: string) { return consents.filter((c) => c.userId === userId); },
 

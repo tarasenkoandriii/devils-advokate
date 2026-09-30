@@ -106,8 +106,13 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
     // (Пункт [the-priciest-door-had-no-lock] того же дня): шесть
     // маршрутов к Google Places не были ограничены ничем, а Places
     // тарифицируется за каждый запрос.
-    expect(state.rows.length).toBe(12);
-    expect(state.rows.filter((r) => r.env !== null).length).toBe(9);
+    // 2026-09-30, Пункты [the-key-was-free-to-mint] /
+    // [the-policy-was-obeyed-by-hope]: стало шестнадцать. Прибавились
+    // ключи живой расшифровки, обратное геокодирование, прогнозы
+    // погоды и проверки фактчека — четыре точки выхода наружу, у
+    // которых не было потолка вовсе.
+    expect(state.rows.length).toBe(16);
+    expect(state.rows.filter((r) => r.env !== null).length).toBe(13);
     expect(state.rows.filter((r) => r.env === null).length).toBe(3);
   });
 
@@ -126,7 +131,7 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: у КАЖДОГО перекрываемого потолка решено, что означает ноль', () => {
-    // Без перебора по всем девяти список «ноль снимает потолок» можно
+    // Без перебора по всем тринадцати список «ноль снимает потолок» можно
     // было урезать на одну запись незаметно — мутация это показала.
     // Ожидание записано литералами: их читает человек, а не выводит тот
     // же код, который проверяется.
@@ -139,6 +144,11 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
       TRANSCRIPTION_MINUTES_PER_USER_PER_DAY: true,
       // Пункт [the-priciest-door-had-no-lock] 2026-09-30.
       PLACES_REQUESTS_PER_USER_PER_DAY: true,
+      // Пункты [the-key-was-free-to-mint] / [the-policy-was-obeyed-by-hope].
+      REALTIME_TOKENS_PER_USER_PER_DAY: true,
+      GEOCODING_REQUESTS_PER_USER_PER_DAY: true,
+      WEATHER_FORECASTS_PER_USER_PER_DAY: true,
+      FACT_CHECKS_PER_USER_PER_DAY: true,
       // Ноль здесь означает «окна нет», а не «без потолка».
       AI_IDEMPOTENCY_WINDOW_MINUTES: false,
       // Ноль здесь означает «ролик любой длины не принимается».

@@ -34,6 +34,7 @@ import { AIRouterService } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { reverseGeocode, NominatimError } from '../common/nominatim-client';
+import { GEOCODING_SPEND, spendOutwardCall } from '../common/outward-spend';
 import { LOCATION_PURPOSES } from '../consent/location-purposes';
 import { allFilled, substanceSite } from '../common/claim-substance';
 
@@ -151,6 +152,18 @@ export class OnboardingService {
     // consent.service.ts про revoke()) — здесь только добавлена сама
     // проверка, которой раньше не было в этом конкретном месте.
     await this.consent.requireConsent(userId, ConsentType.LOCATION, undefined, LOCATION_PURPOSES.ONBOARDING_CITY);
+
+    // Пункт [the-policy-was-obeyed-by-hope] 2026-09-30: потолка не было
+    // вовсе, и цена здесь не деньги, а БЛОКИРОВКА ПО IP всего
+    // продукта. Шапка клиента сама называет правило OSM Foundation —
+    // «максимум 1 запрос/сек» — и обосновывает его соблюдение словами
+    // «разовый запрос при онбординге (не постоянный поток)». Разовым
+    // его не делало ничто: маршрут можно было дёргать в цикле.
+    //
+    // Потолок суточный и на пользователя, и этого НЕДОСТАТОЧНО против
+    // риска, который глобален: он ограничивает одного человека, а
+    // забанят весь продукт. Названо прямо, а не изображено закрытым.
+    await spendOutwardCall(this.prisma, userId, GEOCODING_SPEND, 'onboarding/suggest-from-location');
 
     let geo: { country: string | null; countryCode: string | null; city: string | null };
     try {

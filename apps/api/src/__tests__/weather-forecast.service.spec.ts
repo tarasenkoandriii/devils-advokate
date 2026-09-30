@@ -2,6 +2,7 @@ import { WeatherForecastService } from '../weather-forecast/weather-forecast.ser
 import { BadGatewayException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 function createFakePrisma() {
+  const spendLog: any[] = [];
   const projects = new Map<string, any>();
   const scheduled = new Map<string, any>();
   const forecasts: any[] = [];
@@ -10,6 +11,15 @@ function createFakePrisma() {
   const nextId = () => `id-${++idCounter}`;
 
   return {
+    // Пункты [the-key-was-free-to-mint] / [the-policy-was-obeyed-by-hope]
+    // 2026-09-30: расход платных/квотируемых вызовов считается по
+    // журналу — фейк обязан уметь его читать и писать, иначе потолок
+    // просто не выполнится.
+    auditLogEntry: {
+      count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
+      create: async ({ data }: any) => { spendLog.push(data); return data; },
+    },
+    _spendLog: () => spendLog,
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedScheduled(s: any) { scheduled.set(s.id, s); },
     _seedUser(u: any) { users.set(u.id, { city: null, ...u }); },

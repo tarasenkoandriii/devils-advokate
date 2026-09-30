@@ -47,7 +47,7 @@ export interface YouTubeSearchResult {
 
 // ISO 8601 duration (PT1H2M3S) → секунди. YouTube Data API повертає
 // тривалість тільки в цьому форматі (videos.list, contentDetails.duration).
-function parseIso8601Duration(iso: string): number | null {
+export function parseIso8601Duration(iso: string): number | null {
   const match = iso.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
   if (!match) return null;
   const [, h, m, s] = match;
@@ -118,29 +118,10 @@ export class YouTubeSearchService {
     // повертає взагалі). 1 quota-одиниця за пакетний запит на всі id
     // одразу (§2.1 ТЗ: "read окремого відео — 1 одиниця") — не по
     // одиниці на відео.
-    const videoIds = items.map((i) => i.id.videoId).join(',');
-    const videosUrl = new URL(YOUTUBE_VIDEOS_URL);
-    videosUrl.searchParams.set('part', 'contentDetails');
-    videosUrl.searchParams.set('id', videoIds);
-    videosUrl.searchParams.set('key', apiKey);
-
-    let durationByVideoId = new Map<string, number | null>();
-    try {
-      const videosResponse = await fetchWithTimeout(videosUrl.toString());
-      if (videosResponse.ok) {
-        const videosData = (await videosResponse.json()) as {
-          items?: Array<{ id: string; contentDetails: { duration: string } }>;
-        };
-        durationByVideoId = new Map(
-          (videosData.items ?? []).map((v) => [v.id, parseIso8601Duration(v.contentDetails.duration)]),
-        );
-      }
-      // Помилка videos.list не фатальна для всього пошуку — метадані
-      // тривалості необов'язкові для черги (§4 ТЗ: durationSeconds Int?),
-      // краще віддати результати без тривалості, ніж провалити весь пошук.
-    } catch {
-      // те саме — м'яка деградація, не прокидаємо помилку далі
-    }
+    const durationByVideoId = await this.fetchDurations(
+      items.map((i) => i.id.videoId),
+      apiKey,
+    );
 
     return items.map((item) => ({
       videoId: item.id.videoId,
@@ -150,5 +131,48 @@ export class YouTubeSearchService {
       durationSeconds: durationByVideoId.get(item.id.videoId) ?? null,
       publishedAt: item.snippet.publishedAt ?? null,
     }));
+  }
+
+  /** Настоящая длительность роликов — от провайдера, пакетом.
+   *
+   * Пункт [the-lever-took-the-clients-word] 2026-09-30. Этот вызов уже
+   * существовал внутри `search()`, его результат уезжал клиенту и НА
+   * СЕРВЕРЕ НЕ СОХРАНЯЛСЯ НИГДЕ: `YouTubeSearchLog` хранит только
+   * `userId` и время, а `MediaReviewQueueItem.durationSeconds`
+   * заполняется из тела запроса. То есть сервер получал настоящее
+   * число, тут же забывал его и принимал обратно с чужих слов —
+   * `@IsInt() @Min(0) @Max(43_200)` проверяет форму, а не правду.
+   *
+   * Вынесено в отдельный метод ради постановки задачи: `tryEnqueueAnalysis`
+   * обязан спросить длительность сам. Это ОДНА единица квоты за пакетный
+   * запрос против ста у `search.list`, поэтому суточный потолок поиска
+   * здесь НЕ проверяется — он калиброван под цену поиска, и вешать на
+   * него проверку, которая в сто раз дешевле, значило бы запретить
+   * дешёвое из-за цены дорогого.
+   *
+   * Мягкая деградация сохранена: отказ `videos.list` даёт `null`, а не
+   * исключение. Для постановки задачи `null` означает отказ («длительность
+   * неизвестна — лимит стоимости проверить нечем»), и это уже было в
+   * коде; для поиска — результаты без длительности. */
+  async fetchDurations(videoIds: string[], apiKey?: string): Promise<Map<string, number | null>> {
+    if (videoIds.length === 0) return new Map();
+    const key = apiKey ?? (await this.secrets.resolve(YOUTUBE_API_KEY_REF));
+    const videosUrl = new URL(YOUTUBE_VIDEOS_URL);
+    videosUrl.searchParams.set('part', 'contentDetails');
+    // До 50 id в одном запросе — цена всё равно одна единица.
+    videosUrl.searchParams.set('id', videoIds.slice(0, 50).join(','));
+    videosUrl.searchParams.set('key', key);
+    try {
+      const videosResponse = await fetchWithTimeout(videosUrl.toString());
+      if (!videosResponse.ok) return new Map();
+      const videosData = (await videosResponse.json()) as {
+        items?: Array<{ id: string; contentDetails: { duration: string } }>;
+      };
+      return new Map((videosData.items ?? []).map((v) => [v.id, parseIso8601Duration(v.contentDetails.duration)]));
+    } catch {
+      // Помилка videos.list не фатальна: краще віддати результати без
+      // тривалості, ніж провалити весь пошук (§4 ТЗ: durationSeconds Int?).
+      return new Map();
+    }
   }
 }
