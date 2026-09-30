@@ -2,12 +2,22 @@ import { VenueRecommendationService } from '../venue-recommendation/venue-recomm
 import { BadGatewayException, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 function createFakePrisma() {
+  const spendLog: any[] = [];
   const scheduledConversations = new Map<string, any>();
   const venues: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
   return {
+    // Пункт [the-meter-was-on-one-door] / [the-priciest-door-had-no-lock]
+    // 2026-09-30: расход платных вызовов считается по журналу — фейк
+    // обязан уметь его читать и писать, иначе потолок не выполнится.
+    auditLogEntry: {
+      count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
+      findMany: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action),
+      create: async ({ data }: any) => { spendLog.push(data); return data; },
+    },
+    _spendLog() { return spendLog; },
     _seedScheduled(s: any) { scheduledConversations.set(s.id, s); },
     _getVenues() { return venues; },
 

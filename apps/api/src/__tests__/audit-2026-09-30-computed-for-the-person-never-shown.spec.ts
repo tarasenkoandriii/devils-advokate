@@ -52,7 +52,15 @@ function clientText(): string {
 function calledFromControllers(sources: string[]): Set<string> {
   const called = new Set<string>();
   for (const f of sources) {
-    if (!/\.controller\.ts$/.test(f)) continue;
+    // ПОПРАВКА, Пункт [three-said-seven] 2026-09-30: было
+    // `/\.controller\.ts$/` — с ТОЧКОЙ перед `controller`. Три
+    // публичных контроллера названы `*.public-controller.ts`, и этот
+    // шаблон проходил мимо ровно тех файлов, которые важнее прочих.
+    // Ловушка названа в шапке `public-surfaces.ts` дословно: «любая
+    // сверка, перебирающая контроллеры по обычному шаблону
+    // `*.controller.ts`, проходит мимо». Я повторил её в сверке,
+    // написанной на следующий день.
+    if (!/controller\.ts$/.test(f)) continue;
     const src = readFileSync(f, 'utf8');
     for (const m of src.matchAll(/this\.[A-Za-z0-9_]+\s*\.\s*([A-Za-z0-9_]+)\s*\(/g)) called.add(m[1]);
   }
@@ -154,6 +162,12 @@ describe('[computed-for-the-person-never-shown] ответы, уходящие �
       'employer-hiring/employer-hiring.service.ts#getState',
       'hiring-extras/hiring-extras.service.ts#coverageMatrix',
       'interview-pool/interview-pool.service.ts#addCandidate',
+      // Пункт [never-published-was-published] 2026-09-30: четвёртая
+      // запись. Отправка в публичную библиотеку теперь может удержать
+      // часть аргументов — те, что построены из фактов «не
+      // публикуется ни при каких обстоятельствах», — и число
+      // удержанных обязано дойти до человека.
+      'library/library.service.ts#submitProject',
     ]);
     // Имён этих полей у клиентов по-прежнему нет — и это НЕ противоречие:
     // разметка берёт их из объекта строки (`r.note`, `data.revokedRows`)
@@ -166,6 +180,14 @@ describe('[computed-for-the-person-never-shown] ответы, уходящие �
     expect(pool.includes('historyDisclaimer')).toBe(true);
     const team = readFileSync(join(tma, 'hiring', 'TeamPanels.tsx'), 'utf8');
     expect(team.includes('RevokedRowsNote count={data?.revokedRows ?? 0}')).toBe(true);
+    const library = readFileSync(
+      join(REPO, 'apps', 'tma', 'src', 'components', 'LibrarySubmitSection.tsx'),
+      'utf8',
+    );
+    // Признак ставится из ответа И читается разметкой: без второго
+    // половина пути существовала бы ради самой себя.
+    expect(library.includes('setHeldBackNote(result.heldBackNote ?? null)')).toBe(true);
+    expect(library.includes('{heldBackNote}')).toBe(true);
   });
 
   it('записано, чего сторож не делает', () => {

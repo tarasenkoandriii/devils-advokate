@@ -249,7 +249,7 @@ function PromptDetailInner() {
                   <tbody>
                     {run.results.map((r) => (
                       <tr key={r.id}>
-                        <td>{r.evaluationMetric?.name ?? '—'}</td>
+                        <td>{metricLabel(r.evaluationMetric?.name)}</td>
                         <td>{r.value.toFixed(4)}</td>
                         <td>
                           <span className={`badge ${r.passed ? 'badge-ok' : 'badge-bad'}`}>
@@ -288,6 +288,28 @@ function PromptDetailInner() {
       )}
     </div>
   );
+}
+
+/** Подписи метрик прогона на языке человека.
+ *
+ * Пункт [the-gate-passed-on-nine-failures] 2026-09-30: к двум метрикам
+ * прибавилась третья — число НЕВЫПОЛНЕННЫХ кейсов. Прежде кейс, на
+ * котором AI-вызов упал или вернул не-JSON, выпадал из знаменателя
+ * полноты: девять провалов из десяти давали
+ * `alternative_explanation_completeness = 1.0000`, гейт говорил
+ * «пройден», и версия промпта уезжала в прод. Теперь такой кейс роняет
+ * гейт, и оператор обязан видеть ПРИЧИНУ, а не только «не пройден». */
+const METRIC_LABELS: Record<string, string> = {
+  alternative_explanation_completeness: 'Полнота альтернативных объяснений',
+  false_positive_rate: 'Ложные срабатывания strong_discrepancy',
+  precision: 'Точность (precision)',
+  recall: 'Полнота выборки (recall)',
+  cases_not_executed: 'Кейсов не выполнено (сбой вызова или неверный JSON)',
+};
+
+function metricLabel(name: string | undefined): string {
+  if (!name) return '—';
+  return METRIC_LABELS[name] ?? name;
 }
 
 export default function PromptDetailPage() {

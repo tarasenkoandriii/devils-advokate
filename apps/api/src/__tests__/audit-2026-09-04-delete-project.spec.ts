@@ -83,6 +83,21 @@ describe('Разрушающие действия: до чего человек 
       .join('\n');
 
     const unreachable: string[] = [];
+    // Гигиена реестра стоит ЗДЕСЬ, где она может сработать: отговорка
+    // обязана относиться к существующему маршруту и обязана что-то
+    // объяснять. Пункт [it-asserted-about-itself] 2026-09-30: прежде в
+    // тесте-измерении стояло `expect(Object.keys(SERVER_ONLY_DELETES))
+    // .toHaveLength(0)` — утверждение о константе, объявленной в этой
+    // же спеке как `= {}`. Упасть оно могло только от правки самой
+    // спеки; поведение продукта до него не доходило.
+    const allRoutes = deleteRoutes().map((r) => r.route);
+    const staleExcuses = Object.keys(SERVER_ONLY_DELETES).filter((r) => !allRoutes.includes(r));
+    expect(staleExcuses).toEqual([]);
+    const unexplained = Object.entries(SERVER_ONLY_DELETES)
+      .filter(([, why]) => why.trim().length < 30)
+      .map(([route]) => route);
+    expect(unexplained).toEqual([]);
+
     for (const { route, file } of deleteRoutes()) {
       if (SERVER_ONLY_DELETES[route]) continue;
       // Путь клиента — шаблонная строка: параметр маршрута (`:personId`)
@@ -165,6 +180,5 @@ describe('Разрушающие действия: до чего человек 
     // ОДНОГО способа убрать написанное. Число обновлено осознанно.
     const routes = deleteRoutes();
     expect(routes.length).toBe(11);
-    expect(Object.keys(SERVER_ONLY_DELETES)).toHaveLength(0);
   });
 });

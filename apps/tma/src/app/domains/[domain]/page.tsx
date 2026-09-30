@@ -59,7 +59,18 @@ export default function DomainProjectsPage() {
           route={inviteRoute}
           title={manifest.id === 'interview-pool' ? 'Вас пригласили в команду рекрутинга' : 'Вас пригласили в инвестиционную группу'}
           actionLabel="Принять приглашение"
-          onJoined={() => domainApi.listProjects(manifest).then((r) => setItems(r.items)).catch(() => undefined)}
+          // Пункт [joined-and-saw-nothing] 2026-09-30: здесь был
+          // `.catch(() => undefined)` без причины — сразу после
+          // «Принять приглашение» список не обновлялся, и под только
+          // что принятым приглашением стояло «Пока нет проектов в этом
+          // сценарии». Человек читал это как «приглашение не
+          // сработало».
+          onJoined={() =>
+            domainApi
+              .listProjects(manifest)
+              .then((r) => setItems(r.items))
+              .catch(() => setError('Приглашение принято, но список проектов не обновился — обновите страницу.'))
+          }
         />
       )}
       {creating ? (

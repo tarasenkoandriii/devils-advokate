@@ -81,6 +81,34 @@ function mutatingGuardedRoutes(): Array<{ method: string; path: string; file: st
 }
 
 describe('Сверка [audit-note-went-stale]: список необъяснённых маршрутов держится проверкой', () => {
+  it('КЛЮЧЕВОЙ ТЕСТ, Пункт [three-said-seven] 2026-09-30: реестр без дублей, и число в прозе — настоящее', () => {
+    // Сверка ниже держит РАВЕНСТВО МНОЖЕСТВ в обе стороны, и дубль её
+    // не ронял: в реестре лежало 31 запись при 30 разных маршрутах, а
+    // шапки двух файлов одного и того же Пункта называли два разных
+    // числа — «ШЕСТНАДЦАТЬ» и «ТРИДЦАТЬ». Числа в прозе не держало
+    // ничто. Теперь держит.
+    const keys = UNRESOLVED_ROUTES.map((r) => `${r.method} ${r.path}`);
+    const dups = keys.filter((k, i) => keys.indexOf(k) !== i);
+    expect(dups).toEqual([]);
+    expect(UNRESOLVED_ROUTES.length).toBe(30);
+
+    // И число названо в шапке ИМЕННО ЭТОГО файла тем же словом, каким
+    // его читает человек: сверка по тексту здесь единственно возможна
+    // — у прозы нет поведения.
+    // Файл целиком: фраза про семейство стоит рядом со своими
+    // записями, а не в шапке. Обрезать чтение по 4000 знаков значило
+    // бы проверять не то, что читает человек.
+    const header = readFileSync(join(__dirname, '..', 'project-freeze', 'unresolved-routes.ts'), 'utf8');
+    expect(header.includes('не резолвится ТРИДЦАТЬ')).toBe(true);
+    expect(header.includes('ШЕСТНАДЦАТЬ')).toBe(false);
+
+    // Семейство `no-project` названо числом в том же файле — и это
+    // число тоже разошлось (было «четырнадцать» при одиннадцати).
+    const noProject = UNRESOLVED_ROUTES.filter((r) => r.reason === 'no-project').length;
+    expect(noProject).toBe(11);
+    expect(header.includes('вот эти одиннадцать и больше ничего')).toBe(true);
+  });
+
   it('КЛЮЧЕВОЙ ТЕСТ: каждый маршрут, который guard не резолвит, назван и объяснён', () => {
     const declared = new Set(UNRESOLVED_ROUTES.map((r) => `${r.method} ${r.path}`));
     const actual = mutatingGuardedRoutes().filter((r) => parseDomainRoute(r.path) === null);

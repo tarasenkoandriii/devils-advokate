@@ -58,7 +58,13 @@ export const DEFAULT_PACKAGE_QUESTIONS = [
   'Ожидания по оплате?',
   'Когда можете приступить?',
 ];
-export const BATCH_MATCH_DAILY_DEFAULT = 100;
+// Пункт [written-for-the-person-never-delivered] 2026-09-30: здесь
+// была `BATCH_MATCH_DAILY_DEFAULT = 100` — потолок-дефолт, не
+// подключённый ни к реестру расходов, ни к чему-либо ещё. Настоящее
+// значение живёт в `SPEND_LIMITS` под ключом `ai-batch-match` и
+// читается через `spendLimit('AI_BATCH_MATCH_PER_USER_PER_DAY')`. Две
+// копии одного числа, из которых вторая никого не ограничивала, —
+// приглашение поправить не ту.
 export const MAX_BATCH = 50;
 export const MIN_SAME_ROLE_FOR_SALARY_SIGNAL = 3;
 

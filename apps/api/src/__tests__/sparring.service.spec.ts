@@ -17,6 +17,7 @@ function fakeConsent(calls: string[] = []) {
 }
 
 function createFakePrisma() {
+  const spendLog: any[] = [];
   const projects = new Map<string, any>();
   const people = new Map<string, any>();
   const projectPeople: any[] = [];
@@ -31,6 +32,15 @@ function createFakePrisma() {
   const nextId = () => `id-${++idCounter}`;
 
   return {
+    // Пункт [the-meter-was-on-one-door] / [the-priciest-door-had-no-lock]
+    // 2026-09-30: расход платных вызовов считается по журналу — фейк
+    // обязан уметь его читать и писать, иначе потолок не выполнится.
+    auditLogEntry: {
+      count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
+      findMany: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action),
+      create: async ({ data }: any) => { spendLog.push(data); return data; },
+    },
+    _spendLog() { return spendLog; },
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedPerson(p: any) { people.set(p.id, p); },
     _seedProjectPerson(pp: any) { projectPeople.push(pp); },

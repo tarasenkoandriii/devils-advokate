@@ -22,7 +22,13 @@ describe('buildUserPrompt (фича 6 → фича 1)', () => {
         idealOutcome: 'Повышение на 30% и новая должность',
         minimumAcceptableOutcome: 'Повышение хотя бы на 10%',
         unacceptableOutcome: 'Отказ без объяснений',
-        deadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+        // Пункт [the-test-failed-by-clock] 2026-09-30: было ровно
+        // `Date.now() + 5 суток`, а `deadlineRelative` берёт своё
+        // `new Date()` на несколько миллисекунд позже и делает
+        // `Math.floor` — то есть получалось «через 4 дня». Тест падал
+        // 3 раза из 10 полных прогонов. Час запаса снимает гонку, не
+        // меняя проверяемого свойства.
+        deadline: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000),
         constraints: ['Бюджет команды урезан в этом квартале'],
         nonNegotiables: ['Остаться в текущей команде'],
         negotiables: ['Готов на удалёнку вместо офиса'],

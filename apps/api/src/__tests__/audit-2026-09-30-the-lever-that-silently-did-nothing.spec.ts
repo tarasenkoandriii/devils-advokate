@@ -96,9 +96,19 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
     // Замер пункта: десять потолков, восемь перекрываемых, два зашитых.
     // Обзорный аудит 2026-09-29 называл «13 и 6» — это было неверно, и
     // число здесь закреплено, чтобы неправда не вернулась.
-    expect(state.rows.length).toBe(10);
-    expect(state.rows.filter((r) => r.env !== null).length).toBe(8);
-    expect(state.rows.filter((r) => r.env === null).length).toBe(2);
+    // 2026-09-30, Пункт [the-meter-counted-rows]: стало одиннадцать.
+    // Прибавился потолок проверок фото (SerpApi) — он существовал
+    // зашитым числом и в реестре не значился вовсе, при том что это
+    // именно потолок расходов. Число обновлено осознанно: эта проверка
+    // ровно затем и стоит, чтобы новая запись реестра была замечена
+    // человеком.
+    // И двенадцать — с потолком обращений к платным картам
+    // (Пункт [the-priciest-door-had-no-lock] того же дня): шесть
+    // маршрутов к Google Places не были ограничены ничем, а Places
+    // тарифицируется за каждый запрос.
+    expect(state.rows.length).toBe(12);
+    expect(state.rows.filter((r) => r.env !== null).length).toBe(9);
+    expect(state.rows.filter((r) => r.env === null).length).toBe(3);
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: «без потолка» говорится только там, где ноль и правда снимает потолок', () => {
@@ -116,7 +126,7 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: у КАЖДОГО перекрываемого потолка решено, что означает ноль', () => {
-    // Без перебора по всем восьми список «ноль снимает потолок» можно
+    // Без перебора по всем девяти список «ноль снимает потолок» можно
     // было урезать на одну запись незаметно — мутация это показала.
     // Ожидание записано литералами: их читает человек, а не выводит тот
     // же код, который проверяется.
@@ -127,6 +137,8 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
       AI_BATCH_MATCH_PER_USER_PER_DAY: true,
       TRANSCRIPTIONS_PER_USER_PER_DAY: true,
       TRANSCRIPTION_MINUTES_PER_USER_PER_DAY: true,
+      // Пункт [the-priciest-door-had-no-lock] 2026-09-30.
+      PLACES_REQUESTS_PER_USER_PER_DAY: true,
       // Ноль здесь означает «окна нет», а не «без потолка».
       AI_IDEMPOTENCY_WINDOW_MINUTES: false,
       // Ноль здесь означает «ролик любой длины не принимается».
@@ -157,8 +169,30 @@ describe('[the-lever-that-silently-did-nothing] причина, по котор�
   });
 
   it('записано, чего блок не знает — и это уезжает на экран', () => {
+    // ПОПРАВКА, Пункт [it-asserted-about-itself] 2026-09-30. Прежде
+    // третьей строкой здесь стояло
+    // `expect(ceilingsState().doesNotKnow).toEqual(CEILINGS_DOES_NOT_KNOW)`
+    // — а `ceilingsState()` возвращает ровно эту же константу, ту же
+    // ссылку. Утверждение о себе, только через вызов функции, поэтому
+    // текстовый поиск тавтологий его и не нашёл. Проверено мутацией:
+    // все три строки реестра заменены на «ААА»/«БББ»/«ВВВ» — весь
+    // набор остался зелёным, содержание строк не держало ничто. И
+    // обещание из имени теста — «уезжает на экран» — не проверялось
+    // вообще.
     expect(CEILINGS_DOES_NOT_KNOW.length).toBe(3);
     expect(CEILINGS_DOES_NOT_KNOW.filter((s) => s.trim().length === 0)).toEqual([]);
-    expect(ceilingsState().doesNotKnow).toEqual(CEILINGS_DOES_NOT_KNOW);
+
+    // Существо каждой строки: чего именно блок не знает.
+    const substance = ['Vercel', 'телеметри', 'не трогая код'];
+    expect(substance.map((k) => CEILINGS_DOES_NOT_KNOW.some((line) => line.includes(k)))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+
+    // И путь на экран целиком: состояние несёт строки, карточка их печатает.
+    expect(ceilingsState().doesNotKnow.length).toBe(3);
+    const card = readFileSync(join(REPO, 'apps', 'admin', 'src', 'components', 'SpendCeilingsCard.tsx'), 'utf8');
+    expect(card.includes('state.doesNotKnow.map')).toBe(true);
   });
 });

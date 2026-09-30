@@ -147,10 +147,17 @@ describe('[input-truncated] сколько текста дошло до разб
     // Правило по дереву: новый `slice` по тексту, уходящему в модель,
     // должен уронить проверку. Смотрим на вызовы, где режут ИМЕННО
     // промпт или текст источника, а не цитату с потолком в 500 знаков.
+    //
+    // ПОПРАВКА 2026-09-30: в альтернативе были 20_000 и 24_000, но не
+    // 16_000 — то есть голый `slice(0, 16_000)` это правило не видело,
+    // хотя `MAX_SOURCE_TEXT_CHARS` равен ровно ему. Проверено мутацией:
+    // мутация с числом проходила правило (её убивали поведенческие
+    // тесты рядом), мутация с именем константы правило роняла. Дыра
+    // была в одном выражении, а не в наборе, — и всё же дыра.
     const offenders: string[] = [];
     for (const file of sourceFiles()) {
       const src = code(file);
-      for (const m of src.matchAll(/(\w+)\.slice\(0,\s*(MAX_SOURCE_TEXT_CHARS|MAX_OFFER_CHARS|AI_PROMPT_CHARS|2[04]_000)\s*\)/g)) {
+      for (const m of src.matchAll(/(\w+)\.slice\(0,\s*(MAX_SOURCE_TEXT_CHARS|MAX_OFFER_CHARS|AI_PROMPT_CHARS|16_000|2[04]_000)\s*\)/g)) {
         offenders.push(`${file.slice(API_SRC.length + 1)}: ${m[0]}`);
       }
     }

@@ -31,6 +31,8 @@
 
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsentService } from '../consent/consent.service';
+import { assertReligiousContentAllowed } from '../consent/religious-content';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { checkQuoteLimits } from './quote-limit';
@@ -72,17 +74,17 @@ export class ReconciliationArgumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly consent: ConsentService,
   ) {}
 
   async generate(userId: string, projectId: string, engineId?: string) {
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
 
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { religion: true } });
-    if (!user.religion) {
-      throw new BadRequestException(
-        'Для аргументов примирения нужно сначала указать вероисповедание в настройках онбординга ("не указывать" оставит эту функцию недоступной)',
-      );
-    }
+    // Пункт [the-consent-that-stopped-nothing] 2026-09-30: здесь
+    // читалось только поле `religion` — то есть отзыв согласия на
+    // религиозный контент аргументы примирения не останавливал.
+    const religion = await assertReligiousContentAllowed(this.prisma, this.consent, userId, projectId);
+    const user = { religion };
 
     const userPrompt = [
       `Ситуация: ${project.question}`,

@@ -1,5 +1,17 @@
 import { ReconciliationArgumentsService } from '../reconciliation-arguments/reconciliation-arguments.service';
-import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+
+/** Фейк согласия. Пункт [the-consent-that-stopped-nothing] 2026-09-30:
+ * религиозный контент гейтится СОГЛАСИЕМ, а не только полем
+ * `religion`, — значит и в тестах согласие обязано быть.
+ * `granted` можно снять, чтобы проверить отзыв. */
+class FakeConsentService {
+  granted = true;
+  async hasActiveConsent() { return this.granted; }
+  async requireConsent() {
+    if (!this.granted) throw new ForbiddenException({ code: 'CONSENT_REQUIRED' });
+  }
+}
 
 function createFakePrisma() {
   const projects = new Map<string, any>();
@@ -26,6 +38,10 @@ function createFakePrisma() {
         if (!u) throw new Error('not found');
         return u;
       },
+      // Пункт [the-consent-that-stopped-nothing] 2026-09-30: право на
+      // религиозный контент читается общим помощником через
+      // `findUnique`.
+      findUnique: async ({ where }: any) => users.get(where.id) ?? null,
     },
     promptVersion: {
       findFirst: async () => null,
@@ -90,22 +106,34 @@ async function run() {
   test('generate() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user', question: 'x', goal: null });
-    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generate(USER_ID, PROJECT_ID), NotFoundException, 'generate() на чужой проект');
   });
 
   test('generate() бросает BadRequestException, если религия не указана ("не указывать")', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, null);
-    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generate(USER_ID, PROJECT_ID), BadRequestException, 'generate() без указанной религии');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ, Пункт [the-consent-that-stopped-nothing] 2026-09-30: отозванное согласие останавливает выдачу', async () => {
+    // До этого дня `RELIGIOUS_CONTENT` не проверялся НИ В ОДНОМ месте:
+    // гейтом было поле `User.religion`, и отзыв согласия не менял
+    // ничего — аргументы примирения продолжали выдаваться.
+    const prisma = createFakePrisma();
+    seedProject(prisma, 'CHRISTIANITY');
+    const consent = new FakeConsentService();
+    consent.granted = false;
+    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any, consent as any);
+    await assertThrowsAsync(() => svc.generate(USER_ID, PROJECT_ID), ForbiddenException, 'generate() с отозванным согласием');
   });
 
   test('generate() подмешивает ситуацию и традицию пользователя в промпт', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma, 'Христианство (православие)');
     const fakeRouter = new FakeAIRouterService();
-    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Поссорился с братом из-за наследства'), true, 'ситуация попала в промпт');
@@ -116,7 +144,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma, 'Ислам');
     const fakeRouter = new FakeAIRouterService();
-    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.systemPrompt.includes('15 слов'), true, 'ограничение на длину цитаты явно в промпте');
@@ -130,7 +158,7 @@ async function run() {
     fakeRouter.responseText = JSON.stringify([
       { scriptureReference: 'Матфея 18:21-22', text: 'Учит прощать не ограниченное число раз — применимо к затянувшемуся спору с братом.' },
     ]);
-    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     const created = await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(created.length, 1, 'один аргумент создан');
@@ -143,7 +171,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma, 'Иудаизм');
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new ReconciliationArgumentsService(prisma as any, failingRouter as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, failingRouter as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generate(USER_ID, PROJECT_ID), BadGatewayException, 'generate() при недоступности провайдера');
   });
 
@@ -153,7 +181,7 @@ async function run() {
     prisma._getArguments().push({ id: 'other-1', projectId: PROJECT_ID, stance: 'PRO', text: 'x', createdAt: new Date() });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = JSON.stringify([{ scriptureReference: 'x', text: 'y' }]);
-    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
     await svc.generate(USER_ID, PROJECT_ID);
 
     const list = await svc.list(USER_ID, PROJECT_ID);
@@ -163,7 +191,7 @@ async function run() {
   test('list() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new ReconciliationArgumentsService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.list(USER_ID, PROJECT_ID), NotFoundException, 'list() на чужой проект');
   });
 

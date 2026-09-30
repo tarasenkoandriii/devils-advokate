@@ -5,6 +5,7 @@
 // читается с backend (фаза A, GET onboarding-conversations/:id) — после
 // replay из intake-квиза она уже заполнена.
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from '../NotLoadedNotice';
 import { domainApi } from '../../lib/domains/api';
 import { DomainManifest } from '../../lib/domains/types';
 import { EntityForm } from './EntityForm';
@@ -25,6 +26,7 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId);
   const [answers, setAnswers] = useState<Array<{ id: string; text: string }>>([]);
   const [checklist, setChecklist] = useState<any>(null);
+  const [checklistFailed, setChecklistFailed] = useState(false);
   const [draft, setDraft] = useState<string>('');
   const [busy, setBusy] = useState(false);
   // Пункт [ai-errors-ui] 2026-09-02: см. JobSearchWorkspace — 403 без
@@ -47,8 +49,16 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
         const data = await domainApi.getOnboarding(manifest, id);
         if (!cancelled) setAnswers(data.answers);
         if (manifest.routes.checklist) {
-          const cl = await domainApi.checklist(manifest, id, manifest.id === 'major-purchase' ? { category } : undefined).catch(() => null);
-          if (!cancelled) setChecklist(cl);
+          // Пункт [the-checklist-that-said-nothing] 2026-09-30: здесь
+          // был `.catch(() => null)` без причины, и блок «Что ещё
+          // стоит рассказать» просто НЕ ПОЯВЛЯЛСЯ — то есть онбординг
+          // выглядел законченным, потому что исчез ровно тот блок,
+          // который сказал бы, чего не хватает.
+          let clFailed = false;
+          const cl = await domainApi
+            .checklist(manifest, id, manifest.id === 'major-purchase' ? { category } : undefined)
+            .catch(() => { clFailed = true; return null; });
+          if (!cancelled) { setChecklist(cl); setChecklistFailed(clFailed); }
         }
       } catch (err) {
         if (!cancelled) setError(err);
@@ -123,6 +133,12 @@ export function DomainOnboarding({ manifest, projectId, conversationId: initialC
         <label className="entity-form__field"><span>Что покупаете (для чек-листа вопросов)</span>
           <select value={category} onChange={(e) => setCategory(e.target.value as any)}><option value="REAL_ESTATE">Недвижимость</option><option value="VEHICLE">Транспорт</option></select>
         </label>
+      )}
+      {checklistFailed && (
+        <NotLoadedNotice
+          what="список «что ещё стоит рассказать»"
+          consequence="Онбординг может выглядеть законченным — это не значит, что рассказано всё."
+        />
       )}
       {checklist && (
         <div className="domain-onboarding__checklist">

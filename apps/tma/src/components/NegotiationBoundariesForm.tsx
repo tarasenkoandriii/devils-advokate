@@ -5,6 +5,7 @@
 // HTML-кнопка сохранения.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { getBoundaries, saveBoundaries } from '../lib/features';
 
 interface NegotiationBoundariesFormProps {
@@ -13,6 +14,7 @@ interface NegotiationBoundariesFormProps {
 
 export function NegotiationBoundariesForm({ projectId }: NegotiationBoundariesFormProps) {
   const [loading, setLoading] = useState(true);
+  const [notLoaded, setNotLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -34,7 +36,15 @@ export function NegotiationBoundariesForm({ projectId }: NegotiationBoundariesFo
         setWalkAwayPoint(b.walkAwayPoint ?? '');
         if (b.batna || b.watna) setExpanded(true);
       })
-      .catch(() => {})
+      // Пункт [empty-fields-were-not-mine] 2026-09-30: здесь был
+      // `.catch(() => {})` без причины. При сбое GET все пять полей
+      // (желаемый исход, приемлемый, BATNA, WATNA, точка выхода)
+      // оставались пустыми, форма свёрнутой, и ошибки не было — то
+      // есть человек видел «я это не заполнял» там, где заполнял.
+      // Данные в базе при этом целы: Prisma игнорирует `undefined` в
+      // `update`, так что сохранение поверх не стирает прежнее; но
+      // знать об этом человеку неоткуда.
+      .catch(() => setNotLoaded(true))
       .finally(() => setLoading(false));
   }, [projectId]);
 
@@ -60,9 +70,21 @@ export function NegotiationBoundariesForm({ projectId }: NegotiationBoundariesFo
 
   if (!expanded) {
     return (
-      <button type="button" className="objective-toggle" onClick={() => setExpanded(true)}>
-        + Добавить BATNA/WATNA
-      </button>
+      <>
+        {/* Пункт [empty-fields-were-not-mine] 2026-09-30: свёрнутая
+            форма при сбое загрузки читается как «я этого не заполнял».
+            Подпись стоит РЯДОМ с кнопкой, а не внутри формы, — иначе
+            человек её не увидит, пока не развернёт. */}
+        {notLoaded && (
+          <NotLoadedNotice
+            what="ваши границы переговоров (BATNA/WATNA и точка выхода)"
+            consequence="Если вы их заполняли, они не потеряны — их не удалось прочитать. Разворачивать и сохранять поверх сейчас не стоит."
+          />
+        )}
+        <button type="button" className="objective-toggle" onClick={() => setExpanded(true)}>
+          + Добавить BATNA/WATNA
+        </button>
+      </>
     );
   }
 

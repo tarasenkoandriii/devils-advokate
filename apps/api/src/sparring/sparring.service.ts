@@ -33,6 +33,7 @@
 
 import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertUnderDailyTranscriptionLimit, recordTranscriptionSpend } from '../stt/transcription-spend';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import type { ParsedTranscript } from '../conversations/transcription.service';
 import { SttService, sttJobIdVariants } from '../stt/stt.service';
@@ -511,6 +512,22 @@ export class SparringService {
         `Достигнут лимит сообщений в сессии (${MAX_MESSAGES_PER_SESSION}) — завершите эту сессию и начните новую`,
       );
     }
+
+
+    // Пункт [the-meter-was-on-one-door] 2026-09-30: потолок поминутной
+    // оплаты стоял только на разговорах. Здесь его не было вовсе —
+    // только `MAX_MESSAGES_PER_SESSION` на сессию, а потолка на число
+    // сессий нет: сорок реплик → новая сессия → ещё сорок. Тот же
+    // потолок, то же место в порядке — после проверок приватности и
+    // ДО первого платного шага.
+    await assertUnderDailyTranscriptionLimit(this.prisma, userId);
+
+    // Отметка расхода ДО платного вызова: неудачная попытка тоже
+    // считается, провайдер мог быть уже задет. Длительности у
+    // голосовой реплики нет — потолок по минутам её не ограничивает,
+    // держит потолок по числу расшифровок, и это сказано в шапке
+    // `transcription-spend.ts`.
+    await recordTranscriptionSpend(this.prisma, userId, 'SparringSession', sessionId, null);
 
     const webhookUrl = this.buildVoiceWebhookUrl();
     const { storedId } = await this.stt.submitWebhookJob({

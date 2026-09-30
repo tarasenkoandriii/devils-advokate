@@ -20,6 +20,7 @@
 import { personLevelFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { hasPersonVerdict, NO_PERSON_VERDICT_RULE } from '../common/no-person-verdict';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { CommunicationTraitType, ConversationProcessingStatus, PersonCommunicationTrait } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
@@ -48,7 +49,24 @@ interface RawTrait {
   observedFrom: string; // текстовое описание источника — обязательно, см. isValidProfilePayload()
 }
 
+/** Пункт [the-second-line-stood-elsewhere] 2026-09-30 — вторая линия
+ * защиты стояла не у тех разборов, предмет которых — человек.
+ *
+ * `hasPersonVerdict` применялся в ТРЁХ местах: детектор манипуляций,
+ * живой детектор манипуляций, паралингвистика. Все три разбирают ПРИЁМ
+ * В РЕПЛИКЕ. А у разборов, чей предмет — САМ НАЗВАННЫЙ ЧЕЛОВЕК
+ * (портрет общения, прецеденты его поведения, гипотезы о его мотивах),
+ * стоял ТОЛЬКО промпт. Собственный реестр продукта
+ * (`consent/person-research.ts`, `PERSON_RESEARCH_GATED`) называет эти
+ * три сайта поимённо — то есть проект знал, где предмет опаснее всего,
+ * и вторую линию там не поставил.
+ *
+ * Шапка `no-person-verdict.ts` сама говорит, зачем вторая линия: «он
+ * ГРУБЫЙ… Первая линия — промпт; это вторая, на случай, когда первая
+ * не сработала». И её же шапка говорит, что сравнивались ДВА разбора —
+ * на этом сверка и остановилась. */
 function isValidProfilePayload(text: string): boolean {
+  if (hasPersonVerdict(text)) return false;
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
@@ -71,7 +89,9 @@ const DEFAULT_SYSTEM_PROMPT = `Тебе даны факты о человеке 
   TRAIT_LABELS,
 )
   .map(([key, label]) => `${key} (${label})`)
-  .join(', ')}. Для каждого признака, который реально подтверждается данными (не для всех шести обязательно — если данных недостаточно для какого-то признака, просто не включай его), укажи: traitType — один из перечисленных ключей, value — конкретное текстовое описание наблюдения (не true/false, а нюанс — например "не соглашается сразу, обычно просит день подумать"), observedFrom — на основании какого конкретного разговора или факта сделан вывод, confidence — число от 0 до 1. Ответь СТРОГО валидным JSON-массивом объектов вида {"traitType": string, "value": string, "observedFrom": string, "confidence": number}. Если данных недостаточно ни для одного признака — верни пустой массив []. Без пояснений вне JSON.`;
+  .join(', ')}. Для каждого признака, который реально подтверждается данными (не для всех шести обязательно — если данных недостаточно для какого-то признака, просто не включай его), укажи: traitType — один из перечисленных ключей, value — конкретное текстовое описание наблюдения (не true/false, а нюанс — например "не соглашается сразу, обычно просит день подумать"), observedFrom — на основании какого конкретного разговора или факта сделан вывод, confidence — число от 0 до 1. Ответь СТРОГО валидным JSON-массивом объектов вида {"traitType": string, "value": string, "observedFrom": string, "confidence": number}. Если данных недостаточно ни для одного признака — верни пустой массив []. Без пояснений вне JSON.` +
+  ' ' +
+  NO_PERSON_VERDICT_RULE;
 
 @Injectable()
 export class CommunicationProfileService {

@@ -17,6 +17,8 @@
 
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsentService } from '../consent/consent.service';
+import { religiousContentAllowed } from '../consent/religious-content';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentLifecycleStatus } from '@prisma/client';
@@ -59,6 +61,7 @@ export class ClosingMessageService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly consent: ConsentService,
   ) {}
 
   async generate(userId: string, projectId: string, engineId?: string) {
@@ -71,7 +74,15 @@ export class ClosingMessageService {
       );
     }
 
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { religion: true } });
+    // Пункт [the-consent-that-stopped-nothing] 2026-09-30. Здесь
+    // читалось поле `religion`, а комментарий ниже УТВЕРЖДАЛ, что
+    // проверяется согласие: «не персистим её, раз согласия на
+    // религиозный контент не было». Согласие не проверялось нигде, и
+    // его отзыв цитату не убирал. Завершающее сообщение — единственное
+    // из четырёх мест, где отказа быть не должно: сообщение
+    // составляется, просто без религиозной вставки.
+    const religiousAllowed = await religiousContentAllowed(this.prisma, this.consent, userId, projectId);
+    const user = { religion: religiousAllowed.allowed ? religiousAllowed.religion : null };
 
     const [rejected, accepted] = await Promise.all([
       this.prisma.argument.findMany({
@@ -125,9 +136,11 @@ export class ClosingMessageService {
     }
 
     const raw: RawClosingMessage = JSON.parse(result.text);
-    // Честная защита: даже если religion не указана, но модель зачем-то
-    // вернула цитату (не должна, но не полагаемся только на промпт) —
-    // не персистим её, раз согласия на религиозный контент не было.
+    // Честная защита: даже если права на религиозный контент нет, но
+    // модель зачем-то вернула цитату (не должна, но не полагаемся
+    // только на промпт) — не персистим её. С 2026-09-30 фраза ниже
+    // наконец описывает то, что происходит: `user.religion` здесь
+    // равен `null`, когда согласия нет.
     const includeQuote = !!user.religion && !!raw.quoteText && !!raw.quoteSourceReference;
 
     return this.prisma.closingMessage.create({

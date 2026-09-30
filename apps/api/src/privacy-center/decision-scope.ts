@@ -226,6 +226,8 @@ export const DECISION_RESOURCE: Record<string, string> = {
   'prompt_version.rolled_back': 'PromptVersion',
   'transcription.requested': 'Conversation',
   'tts.synthesized': 'TtsCache',
+  'places.request': 'GooglePlaces',
+  'photo_verification.requested': 'PersonFact',
 };
 
 /** Увидит ли человек это решение в Центре приватности.

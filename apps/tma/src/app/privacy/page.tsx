@@ -5,11 +5,14 @@
 // проекты (счётчик), персоны с правом на удаление, экспорт данных.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from '../../components/NotLoadedNotice';
+import { WhatRemainsAfterDeletion } from '../../components/AccountDeletion';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   getPrivacyOverview,
   deletePersonData,
+  getPersonDeletionPreview,
   exportPrivacyData,
   deleteAccount,
   AccountDeletionResult,
@@ -52,6 +55,9 @@ export default function PrivacyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [personResidue, setPersonResidue] = useState<{ lines: string[]; note: string } | null>(null);
+  const [personPreview, setPersonPreview] = useState<{ notRemovedHere: string[] } | null>(null);
+  const [personPreviewFailed, setPersonPreviewFailed] = useState(false);
   const [exporting, setExporting] = useState(false);
   // Пункт [consent-revocation] 2026-09-04: отзыв согласия отвечал молча
   // («готово»), и человек достраивал молчание в свою пользу — читал его
@@ -79,6 +85,15 @@ export default function PrivacyPage() {
 
   useEffect(() => {
     void load().finally(() => setLoading(false));
+    // Предпросмотр остатка — отдельной загрузкой: его отсутствие не
+    // должно ломать сам экран приватности. Но МОЛЧАТЬ о границе
+    // нельзя: человек нажмёт «Удалить всё», не прочитав, чего
+    // удаление не забирает, и примет отсутствие предупреждения за
+    // отсутствие границы. Поэтому сбой называется прямо у
+    // подтверждения.
+    void getPersonDeletionPreview()
+      .then((p) => setPersonPreview({ notRemovedHere: p.notRemovedHere }))
+      .catch(() => setPersonPreviewFailed(true));
 
   }, []);
 
@@ -88,7 +103,11 @@ export default function PrivacyPage() {
       return;
     }
     try {
-      await deletePersonData(personId);
+      const result = await deletePersonData(personId);
+      // Пункт [the-button-was-named-as-the-remedy] 2026-09-30: остаток
+      // называется ПОСЛЕ удаления тем же текстом, каким предпросмотр
+      // назвал его до. Молчание здесь читалось бы как «забрали всё».
+      setPersonResidue({ lines: result.notRemovedHere, note: result.notRemovedHereNote });
       setConfirmingDeleteId(null);
       await load();
       haptic('success');
@@ -208,11 +227,35 @@ export default function PrivacyPage() {
                 >
                   {confirmingDeleteId === p.id ? 'Точно удалить?' : 'Удалить всё'}
                 </button>
+                {/* Предупреждение стоит у подтверждения, а не после
+                    удаления: «Удалить всё» — это обещание, и человек
+                    должен прочитать его границу ДО решения. */}
+                {confirmingDeleteId === p.id && personPreview && (
+                  <WhatRemainsAfterDeletion
+                    lines={personPreview.notRemovedHere}
+                    title="Что удаление записи о человеке НЕ забирает:"
+                  />
+                )}
+                {confirmingDeleteId === p.id && personPreviewFailed && (
+                  <NotLoadedNotice
+                    what="список того, чего удаление записи о человеке НЕ забирает"
+                    consequence="У этого удаления есть граница, и прочитать её сейчас не удалось. Лучше повторить позже, чем удалять, не прочитав: что именно входит в границу, знает сервер, и выдумывать это здесь экран не станет."
+                  />
+                )}
               </li>
             ))}
           </ul>
         ) : (
           <p className="card-section__empty">Пока нет ни одного человека</p>
+        )}
+        {personResidue && (
+          <>
+            <WhatRemainsAfterDeletion
+              lines={personResidue.lines}
+              title="Запись удалена. Что осталось и почему:"
+            />
+            <p className="conversations-section__hint">{personResidue.note}</p>
+          </>
         )}
       </section>
 

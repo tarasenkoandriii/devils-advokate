@@ -1,5 +1,17 @@
 import { ClosingMessageService } from '../closing-message/closing-message.service';
-import { BadGatewayException, BadRequestException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ForbiddenException } from '@nestjs/common';
+
+/** Фейк согласия. Пункт [the-consent-that-stopped-nothing] 2026-09-30:
+ * религиозный контент гейтится СОГЛАСИЕМ, а не только полем
+ * `religion`, — значит и в тестах согласие обязано быть.
+ * `granted` можно снять, чтобы проверить отзыв. */
+class FakeConsentService {
+  granted = true;
+  async hasActiveConsent() { return this.granted; }
+  async requireConsent() {
+    if (!this.granted) throw new ForbiddenException({ code: 'CONSENT_REQUIRED' });
+  }
+}
 
 function createFakePrisma() {
   const projects = new Map<string, any>();
@@ -26,6 +38,10 @@ function createFakePrisma() {
     },
     user: {
       findUniqueOrThrow: async ({ where }: any) => users.get(where.id),
+      // Пункт [the-consent-that-stopped-nothing] 2026-09-30: право на
+      // религиозный контент читается общим помощником, и он берёт
+      // пользователя через `findUnique` (может не быть вовсе).
+      findUnique: async ({ where }: any) => users.get(where.id) ?? null,
     },
     decisionOutcome: {
       findUnique: async ({ where }: any) => outcomes.get(where.projectId) ?? null,
@@ -94,7 +110,7 @@ async function run() {
   test('КЛЮЧЕВОЙ ТЕСТ: generate() бросает BadRequestException без зафиксированного исхода — не гадает', async () => {
     const prisma = createFakePrisma();
     seedProject(prisma);
-    const svc = new ClosingMessageService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new ClosingMessageService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generate(USER_ID, PROJECT_ID), BadRequestException, 'generate() без DecisionOutcome');
   });
 
@@ -103,7 +119,7 @@ async function run() {
     seedProject(prisma);
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'WENT_POORLY', outcomeNotes: 'оппонент не согласился на условия', predictedLean: null });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new ClosingMessageService(prisma as any, fakeRouter as any);
+    const svc = new ClosingMessageService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('WENT_POORLY'), true, 'исход попал в промпт');
@@ -116,7 +132,7 @@ async function run() {
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'WENT_POORLY', predictedLean: null });
     prisma._seedArgument({ projectId: PROJECT_ID, text: 'Аргумент про рыночную зарплату', lifecycleStatus: 'REJECTED' });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new ClosingMessageService(prisma as any, fakeRouter as any);
+    const svc = new ClosingMessageService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('Аргумент про рыночную зарплату'), true, 'отклонённый аргумент попал в промпт для честного объяснения причины');
@@ -127,7 +143,7 @@ async function run() {
     seedProject(prisma, null);
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'WENT_WELL', predictedLean: null });
     const fakeRouter = new FakeAIRouterService();
-    const svc = new ClosingMessageService(prisma as any, fakeRouter as any);
+    const svc = new ClosingMessageService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.systemPrompt.includes('quoteText'), false, 'без вероисповедания системный промпт не просит цитату вообще');
@@ -139,7 +155,7 @@ async function run() {
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'WENT_WELL', predictedLean: null });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = '{"summaryText":"Отлично","quoteText":"случайно вставленная цитата","quoteSourceReference":"Некий источник"}';
-    const svc = new ClosingMessageService(prisma as any, fakeRouter as any);
+    const svc = new ClosingMessageService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     const message = await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(message.quoteText, null, 'цитата НЕ персистится, если пользователь не давал согласия — не полагается только на промпт');
@@ -152,7 +168,7 @@ async function run() {
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'WENT_WELL', predictedLean: null });
     const fakeRouter = new FakeAIRouterService();
     fakeRouter.responseText = '{"summaryText":"Отлично","quoteText":"Радуйтесь с радующимися","quoteSourceReference":"Рим. 12:15"}';
-    const svc = new ClosingMessageService(prisma as any, fakeRouter as any);
+    const svc = new ClosingMessageService(prisma as any, fakeRouter as any, new FakeConsentService() as any);
 
     const message = await svc.generate(USER_ID, PROJECT_ID);
     assertEqual(message.quoteText, 'Радуйтесь с радующимися', 'цитата сохранена');
@@ -164,7 +180,7 @@ async function run() {
     seedProject(prisma);
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'MIXED', predictedLean: null });
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new ClosingMessageService(prisma as any, failingRouter as any);
+    const svc = new ClosingMessageService(prisma as any, failingRouter as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generate(USER_ID, PROJECT_ID), BadGatewayException, 'generate() при недоступности провайдера');
   });
 
@@ -172,7 +188,7 @@ async function run() {
     const prisma = createFakePrisma();
     seedProject(prisma);
     prisma._seedOutcome({ projectId: PROJECT_ID, actualOutcome: 'WENT_WELL', predictedLean: null });
-    const svc = new ClosingMessageService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new ClosingMessageService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await svc.generate(USER_ID, PROJECT_ID);
     await svc.generate(USER_ID, PROJECT_ID);
 

@@ -14,6 +14,7 @@
 
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { spendPlacesRequest } from '../common/places-spend';
 import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { MoneyLike, sumMoney } from '../common/money';
 import { SecretsService } from '../secrets/secrets.service';
@@ -47,11 +48,12 @@ export class VenueApplicationService {
   /** "Гео и автоопределение заведения... по геолокации/названию"
    * (буквально §3.23 ТЗ) — поиск-кандидатов для владельца, не
    * персистит ничего сама, только предлагает варианты для выбора. */
-  async searchCandidates(query: string, latitude?: number, longitude?: number) {
+  async searchCandidates(userId: string, query: string, latitude?: number, longitude?: number) {
     if (!query.trim()) {
       throw new BadRequestException('query не может быть пустым');
     }
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
+    await spendPlacesRequest(this.prisma, userId, 'venue-applications/search');
     try {
       return await searchByText(query.trim(), apiKey, latitude, longitude);
     } catch (err) {
@@ -62,8 +64,9 @@ export class VenueApplicationService {
   /** "Автоподгрузка контактов, адреса, часов работы, фото" (§3.23 ТЗ)
    * — по выбранному placeId, для предзаполнения формы заявки перед
    * "редактированием автоподгруженных данных". */
-  async getAutofillData(googlePlaceId: string) {
+  async getAutofillData(userId: string, googlePlaceId: string) {
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
+    await spendPlacesRequest(this.prisma, userId, 'venue-applications/autofill');
     try {
       const details = await getPlaceDetails(googlePlaceId, apiKey);
       return {
@@ -149,6 +152,9 @@ export class VenueApplicationService {
     if (application.googlePlaceId) {
       try {
         const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
+        // Один запрос на заявку, и делает его ОПЕРАТОР — расход
+        // считается на него же, как и все прочие обращения к картам.
+        await spendPlacesRequest(this.prisma, userId, 'venue-applications/moderate');
         const details = await getPlaceDetails(application.googlePlaceId, apiKey);
         rating = details.rating;
       } catch {

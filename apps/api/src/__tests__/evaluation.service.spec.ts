@@ -267,6 +267,60 @@ describe('EvaluationService', () => {
     expect(caseResult.actualOutput).toContain('AI call failed');
   });
 
+  it('КЛЮЧЕВОЙ ТЕСТ: девять провалов по сети из десяти НЕ дают «полноту 1.0» и не пропускают гейт', async () => {
+    // Пункт [the-gate-passed-on-nine-failures] 2026-09-30. Кейс, на
+    // котором вызов упал, не попадал НИ В ЧИСЛИТЕЛЬ, НИ В ЗНАМЕНАТЕЛЬ:
+    // из десяти кейсов девять валились по сети, один проходил полным —
+    // и метрика равнялась 1.0000, гейт говорил «пройден», версия
+    // промпта уезжала в прод через `promoteToActive`.
+    const prisma = createFakePrisma();
+    prisma._seedUser({ id: 'op1', isOperator: true });
+    prisma._seedPromptVersion({ id: 'pv1', promptId: 'motive-analysis', template: 'sys' });
+
+    let call = 0;
+    const fakeAiRouter = {
+      execute: async () => {
+        call++;
+        if (call > 1) throw new Error('AI provider timeout');
+        return { text: JSON.stringify([{ explanation: 'h1', alternativeExplanation: 'alt1' }]) };
+      },
+    };
+    const service = makeService(prisma, fakeAiRouter);
+
+    const dataset = await service.createDataset('op1', 'ds', 'v1');
+    await service.addCases(
+      'op1',
+      dataset.id,
+      Array.from({ length: 10 }, (_, i) => ({ input: `scenario ${i}`, caseType: 'structural' as const })),
+    );
+
+    const run = await service.evaluate('op1', 'pv1', dataset.id);
+
+    // Полнота печатается как есть — она и правда посчитана по одному
+    // выполненному кейсу, и подмешивать в неё сбой сети значило бы
+    // выдать одно за другое.
+    const completeness = prisma
+      ._getResults()
+      .find((r: any) => prisma._getMetricName(r.evaluationMetricId) === 'alternative_explanation_completeness');
+    expect(completeness.value).toBe(1);
+
+    // А допуск — не даётся, и причина видна отдельным числом.
+    const unexecuted = prisma
+      ._getResults()
+      .find((r: any) => prisma._getMetricName(r.evaluationMetricId) === 'cases_not_executed');
+    expect(unexecuted.value).toBe(9);
+    expect(unexecuted.passed).toBe(false);
+
+    const gate = prisma._getGates().find((g: any) => g.evaluationRunId === run.id);
+    expect(gate.passed).toBe(false);
+
+    // И у каждого невыполненного кейса причина названа словами, а не
+    // спрятана в «no hypotheses generated» — это разные вещи: модель,
+    // не давшая гипотез, и вызов, который не состоялся.
+    const notes = prisma._getCaseResults().filter((cr: any) => !cr.passed).map((cr: any) => cr.note);
+    expect(notes.filter((n: string) => n.includes('кейс не выполнен')).length).toBe(9);
+  });
+
   it('getRun возвращает failedCases отдельным списком', async () => {
     const prisma = createFakePrisma();
     prisma._seedUser({ id: 'op1', isOperator: true });

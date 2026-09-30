@@ -27,8 +27,19 @@ import { putPublicBlob, deleteBlob, VercelBlobError } from '../common/vercel-blo
 import { reverseImageSearch, SerpApiError } from '../common/serpapi-client';
 import { ConsentType, PhotoVerificationStatus } from '@prisma/client';
 import { resolveBlobToken } from '../common/blob-token';
+import { spendLimitByKey } from '../common/spend-limits';
+import { mayBePublished, NEVER_PUBLISHED_REFUSAL } from '../common/fact-scope';
 
-const DAILY_LIMIT_PER_USER = 5; // "особенно строгие лимиты" (§4.4 ТЗ) — намеренно низкое число, не для массового использования
+/** Пункт [the-meter-counted-rows] 2026-09-30: число жило здесь и
+ * только здесь, хотя это потолок РАСХОДОВ (SerpApi платный) и реестр
+ * расходов объявляет себя единственным местом, где потолки
+ * перечислены. Теперь оно приходит из реестра по ключу; «особенно
+ * строгие лимиты» (§4.4 ТЗ) остались зашитыми осознанно — это решение
+ * о продукте, а не настройка. */
+const DAILY_LIMIT_PER_USER = spendLimitByKey('photo-verification');
+
+/** Действие в журнале, по которому считается суточный расход. */
+const PHOTO_VERIFICATION_USAGE_ACTION = 'photo_verification.requested';
 const MAX_IMAGE_BYTES = 8_000_000; // 8MB — с запасом под фото документа, не для видео/архивов
 // 2026-08-31: резолв токена перенесён в common/blob-token.ts — Vercel
 // сам создаёт переменную под именем BLOB_READ_WRITE_TOKEN (без
@@ -53,6 +64,11 @@ export class PhotoVerificationService {
     await this.assertUnderRateLimit(userId);
 
     const imageBuffer = await this.bufferStreamWithLimit(imageStream);
+
+    // Отметка ДО первого платного шага: неудачная попытка тоже
+    // считается. Недосчитать здесь дороже, чем пересчитать —
+    // провайдер мог быть уже задет.
+    await this.recordAttempt(userId, personFactId);
 
     const [blobToken, serpApiKey] = await Promise.all([
       resolveBlobToken(this.secrets),
@@ -168,14 +184,46 @@ export class PhotoVerificationService {
     return Buffer.concat(chunks.map((c) => Buffer.from(c)));
   }
 
+  /** Пункт [the-meter-counted-rows] 2026-09-30 — потолок считал СТРОКИ,
+   * а не вызовы, и у этого было два следствия, оба настоящие.
+   *
+   * ПЕРВОЕ. Вызов, упавший ДО записи, потолок не тратил. Порядок был:
+   * потолок → `putPublicBlob` → `reverseImageSearch` → создание строк.
+   * `SerpApiError` и `VercelBlobError` летят в `catch` и превращаются
+   * в `BadRequestException` ДО того, как появится хоть одна строка.
+   * Значит серия падающих вызовов жгла кредиты SerpApi и запись/
+   * удаление в Blob неограниченно. У соседнего потолка
+   * (`youtube-search.service.ts`) факт попытки пишется ДО проверки
+   * `response.ok` ровно по этой причине — правило в проекте было,
+   * просто не везде.
+   *
+   * ВТОРОЕ. Один УСПЕШНЫЙ поиск с двадцатью совпадениями создавал
+   * двадцать строк и съедал суточный потолок 5 целиком. То есть
+   * потолок «5 проверок» на деле означал «от одной до пяти проверок,
+   * как повезёт с числом найденных картинок» — и человек не мог этого
+   * ни предсказать, ни узнать.
+   *
+   * Считаем ПОПЫТКИ: отметка пишется до первого платного шага, по той
+   * же схеме, что у транскрибации и поиска YouTube. */
   private async assertUnderRateLimit(userId: string) {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.photoVerification.count({
-      where: { createdByUserId: userId, createdAt: { gte: since } },
+    const count = await this.prisma.auditLogEntry.count({
+      where: { actorId: userId, action: PHOTO_VERIFICATION_USAGE_ACTION, createdAt: { gte: since } },
     });
     if (count >= DAILY_LIMIT_PER_USER) {
       throw new ForbiddenException(`Достигнут дневной лимит проверок фото (${DAILY_LIMIT_PER_USER}/день) — попробуйте завтра`);
     }
+  }
+
+  private async recordAttempt(userId: string, personFactId: string) {
+    await this.prisma.auditLogEntry.create({
+      data: {
+        actorId: userId,
+        action: PHOTO_VERIFICATION_USAGE_ACTION,
+        resource: 'PersonFact',
+        resourceId: personFactId,
+      },
+    });
   }
 
   private async assertOwnedFact(userId: string, personFactId: string) {
@@ -185,6 +233,15 @@ export class PhotoVerificationService {
     });
     if (!fact || fact.person.createdByUserId !== userId) {
       throw new NotFoundException(`PersonFact ${personFactId} not found`);
+    }
+    // Пункт [never-published-was-published] 2026-09-30: проверялось
+    // только владение. Фото факта со `scope = PRIVATE_TO_USER`
+    // уходило в ПУБЛИЧНЫЙ Blob и в реверс-поиск — то есть на время
+    // поиска было реально публично в интернете, при прямом обещании
+    // «не публикуется ни при каких обстоятельствах». Отказ, а не
+    // молчаливый пропуск: человек должен узнать, почему нельзя.
+    if (!mayBePublished(fact.scope)) {
+      throw new BadRequestException(NEVER_PUBLISHED_REFUSAL);
     }
     return fact;
   }

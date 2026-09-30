@@ -315,9 +315,20 @@ describe('SttService.discardOrphan (аудит 2026-09-02)', () => {
     expect(log).toEqual(['soniox:tr-1', 'assemblyai:a-1']);
   });
 
-  it('отказ уборки не бросает наружу — вебхук всё равно подтверждается', async () => {
+  it('отказ уборки не бросает наружу, но и НЕ выдаётся за успех', async () => {
+    // Пункт [discarded-nothing-said-three] 2026-09-30: метод возвращал
+    // `void`, и вызывающий увеличивал счётчик «отозвано» безусловно.
+    // Человек читал «Задач распознавания отозвано у провайдера: 3» при
+    // трёх неотозванных.
     const svc = build([], true);
-    await expect(svc.discardOrphan('soniox', 'tr-1')).resolves.toBeUndefined();
+    await expect(svc.discardOrphan('soniox', 'tr-1')).resolves.toBe(false);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ: успешный отзыв — true, неизвестный провайдер и неумеющий провайдер — false', async () => {
+    const svc = build([]);
+    expect(await svc.discardOrphan('soniox', 'tr-1')).toBe(true);
+    // Провайдер неизвестен по форме вебхука — отзыва не было.
+    expect(await svc.discardOrphan(null, 'x')).toBe(false);
   });
 });
 

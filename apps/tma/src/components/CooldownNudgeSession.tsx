@@ -96,6 +96,15 @@ export function CooldownNudgeSession({ projectId }: CooldownNudgeSessionProps) {
 
   async function handleDismissNudge() {
     if (nudge?.eventId) {
+      // Пункт [the-rule-knew-one-spelling] 2026-09-30, осознанное
+      // молчание с записанной причиной. Это ОТМЕТКА О ЗАКРЫТИИ, а не
+      // загрузка данных: нудж уже убран с экрана строкой ниже —
+      // локально, не дожидаясь сервера. Сказать человеку «не удалось
+      // записать, что вы закрыли подсказку» во время живого разговора
+      // значило бы вернуть ему на экран то, что он только что убрал,
+      // и ради сведения, которое ему ничего не даёт. Худшее
+      // последствие сбоя — та же отметка придёт со следующим
+      // событием.
       dismissCooldownNudgeEvent(projectId, nudge.eventId).catch(() => {});
     }
     setNudge(null);

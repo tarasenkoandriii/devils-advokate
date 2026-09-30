@@ -28,6 +28,8 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsentService } from '../consent/consent.service';
+import { ConsentType } from '@prisma/client';
 import { ReligiousReminderFrequency } from '@prisma/client';
 
 /** «Раз в день» как окно, а не календарные сутки: 20 часов — см. разбор в
@@ -76,7 +78,10 @@ export interface ReminderResult {
 
 @Injectable()
 export class ReligiousReminderService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consent: ConsentService,
+  ) {}
 
   /** Проверяет, нужно ли показать напоминание СЕЙЧАС, и если да —
    * отмечает момент показа (для логики ONCE_PER_DAY). Вызывается
@@ -90,6 +95,12 @@ export class ReligiousReminderService {
     });
 
     if (!user?.religion || !(user.religion in RELIGIOUS_PRINCIPLES)) {
+      return { shouldShow: false, principles: null };
+    }
+    // Пункт [the-consent-that-stopped-nothing] 2026-09-30: гейтом было
+    // ТОЛЬКО поле `religion`, а отзыв согласия на религиозный контент
+    // его не касался — напоминания приходили и после отзыва.
+    if (!(await this.consent.hasActiveConsent(userId, ConsentType.RELIGIOUS_CONTENT))) {
       return { shouldShow: false, principles: null };
     }
     if (user.religiousReminderFrequency === ReligiousReminderFrequency.OFF) {

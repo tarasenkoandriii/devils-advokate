@@ -96,11 +96,34 @@ export function AccountDeletionReport({ result }: { result: AccountDeletionResul
       ) : (
         <p>Данных, которые нужно было удалить, за аккаунтом не числилось.</p>
       )}
+      {/* Пункт [discarded-nothing-said-three] 2026-09-30: здесь стояло
+          «удалено: N» и «отозвано: N», а N в обоих случаях было числом
+          НАЙДЕННОГО. Теперь исход печатается отдельно — и неудача
+          говорит вслух, как уже говорит неудача с доказательствами
+          ДТП рядом. */}
       {external.conversationAudioBlobs > 0 && (
-        <p>Транзитных аудиофайлов разговоров удалено: {external.conversationAudioBlobs}.</p>
+        <p>
+          Транзитных аудиофайлов разговоров: найдено {external.conversationAudioBlobs}, удалено{' '}
+          {external.conversationAudioDeleted}.
+        </p>
       )}
-      {external.sttJobsDiscarded > 0 && (
-        <p>Задач распознавания отозвано у провайдера: {external.sttJobsDiscarded}.</p>
+      {external.conversationAudioFailed > 0 && (
+        <p role="alert">
+          Транзитных аудиофайлов НЕ удалено: {external.conversationAudioFailed} — они остались в хранилище, напишите
+          нам, удалим вручную.
+        </p>
+      )}
+      {external.sttJobsInFlight > 0 && (
+        <p>
+          Задач распознавания в полёте: {external.sttJobsInFlight}, отозвано у провайдера{' '}
+          {external.sttJobsDiscarded}.
+        </p>
+      )}
+      {external.sttJobsFailed > 0 && (
+        <p role="alert">
+          Задач распознавания НЕ отозвано: {external.sttJobsFailed}. Копия записи остаётся у подрядчика до конца его
+          срока хранения — напишите нам, отзовём вручную.
+        </p>
       )}
       {external.failed > 0 && (
         <p role="alert">

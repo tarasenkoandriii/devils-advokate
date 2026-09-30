@@ -9,6 +9,7 @@ function createFakePrisma() {
   // Аудит 2026-09-03 (сверка доступа): ссылка на встречу из тела запроса
   // теперь проверяется на владение.
   const scheduledConversations: any[] = [];
+  const placesSpend: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
@@ -28,6 +29,14 @@ function createFakePrisma() {
     user: {
       findUnique: async ({ where }: any) => users.get(where.id) ?? null,
     },
+    // Пункт [the-priciest-door-had-no-lock] 2026-09-30: обращения к
+    // платным картам считаются по журналу — фейк обязан уметь его
+    // читать и писать, иначе потолок просто не выполнится.
+    auditLogEntry: {
+      count: async () => placesSpend.length,
+      create: async ({ data }: any) => { placesSpend.push(data); return data; },
+    },
+    _placesSpend() { return placesSpend; },
     venueApplication: {
       create: async ({ data }: any) => {
         const a = { id: nextId(), status: 'PENDING', createdAt: new Date(), ...data };
@@ -124,13 +133,13 @@ async function run() {
 
   test('searchCandidates() бросает BadRequestException для пустого запроса', async () => {
     const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
-    await assertThrowsAsync(() => svc.searchCandidates('   '), BadRequestException, 'searchCandidates() с пустым запросом');
+    await assertThrowsAsync(() => svc.searchCandidates(USER_ID, '   '), BadRequestException, 'searchCandidates() с пустым запросом');
   });
 
   test('searchCandidates() бросает BadGatewayException при ошибке Google Places', async () => {
     (global as any).fetch = async () => ({ ok: false, status: 403 });
     const svc = new VenueApplicationService(createFakePrisma() as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
-    await assertThrowsAsync(() => svc.searchCandidates('Кафе'), BadGatewayException, 'searchCandidates() при ошибке провайдера');
+    await assertThrowsAsync(() => svc.searchCandidates(USER_ID, 'Кафе'), BadGatewayException, 'searchCandidates() при ошибке провайдера');
   });
 
   test('submitApplication() бросает BadRequestException без name/address', async () => {

@@ -31,6 +31,11 @@ import { ExternalArtifactsCleanupService } from '../common/external-artifacts/ex
 import { AIJobStatus, Prisma } from '@prisma/client';
 import { describeDecision } from './decision-labels';
 import { ACCOUNT_NOT_REMOVED_HERE, SCRUBBED_INPUT_HASH } from './deletion-report';
+import {
+  PERSON_REMOVED_HERE,
+  PERSON_RESIDUE_NOTE,
+  personNotRemovedHere,
+} from './person-deletion-impact';
 import { ownScopeIds, DECISIONS_OUT_OF_SCOPE } from './decision-scope';
 import { thirdPartyLosses, THIRD_PARTY_LOSSES_NOTE } from './deletion-impact';
 
@@ -107,8 +112,25 @@ export class PrivacyCenterService {
       action: 'user.deleted',
       resource: 'User',
       resourceId: userId,
-      before: { telegramIdHash, ...counts, evidenceBlobs: evidenceCount, conversationAudioBlobs: artifacts.conversationAudioBlobs, sttJobsInFlight: artifacts.sttJobsDiscarded },
-      after: { blobsDeleted, blobsFailed, sttJobsDiscarded: artifacts.sttJobsDiscarded },
+      // Пункт [discarded-nothing-said-three] 2026-09-30: в `before`
+      // как «задач в полёте» уходило число ОТОЗВАННЫХ (то же самое
+      // поле), а в `after` оно же как «отозвано». Найдено и отозвано —
+      // разные числа, и теперь они разные.
+      before: {
+        telegramIdHash,
+        ...counts,
+        evidenceBlobs: evidenceCount,
+        conversationAudioBlobs: artifacts.conversationAudioBlobs,
+        sttJobsInFlight: artifacts.sttJobsInFlight,
+      },
+      after: {
+        blobsDeleted,
+        blobsFailed,
+        conversationAudioDeleted: artifacts.conversationAudioDeleted,
+        conversationAudioFailed: artifacts.conversationAudioFailed,
+        sttJobsDiscarded: artifacts.sttJobsDiscarded,
+        sttJobsFailed: artifacts.sttJobsFailed,
+      },
     });
 
     // 3) каскад
@@ -149,7 +171,11 @@ export class PrivacyCenterService {
         deleted: blobsDeleted,
         failed: blobsFailed,
         conversationAudioBlobs: artifacts.conversationAudioBlobs,
+        conversationAudioDeleted: artifacts.conversationAudioDeleted,
+        conversationAudioFailed: artifacts.conversationAudioFailed,
+        sttJobsInFlight: artifacts.sttJobsInFlight,
         sttJobsDiscarded: artifacts.sttJobsDiscarded,
+        sttJobsFailed: artifacts.sttJobsFailed,
       },
       notRemovedHere: [...ACCOUNT_NOT_REMOVED_HERE],
       // Что забрало у других — тем же списком, что человек видел до
@@ -274,7 +300,13 @@ export class PrivacyCenterService {
    * не путать с PersonsService.removePerson(), который только
    * отвязывает персону от ОДНОГО проекта. Закрывает §3.9
    * "право на удаление данных о себе" по-настоящему. */
-  async deletePerson(userId: string, personId: string): Promise<void> {
+  /** Пункт [the-button-was-named-as-the-remedy] 2026-09-30: метод
+   * возвращал `void`, контроллер отдавал `{ deleted: true }`, и
+   * человек не узнавал НИЧЕГО о том, что осталось. При том что реестр
+   * последствий отзыва согласия PERSON_RESEARCH направляет его именно
+   * к этой кнопке как к средству. Удаление аккаунта и удаление проекта
+   * свои остатки называют — удаление персоны не называло. */
+  async deletePerson(userId: string, personId: string) {
     const person = await this.prisma.person.findFirst({
       where: { id: personId, createdByUserId: userId },
     });
@@ -282,6 +314,12 @@ export class PrivacyCenterService {
       throw new NotFoundException(`Person ${personId} not found`);
     }
     await this.prisma.person.delete({ where: { id: personId } });
+    return {
+      deleted: true,
+      removedHere: [...PERSON_REMOVED_HERE],
+      notRemovedHere: personNotRemovedHere(),
+      notRemovedHereNote: PERSON_RESIDUE_NOTE,
+    };
   }
 
   /** Экспорт данных пользователя. Возвращает JSON напрямую, не

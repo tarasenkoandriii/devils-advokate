@@ -13,7 +13,7 @@
 //   • факт — с URL источника и датой; никаких «индексов надёжности»;
 //   • identify без сети; refresh ≤ 1/сутки на компанию, ≤ 10 источников.
 
-import { isTruncatedIntake, type SourceIntake } from '../common/source-intake';
+import { intakeNote, isTruncatedIntake, promptIntakeNote, takeSource, type SourceIntake } from '../common/source-intake';
 import { isUniqueViolation } from '../common/unique-violation';
 import { BadGatewayException, BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { EmployerFactCategory, ProjectMode, RepresentationCheck, TermsSheetKind } from '@prisma/client';
@@ -23,7 +23,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError } from '../common/safe-url-fetch';
 import { assertHiringProjectAccess, assertRoleApplicable, AGENCY_ONLY } from '../terms-sheet/terms-access';
-import { quoteIsFromSource } from '../terms-sheet/terms-matching.service';
+import { MAX_SOURCE_TEXT_CHARS, quoteIsFromSource } from '../terms-sheet/terms-matching.service';
 import { keepQuoted, type KeptWithQuote } from '../common/kept-with-quote';
 import { extractDomain, isRegistryUrl, loadRegistryHosts, looksLikePersonName, normalizeHost } from './registry-hosts';
 import { allFilled, substanceSite } from '../common/claim-substance';
@@ -495,6 +495,16 @@ export class EmployerDossierService {
     if (!document) throw new NotFoundException('Документ для сверки не найден в этом проекте');
 
     const factsText = facts.map((f) => `[${f.category}] ${f.quote}`).join('\n');
+    // Пункт [the-rule-did-not-see-its-own-number] 2026-09-30: здесь
+    // стоял голый `document.slice(0, 16_000)` — то есть ровно тот
+    // безымянный потолок, против которого писан Пункт
+    // [input-truncated]. Правило по дереву его не видело: в его
+    // альтернативе были 20_000 и 24_000, но не 16_000, хотя
+    // `MAX_SOURCE_TEXT_CHARS` равен именно ему. Экран под пустым
+    // списком пишет «Расхождений между источниками и досье не
+    // найдено» — утверждение обо ВСЁМ документе, сделанное по его
+    // первой части, и ни модель, ни человек об усечении не узнавали.
+    const { text: documentForPrompt, intake } = takeSource(document, MAX_SOURCE_TEXT_CHARS);
     let text: string;
     try {
       text = (
@@ -503,7 +513,7 @@ export class EmployerDossierService {
           projectId: dossier.projectId,
           taskType: DOSSIER_DISCREPANCIES_TASK_TYPE,
           systemPrompt: DOSSIER_DISCREPANCIES_PROMPT,
-          userPrompt: `Компания: ${dossier.legalName ?? dossier.domain ?? dossier.registryCode}\n\nФакты:\n${factsText}\n\nДокумент:\n${document.slice(0, 16_000)}`,
+          userPrompt: `Компания: ${dossier.legalName ?? dossier.domain ?? dossier.registryCode}\n\nФакты:\n${factsText}\n\nДокумент:\n${documentForPrompt}${promptIntakeNote(intake)}`,
           jsonMode: true,
           maxTokens: 1500,
           validateOutput: isValidDiscrepancies,
@@ -522,9 +532,12 @@ export class EmployerDossierService {
     // обеих опор — это утверждение о компании, которое нечем проверить.
     const { kept: discrepancies, skippedWithoutQuote } = keepQuoted(
       (JSON.parse(text) as { discrepancies: Array<{ topic: string; factQuote: string; documentQuote: string; note: string }> }).discrepancies,
-      (d) => discrepancyWorthShowing(d, allFacts, document!),
+      // Цитата ищется в ПОКАЗАННОЙ модели части: искать её в полном
+      // документе значило бы принять за подтверждённую цитату из
+      // текста, который модель не видела.
+      (d) => discrepancyWorthShowing(d, allFacts, documentForPrompt),
     );
-    return { discrepancies, skippedWithoutQuote };
+    return { discrepancies, skippedWithoutQuote, intakeNote: intakeNote(intake) };
   }
 
   // ── Чеклист отправки (А-27, только агентство) ──

@@ -22,6 +22,8 @@
 
 import { BadGatewayException, BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConsentService } from '../consent/consent.service';
+import { assertReligiousContentAllowed } from '../consent/religious-content';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
@@ -74,6 +76,7 @@ export class SituationalContentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
+    private readonly consent: ConsentService,
   ) {}
 
   async generateQuote(userId: string, projectId: string, engineId?: string) {
@@ -173,12 +176,13 @@ export class SituationalContentService {
     });
   }
 
+  /** Пункт [the-consent-that-stopped-nothing] 2026-09-30: проверялось
+   * ТОЛЬКО поле `religion`, и отзыв согласия на религиозный контент
+   * ничего не останавливал. Имя метода оставлено прежним нарочно —
+   * менять его значило бы прятать поправку. */
   private async assertReligionSet(userId: string, projectId: string) {
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { religion: true } });
-    if (!user?.religion) {
-      throw new BadRequestException('Функция доступна только пользователям, явно указавшим вероисповедание в настройках');
-    }
+    await assertReligiousContentAllowed(this.prisma, this.consent, userId, projectId);
     return project;
   }
 }

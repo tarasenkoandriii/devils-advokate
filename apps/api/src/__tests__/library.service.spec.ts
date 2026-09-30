@@ -31,13 +31,24 @@ function createFakePrisma() {
       findUnique: async ({ where }: any) => users.get(where.id) ?? null,
     },
     argument: {
-      findMany: async ({ where }: any) =>
-        argumentsStore.filter(
-          (a) =>
-            a.projectId === where.projectId &&
-            (where.targetPersonId === undefined ? true : a.targetPersonId === null) &&
-            (where.stance?.in ? where.stance.in.includes(a.stance) : true),
-        ),
+      // Пункт [never-published-was-published] 2026-09-30: отбор в
+      // библиотеку теперь читает `derivedFromPersonFact.scope`, и фейк
+      // обязан отдавать связь так же, как настоящая Prisma — `null`,
+      // когда факта нет. Иначе проверка «частное не публикуется» стала
+      // бы круговой.
+      findMany: async ({ where, include }: any) =>
+        argumentsStore
+          .filter(
+            (a) =>
+              a.projectId === where.projectId &&
+              (where.targetPersonId === undefined ? true : a.targetPersonId === null) &&
+              (where.stance?.in ? where.stance.in.includes(a.stance) : true),
+          )
+          .map((a) =>
+            include?.derivedFromPersonFact
+              ? { ...a, derivedFromPersonFact: a.derivedFromScope ? { scope: a.derivedFromScope } : null }
+              : a,
+          ),
     },
     libraryEntry: {
       findFirst: async ({ where }: any) => {
@@ -164,6 +175,62 @@ async function run() {
     await svc.submitProject(USER_ID, PROJECT_ID, 'Переезд в другой город', 'Переезд');
     assertEqual(prisma._getLibraryArguments().length, 1, 'скопирован только один — общий PRO/CON');
     assertEqual(prisma._getLibraryArguments()[0].text, 'Общий аргумент за', 'именно общий аргумент');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ, Пункт [never-published-was-published] 2026-09-30: аргумент из частного факта в библиотеку НЕ уходит', async () => {
+    // Отбор шёл по адресности и по знаку и НЕ шёл по происхождению:
+    // `Argument` с `derivedFromPersonFactId`, указывающим на факт со
+    // `scope = PRIVATE_TO_USER` («не публикуется ни при каких
+    // обстоятельствах»), копировался в ПУБЛИЧНУЮ библиотеку по тексту.
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedArgument({ projectId: PROJECT_ID, text: 'Обычный аргумент', stance: 'PRO', targetPersonId: null });
+    prisma._seedArgument({
+      projectId: PROJECT_ID, text: 'Из частного факта', stance: 'CON', targetPersonId: null,
+      derivedFromScope: 'PRIVATE_TO_USER',
+    });
+    prisma._seedArgument({
+      projectId: PROJECT_ID, text: 'Из факта «только вывод»', stance: 'CON', targetPersonId: null,
+      // PUBLIC_DERIVED_ONLY: «из факта можно построить Argument, сам
+      // факт не публикуется» — вывод публиковать РАЗРЕШЕНО, и держать
+      // его значило бы выключить функцию под видом её починки.
+      derivedFromScope: 'PUBLIC_DERIVED_ONLY',
+    });
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
+
+    const result: any = await svc.submitProject(USER_ID, PROJECT_ID, 'Переезд', 'Переезд');
+
+    const texts = prisma._getLibraryArguments().map((a: any) => a.text).sort();
+    assertEqual(texts, ['Из факта «только вывод»', 'Обычный аргумент'], 'в библиотеку ушло не то');
+    assertEqual(result.heldBackPrivateFacts, 1, 'число удержанных не посчитано');
+    assertEqual(typeof result.heldBackNote === 'string', true, 'человеку не сказано, что ушло не всё');
+  });
+
+  test('обратная проба: когда частных фактов нет — удерживать нечего и пугать нечем', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedArgument({ projectId: PROJECT_ID, text: 'Обычный аргумент', stance: 'PRO', targetPersonId: null });
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
+    const result: any = await svc.submitProject(USER_ID, PROJECT_ID, 'Переезд', 'Переезд');
+    assertEqual(result.heldBackPrivateFacts, 0, 'выдумано удержание, которого не было');
+    assertEqual(result.heldBackNote, null, 'человека напугали без причины');
+    assertEqual(prisma._getLibraryArguments().length, 1, 'обычный аргумент не ушёл');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ: если ВСЕ общие аргументы из частных фактов — отправки нет, и сказано почему', async () => {
+    const prisma = createFakePrisma();
+    seedProject(prisma);
+    prisma._seedArgument({
+      projectId: PROJECT_ID, text: 'Из частного факта', stance: 'PRO', targetPersonId: null,
+      derivedFromScope: 'PRIVATE_TO_USER',
+    });
+    const svc = new LibraryService(prisma as any, { record: async () => ({}) } as any);
+    await assertThrowsAsync(
+      () => svc.submitProject(USER_ID, PROJECT_ID, 'Переезд', 'Переезд'),
+      BadRequestException,
+      'submitProject() при одних только частных фактах',
+    );
+    assertEqual(prisma._getLibraryArguments().length, 0, 'частный аргумент всё равно ушёл');
   });
 
   test('submitProject() бросает BadRequestException при повторной отправке того же проекта', async () => {

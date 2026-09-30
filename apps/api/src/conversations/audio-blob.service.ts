@@ -254,15 +254,21 @@ export class AudioBlobService {
    * цена несопоставима. Неудача попадает в лог, файл остаётся до
    * ручной чистки. Тот же принцип, что у deleteBlob() в
    * common/vercel-blob.ts. */
-  async deleteByPathname(pathname: string): Promise<void> {
+  async deleteByPathname(pathname: string): Promise<boolean> {
     try {
       const token = await this.token();
       await del(pathname, { token });
+      return true;
     } catch (err) {
       this.logger.warn(
         `Не удалось удалить аудио-blob «${pathname}»: ${err instanceof Error ? err.message : 'неизвестная ошибка'}. ` +
           'Файл остался в сторе — требуется ручная чистка.',
       );
+      // Пункт [discarded-nothing-said-three] 2026-09-30: исход нужен
+      // вызывающему. Причина глушения здесь честная (вебхук приходит
+      // один раз, цена несопоставима), но имя поля отчёта означало
+      // «сколько было», а подпись на экране говорила «удалено».
+      return false;
     }
   }
 

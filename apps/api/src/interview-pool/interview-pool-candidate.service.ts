@@ -13,6 +13,7 @@ import { termIsCurrent, TERM_OVER_MESSAGE } from '../common/term-validity';
 import { randomBytes } from 'crypto';
 import { CandidateStage } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { safeSecretEqual } from '../common/timing-safe-equal';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { EmployerDossierService } from '../employer-dossier/employer-dossier.service';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
@@ -348,7 +349,14 @@ export class InterviewPoolCandidateService {
     // требует ещё и токен ссылки — то, что получатель реально получил
     // в deep-link'е. Несовпадение неотличимо от несуществующей ссылки
     // (не раскрываем, что shareId существует).
-    if (!share || !token?.trim() || (share.shareToken !== token && share.batchToken !== token)) {
+    // Пункт [the-guard-nobody-guarded] 2026-09-30: единственное во всём
+    // дереве сравнение секрета обычным `!==`. Реестр публичных
+    // поверхностей утверждает «через safeSecretEqual», и это было
+    // правдой про восемь мест из девяти. Практическая эксплуатация
+    // тайминга через сеть маловероятна — правится не ради неё, а ради
+    // того, чтобы правило было ОДНО, а не восемь копий плюс
+    // исключение.
+    if (!share || !token?.trim() || (!safeSecretEqual(share.shareToken, token) && !safeSecretEqual(share.batchToken, token))) {
       throw new NotFoundException('Ссылка недействительна или просрочена');
     }
     // [term-never-ends] 2026-09-06: та же проверка, теперь общим

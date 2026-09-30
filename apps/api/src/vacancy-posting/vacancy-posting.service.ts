@@ -25,6 +25,7 @@ import { BadGatewayException, BadRequestException, Injectable, NotFoundException
 import { EvidenceKind, ProjectMode, RecruitingTeamType, TermsClauseKind, TermsSide } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { assertCounterpartyProjectNotFrozen } from '../project-freeze/assert-not-frozen';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
@@ -344,8 +345,14 @@ export class VacancyPostingService {
     // него о модерационном статусе чужого проекта.
     const posting = await this.prisma.vacancyPosting.findUnique({ where: { id: share.postingId }, select: { projectId: true } });
     if (posting) await assertCounterpartyProjectNotFrozen(this.prisma, posting.projectId);
-    const comments = [...(((share.comments as unknown) as Array<{ at: string; text: string }>) ?? []), { at: new Date().toISOString(), text: text.trim().slice(0, 2000) }];
-    if (comments.length > 100) throw new BadRequestException('Слишком много комментариев по одной ссылке');
+    const existing = ((share.comments as unknown) as Array<{ at: string; text: string }>) ?? [];
+    // Пункт [the-ceiling-lived-in-two-places] 2026-09-30: было зашитое
+    // `> 100` с отказом, который ничего не объяснял. Потолок и его
+    // формулировка теперь живут в реестре публичной записи — том
+    // единственном месте, где они перечислены и откуда их печатает
+    // экран оператора.
+    await assertUnderPublicWriteLimit('comments-per-posting-review', async () => existing.length);
+    const comments = [...existing, { at: new Date().toISOString(), text: text.trim().slice(0, 2000) }];
     await this.prisma.postingReviewShare.update({ where: { id: share.id }, data: { comments: comments as never } });
     return { ok: true, comments: comments.length };
   }

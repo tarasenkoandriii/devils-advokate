@@ -203,7 +203,7 @@ const D = () => anyDep();
 const CASES: Case[] = [
   // ── обычное владение проектом ──
   { name: 'BreakingQuestionsService.list', call: (p) => new BreakingQuestionsService(p, D()).list(STRANGER, PROJECT_ID) },
-  { name: 'ClosingMessageService.list', call: (p) => new ClosingMessageService(p, D()).list(STRANGER, PROJECT_ID) },
+  { name: 'ClosingMessageService.list', call: (p) => new ClosingMessageService(p, D(), D()).list(STRANGER, PROJECT_ID) },
   { name: 'CommitmentsService.listByProject', call: (p) => new CommitmentsService(p).listByProject(STRANGER, PROJECT_ID) },
   { name: 'ConversationAgendaService.getLatest', call: (p) => new ConversationAgendaService(p, D()).getLatest(STRANGER, PROJECT_ID) },
   { name: 'ConversationScriptService.getLatest', call: (p) => new ConversationScriptService(p, D()).getLatest(STRANGER, PROJECT_ID) },
@@ -229,8 +229,8 @@ const CASES: Case[] = [
   { name: 'PublicDiscussionService.moderate', call: (p) => new PublicDiscussionService(p, D()).moderate(STRANGER, PROJECT_ID, 'sub-1', 'ACCEPT') },
   { name: 'SchedulerAdviceService.list', call: (p) => new SchedulerAdviceService(p, D()).list(STRANGER, PROJECT_ID) },
   { name: 'SchedulerService.listForProject', call: (p) => new SchedulerService(p, D()).listForProject(STRANGER, PROJECT_ID) },
-  { name: 'SituationalContentService.listAnecdotes', call: (p) => new SituationalContentService(p, D()).listAnecdotes(STRANGER, PROJECT_ID) },
-  { name: 'SituationalContentService.listQuotes', call: (p) => new SituationalContentService(p, D()).listQuotes(STRANGER, PROJECT_ID) },
+  { name: 'SituationalContentService.listAnecdotes', call: (p) => new SituationalContentService(p, D(), D()).listAnecdotes(STRANGER, PROJECT_ID) },
+  { name: 'SituationalContentService.listQuotes', call: (p) => new SituationalContentService(p, D(), D()).listQuotes(STRANGER, PROJECT_ID) },
   { name: 'SourceConflictService.listUnresolvedForProject', call: (p) => new SourceConflictService(p, D()).listUnresolvedForProject(STRANGER, PROJECT_ID) },
   { name: 'SparringService.listSessions', call: (p) => new SparringService(p, D(), D(), D(), D(), D()).listSessions(STRANGER, PROJECT_ID) },
   { name: 'StaleFactService.listForProject', call: (p) => new StaleFactService(p).listForProject(STRANGER, PROJECT_ID) },

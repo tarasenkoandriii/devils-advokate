@@ -17,6 +17,7 @@
 
 import { BadGatewayException, ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { spendLimitByKey } from '../common/spend-limits';
 import { SecretsService } from '../secrets/secrets.service';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
@@ -29,7 +30,11 @@ const YOUTUBE_VIDEOS_URL = 'https://www.googleapis.com/youtube/v3/videos';
 // наперед") — 20/добу на користувача залишає запас для кількох
 // активних користувачів одночасно в межах спільної квоти 100/добу
 // проєкту, не з'їдає її одним акаунтом.
-const DAILY_LIMIT_PER_USER = 20;
+/** Пункт [the-ceiling-lived-in-two-places] 2026-09-30: было зашитое
+ * `20` — ВТОРАЯ КОПИЯ числа, которое реестр расходов объявляет своим.
+ * Числа совпадали; правка здесь разъехалась бы с реестром и с таблицей
+ * деплоя молча. Теперь значение приходит из реестра по ключу. */
+const DAILY_LIMIT_PER_USER = spendLimitByKey('youtube-search');
 
 export interface YouTubeSearchResult {
   videoId: string;

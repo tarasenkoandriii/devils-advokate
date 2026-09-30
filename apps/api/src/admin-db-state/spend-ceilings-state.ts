@@ -82,6 +82,10 @@ const ZERO_MEANS_OFF = new Set([
   'AI_BATCH_MATCH_PER_USER_PER_DAY',
   'TRANSCRIPTIONS_PER_USER_PER_DAY',
   'TRANSCRIPTION_MINUTES_PER_USER_PER_DAY',
+  // Пункт [the-priciest-door-had-no-lock] 2026-09-30: ноль здесь
+  // означает «не ограничивай обращения к картам» — как и у прочих
+  // потолков расходов, а не «карты не спрашивать».
+  'PLACES_REQUESTS_PER_USER_PER_DAY',
 ]);
 
 export const CEILINGS_DOES_NOT_KNOW: readonly string[] = [

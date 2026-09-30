@@ -8,6 +8,11 @@ import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { PrivacyCenterService } from './privacy-center.service';
 import { ACCOUNT_NOT_REMOVED_HERE } from './deletion-report';
+import {
+  PERSON_REMOVED_HERE,
+  PERSON_RESIDUE_NOTE,
+  personNotRemovedHere,
+} from './person-deletion-impact';
 import { describeDecision } from './decision-labels';
 import { THIRD_PARTY_LOSSES_NOTE } from './deletion-impact';
 import { DECISIONS_OUT_OF_SCOPE } from './decision-scope';
@@ -23,10 +28,24 @@ export class PrivacyCenterController {
     return this.privacyCenter.getOverview(userId);
   }
 
+  /** Пункт [the-button-was-named-as-the-remedy] 2026-09-30: отдавалось
+   * `{ deleted: true }` — и всё. Что удаление записи о человеке НЕ
+   * забирает, не было названо нигде: ни реестра, ни ответа, ни
+   * экрана. Теперь ответ несёт то же, что и у аккаунта с проектом. */
   @Delete('person/:id')
   async deletePerson(@CurrentUser() userId: string, @Param('id') id: string) {
-    await this.privacyCenter.deletePerson(userId, id);
-    return { deleted: true };
+    return this.privacyCenter.deletePerson(userId, id);
+  }
+
+  /** Тот же список, но ДО решения — как у аккаунта. Две копии текста
+   * разошлись бы при первой правке, поэтому источник один. */
+  @Get('person/deletion-preview')
+  async personDeletionPreview() {
+    return {
+      removedHere: [...PERSON_REMOVED_HERE],
+      notRemovedHere: personNotRemovedHere(),
+      notRemovedHereNote: PERSON_RESIDUE_NOTE,
+    };
   }
 
   /** Пункт [screen-said-what-server-unsaid] 2026-09-25: тот же список,

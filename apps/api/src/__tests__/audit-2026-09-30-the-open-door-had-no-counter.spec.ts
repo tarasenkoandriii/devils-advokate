@@ -66,7 +66,12 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
       expect(fake.created).toEqual(['publicParticipant']);
       // И потолки читаются: умолчания не нулевые, иначе всё ниже
       // проходило бы через отключённый потолок.
-      expect(PUBLIC_WRITE_LIMITS.length).toBe(6);
+      // 2026-09-30, Пункт [the-ceiling-lived-in-two-places]: стало
+      // семь. Прибавились комментарии заказчика по ссылке на вычитку
+      // вакансии — их потолок существовал зашитым числом 100 прямо в
+      // `vacancy-posting.service.ts` и не значился ни в реестре, ни на
+      // экране оператора.
+      expect(PUBLIC_WRITE_LIMITS.length).toBe(7);
       expect(PUBLIC_WRITE_LIMITS.filter((l) => publicWriteLimit(l.key).value !== l.fallback)).toEqual([]);
       expect(PUBLIC_WRITE_LIMITS.filter((l) => l.fallback <= 0)).toEqual([]);
     });
@@ -207,7 +212,14 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
   });
 
   it('записано, чего эти потолки НЕ делают', () => {
-    expect(PUBLIC_WRITE_NOT_LIMITED_HERE.length).toBe(4);
+    // 2026-09-30, Пункт [measured-three-said-none]: стало шесть. Две
+    // новые строки называют то, чего этот реестр НЕ покрывает:
+    // публичную анкету кандидата (её держит одноразовость ссылки) и
+    // отзыв согласия по той же ссылке (его упирать в потолок нельзя).
+    // Прежде список молчал о том, что половина публичных поверхностей
+    // записи не считается — а сам объявлен как страховка «на случай,
+    // если следующий читатель решит, что публичная дверь защищена».
+    expect(PUBLIC_WRITE_NOT_LIMITED_HERE.length).toBe(6);
     expect(PUBLIC_WRITE_NOT_LIMITED_HERE.filter((s) => s.trim().length === 0)).toEqual([]);
     // Самое важное из непокрытого названо прямо: потолок обходится
     // новыми участниками.

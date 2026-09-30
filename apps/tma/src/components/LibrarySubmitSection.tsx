@@ -62,6 +62,7 @@ interface LibrarySubmitSectionProps {
 
 export function LibrarySubmitSection({ projectId, hasLibraryEntry }: LibrarySubmitSectionProps) {
   const [submitted, setSubmitted] = useState(hasLibraryEntry);
+  const [heldBackNote, setHeldBackNote] = useState<string | null>(null);
   const [mine, setMine] = useState<MyLibrarySubmission | null>(null);
   // Отдельно от `mine`: «не знаем» и «нет решения» — разные вещи, и
   // молчать о первом значило бы снова говорить о судьбе отправки
@@ -90,7 +91,13 @@ export function LibrarySubmitSection({ projectId, hasLibraryEntry }: LibrarySubm
     setSubmitting(true);
     setError(null);
     try {
-      await submitProjectToLibrary(projectId, title.trim(), category.trim());
+      const result = await submitProjectToLibrary(projectId, title.trim(), category.trim());
+      // Пункт [never-published-was-published] 2026-09-30: часть
+      // аргументов могла не уйти — те, что построены из фактов
+      // «не публикуется ни при каких обстоятельствах». Сказать об этом
+      // обязательно: человек отдал набор и вправе знать, что ушло не
+      // всё и почему.
+      setHeldBackNote(result.heldBackNote ?? null);
       setSubmitted(true);
       haptic('success');
     } catch (err) {
@@ -102,7 +109,16 @@ export function LibrarySubmitSection({ projectId, hasLibraryEntry }: LibrarySubm
   }
 
   if (submitted) {
-    return <LibrarySubmissionStatusView submission={mine} statusFailed={statusFailed} />;
+    return (
+      <>
+        {heldBackNote && (
+          <p role="alert" className="dtp-status dtp-status--warn">
+            {heldBackNote}
+          </p>
+        )}
+        <LibrarySubmissionStatusView submission={mine} statusFailed={statusFailed} />
+      </>
+    );
   }
 
   return (

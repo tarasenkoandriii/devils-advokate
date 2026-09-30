@@ -62,7 +62,12 @@ function make(opts: { report?: Partial<Report>; user?: any; aiJobs?: any[]; fail
       return { auditEntriesScrubbed: 2 };
     },
   };
-  const report: Report = { evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0, ...opts.report };
+  const report: Report = {
+    evidenceBlobs: 0, evidenceDeleted: 0, evidenceFailed: 0,
+    conversationAudioBlobs: 0, conversationAudioDeleted: 0, conversationAudioFailed: 0,
+    sttJobsInFlight: 0, sttJobsDiscarded: 0, sttJobsFailed: 0,
+    ...opts.report,
+  };
   const cleanup = { discardForUser: async (userId: string) => { calls.cleanupFor.push(userId); return report; } };
   return { svc: new PrivacyCenterService(prisma, audit as any, cleanup as any), calls };
 }
@@ -102,11 +107,23 @@ describe('deleteAccount', () => {
   });
 
   it('РЕГРЕССИЯ (аудит 2026-09-02): отчёт об аудио разговоров и задачах распознавания в полёте доезжает до ответа и журнала аудита', async () => {
-    const { svc, calls } = make({ report: { conversationAudioBlobs: 2, sttJobsDiscarded: 3 } });
+    // Пункт [discarded-nothing-said-three] 2026-09-30: числа НАРОЧНО
+    // разные. Прежде в `before` как «задач в полёте» уходило число
+    // отозванных — то же самое поле, — а в `after` оно же как
+    // «отозвано»: одно число изображало два.
+    const { svc, calls } = make({
+      report: {
+        conversationAudioBlobs: 2, conversationAudioDeleted: 1, conversationAudioFailed: 1,
+        sttJobsInFlight: 3, sttJobsDiscarded: 1, sttJobsFailed: 2,
+      },
+    });
     const res = await svc.deleteAccount('u1', 'DELETE');
-    expect(res.externalArtifacts).toMatchObject({ conversationAudioBlobs: 2, sttJobsDiscarded: 3 });
+    expect(res.externalArtifacts).toMatchObject({
+      conversationAudioBlobs: 2, conversationAudioDeleted: 1, conversationAudioFailed: 1,
+      sttJobsInFlight: 3, sttJobsDiscarded: 1, sttJobsFailed: 2,
+    });
     expect(calls.audit[0].before).toMatchObject({ conversationAudioBlobs: 2, sttJobsInFlight: 3 });
-    expect(calls.audit[0].after).toMatchObject({ sttJobsDiscarded: 3 });
+    expect(calls.audit[0].after).toMatchObject({ sttJobsDiscarded: 1, sttJobsFailed: 2, conversationAudioFailed: 1 });
     expect(calls.deleted).toEqual(['u1']);
   });
 

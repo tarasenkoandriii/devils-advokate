@@ -236,10 +236,33 @@ export class EvaluationService {
   private async runStructural(userId: string, runId: string, promptVersion: any, cases: any[]) {
     let totalHypotheses = 0;
     let completeHypotheses = 0;
+    /** Пункт [the-gate-passed-on-nine-failures] 2026-09-30 — кейс,
+     * на котором вызов упал или вернул не-JSON, НЕ ПОПАДАЛ НИ В
+     * ЧИСЛИТЕЛЬ, НИ В ЗНАМЕНАТЕЛЬ полноты.
+     *
+     * Следствие числом: из десяти кейсов девять провалились по сети, а
+     * один прошёл полным — и `alternative_explanation_completeness`
+     * равнялась 1.0000. Гейт `prompt_promotion` говорил «пройден»,
+     * оператор читал на экране «Порог пройден: да», и после этого
+     * `promoteToActive` — «единственная операция, физически создающая
+     * ACTIVE» — пропускала версию промпта в прод. Список
+     * «Провалившиеся кейсы (9)» на экране был, но решение гейта, то
+     * есть то, на чём висит допуск, говорило о полноте.
+     *
+     * Соседний `runClassification` тот же случай обрабатывает честно и
+     * с записанной причиной («кейс засчитывается провальным, не
+     * пропускается молча — сбой на evaluation-прогоне сам по себе
+     * информативен»). Здесь этой дисциплины не было.
+     *
+     * Считаем НЕВЫПОЛНЕННЫЕ отдельным числом и роняем гейт, если их
+     * больше нуля: полнота, посчитанная по части прогона, — это не
+     * полнота, и усреднять её нельзя ни в какую сторону. */
+    let unexecuted = 0;
 
     for (const evalCase of cases) {
       let actualOutputText = '';
       let hypotheses: Array<{ explanation?: string; alternativeExplanation?: string }> = [];
+      let executed = true;
 
       try {
         const result = await this.aiRouter.execute({
@@ -256,6 +279,8 @@ export class EvaluationService {
         hypotheses = Array.isArray(parsed) ? parsed : (parsed.hypotheses ?? []);
       } catch {
         actualOutputText = actualOutputText || '(AI call failed or returned invalid JSON)';
+        executed = false;
+        unexecuted++;
       }
 
       let missingIndex: number | null = null;
@@ -277,15 +302,22 @@ export class EvaluationService {
           passed: casePassed,
           note: casePassed
             ? null
-            : hypotheses.length === 0
-              ? 'no hypotheses generated'
-              : `hypothesis #${missingIndex} missing alternativeExplanation`,
+            : !executed
+              ? 'кейс не выполнен: сбой AI-вызова или невалидный JSON — в полноту не засчитан ни в какую сторону'
+              : hypotheses.length === 0
+                ? 'no hypotheses generated'
+                : `hypothesis #${missingIndex} missing alternativeExplanation`,
         },
       });
     }
 
     const completeness = totalHypotheses > 0 ? completeHypotheses / totalHypotheses : 0;
-    const passed = completeness >= ALTERNATIVE_EXPLANATION_COMPLETENESS_THRESHOLD;
+    // Невыполненный кейс роняет гейт. Не «снижает метрику
+    // пропорционально» — именно роняет: метрика говорит о полноте
+    // объяснений, а не о доле прогона, и подмешивать в неё сбой сети
+    // значило бы выдать одно за другое. Полнота печатается как есть,
+    // а допуск не даётся, пока прогон не выполнен целиком.
+    const passed = unexecuted === 0 && completeness >= ALTERNATIVE_EXPLANATION_COMPLETENESS_THRESHOLD;
 
     const metric = await this.findOrCreateMetric('alternative_explanation_completeness');
     await this.prisma.evaluationResult.create({
@@ -295,6 +327,20 @@ export class EvaluationService {
         value: completeness,
         threshold: ALTERNATIVE_EXPLANATION_COMPLETENESS_THRESHOLD,
         passed,
+      },
+    });
+
+    // Причина отказа — отдельной строкой на экране оператора, а не
+    // только внутри `passed`. Иначе он читал бы «полнота 1.0000» и
+    // «гейт не пройден» рядом и не мог бы понять, почему.
+    const unexecutedMetric = await this.findOrCreateMetric('cases_not_executed');
+    await this.prisma.evaluationResult.create({
+      data: {
+        evaluationRunId: runId,
+        evaluationMetricId: unexecutedMetric.id,
+        value: unexecuted,
+        threshold: 0,
+        passed: unexecuted === 0,
       },
     });
 

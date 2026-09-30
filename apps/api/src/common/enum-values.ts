@@ -40,11 +40,12 @@ export function enumValues<E extends Record<string, string>>(e: E): readonly E[k
   return Object.values(e) as E[keyof E][];
 }
 
-/** То же самое строкой — для проверок вида `includes(x)`, где слева
- * приходит `unknown` из разобранного JSON. */
-export function enumStrings(e: Record<string, string>): readonly string[] {
-  return Object.values(e);
-}
+// Пункт [written-for-the-person-never-delivered] 2026-09-30: здесь
+// была `enumStrings` — «то же самое строкой, для проверок вида
+// includes(x)». Не вызывалась нигде: её задачу решает `isEnumValue`
+// ниже, и решает лучше — она СУЖАЕТ ТИП, после неё приведение `as` не
+// нужно вовсе. Хелпер, который делает то же хуже, — это приглашение
+// однажды выбрать его.
 
 /** Принадлежит ли значение перечислению. Заменяет `includes` по копии и
  * СУЖАЕТ ТИП — после неё приведение `as` не нужно вовсе, а значит

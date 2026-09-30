@@ -7,8 +7,9 @@
 // MVP-фича 4: кнопка подтверждения — нативная Telegram MainButton,
 // с fallback на обычную HTML-кнопку вне Telegram.
 
-import { useState } from 'react';
-import { grantConsent, CURRENT_EXTERNAL_AI_CONSENT_VERSION } from '../lib/features';
+import { useEffect, useState } from 'react';
+import { grantConsent, getConsentVersions } from '../lib/features';
+import { NotLoadedNotice } from './NotLoadedNotice';
 import { useMainButton } from '../hooks/useMainButton';
 import { haptic } from '../lib/telegram';
 
@@ -19,14 +20,28 @@ interface ConsentGateProps {
 export function ConsentGate({ onGranted }: ConsentGateProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Пункт [written-for-the-person-never-delivered] 2026-09-30: версия
+  // текста согласия приходит С СЕРВЕРА, своей копии здесь больше нет.
+  // Пока её нет, согласие не выдаётся: записать согласие с угаданной
+  // версией значило бы сохранить «человек согласился с текстом v1»,
+  // не зная, тот ли это текст, который он прочитал.
+  const [version, setVersion] = useState<string | null>(null);
+  const [versionFailed, setVersionFailed] = useState(false);
+
+  useEffect(() => {
+    void getConsentVersions()
+      .then((r) => setVersion(r.versions.EXTERNAL_AI ?? null))
+      .catch(() => setVersionFailed(true));
+  }, []);
 
   async function handleGrant() {
+    if (!version) return;
     setLoading(true);
     setError(null);
     try {
       await grantConsent({
         consentType: 'EXTERNAL_AI',
-        version: CURRENT_EXTERNAL_AI_CONSENT_VERSION,
+        version,
         source: 'dilemma-form',
       });
       haptic('success');
@@ -43,7 +58,7 @@ export function ConsentGate({ onGranted }: ConsentGateProps) {
     text: loading ? 'Сохраняем…' : 'Разрешить и продолжить',
     onClick: handleGrant,
     visible: true,
-    active: !loading,
+    active: !loading && version !== null,
     showProgress: loading,
   });
 
@@ -70,8 +85,14 @@ export function ConsentGate({ onGranted }: ConsentGateProps) {
       <p>Согласие можно отозвать в любой момент в настройках приватности.</p>
       {error && <p className="consent-gate__error">{error}</p>}
 
+      {versionFailed && (
+        <NotLoadedNotice
+          what="версию текста согласия"
+          consequence="Пока она не загрузится, согласие выдать нельзя: записать «согласился с текстом такой-то версии», не зная версии, значило бы сохранить утверждение, которого никто не проверял. Повторите позже."
+        />
+      )}
       {!isTelegramAvailable && (
-        <button onClick={handleGrant} disabled={loading}>
+        <button onClick={handleGrant} disabled={loading || version === null}>
           {loading ? 'Сохраняем…' : 'Разрешить и продолжить'}
         </button>
       )}

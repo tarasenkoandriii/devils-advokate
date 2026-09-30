@@ -3,6 +3,7 @@
 import { intakeNote, type SourceIntake } from '../common/source-intake';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { spendPlacesRequest } from '../common/places-spend';
 import { isUniqueViolation } from '../common/unique-violation';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ConsentService } from '../consent/consent.service';
@@ -154,6 +155,11 @@ export class MajorPurchaseService {
     await this.assertOwnedVariant(userId, variantId);
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
 
+    // Пункт [the-priciest-door-had-no-lock] 2026-09-30: обращение к
+    // платным картам отмечается ДО запроса — неудачный запрос тоже
+    // оплачен провайдером.
+    await spendPlacesRequest(this.prisma, userId, 'major-purchase/place-details');
+
     let details;
     try {
       details = await getPlaceDetails(placeId, apiKey);
@@ -186,6 +192,8 @@ export class MajorPurchaseService {
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
     const placeType = PLACE_TYPE_BY_CATEGORY[variant.config.category];
 
+    await spendPlacesRequest(this.prisma, userId, 'major-purchase/nearest');
+
     let candidates;
     try {
       candidates = await searchNearestByDistance(latitude, longitude, apiKey, placeType);
@@ -202,6 +210,9 @@ export class MajorPurchaseService {
     }
 
     const nearest = candidates[0];
+    // Второе обращение той же операции считается отдельно: считать
+    // операцию за единицу значило бы недосчитать вдвое.
+    await spendPlacesRequest(this.prisma, userId, 'major-purchase/nearest-details');
     let details;
     try {
       details = await getPlaceDetails(nearest.placeId, apiKey);
@@ -245,6 +256,7 @@ export class MajorPurchaseService {
     const variant = await this.assertOwnedVariant(userId, variantId);
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
     const typedQuery = `${query} ${PLACE_TYPE_BY_CATEGORY[variant.config.category] === 'car_dealer' ? 'автосалон' : 'агентство нерухомості'}`;
+    await spendPlacesRequest(this.prisma, userId, 'major-purchase/search-by-text');
     try {
       return await searchByText(typedQuery, apiKey);
     } catch (err) {

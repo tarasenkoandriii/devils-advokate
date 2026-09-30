@@ -8,6 +8,7 @@
 // Пункту [investment], де Fact Check API мав окремий дозволений шлях).
 
 import { intakeNote, type SourceIntake } from '../common/source-intake';
+import { spendLimitByKey } from '../common/spend-limits';
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isUniqueViolation } from '../common/unique-violation';
@@ -30,7 +31,11 @@ const BREAKDOWN_TASK_TYPE = 'health-consultation-breakdown';
 // обговорення архітектурного ризику. Той самий клас суворих лімітів,
 // що PhotoVerificationService (§4.4 major ТЗ) — навмисно низьке
 // число, не для масового використання.
-const OCR_DAILY_LIMIT_PER_USER = 10;
+/** Пункт [the-ceiling-lived-in-two-places] 2026-09-30: было зашитое
+ * `10` — вторая копия числа из реестра расходов. Значение приходит из
+ * реестра по ключу; подкрутить его без редеплоя по-прежнему нельзя, и
+ * реестр говорит об этом вслух. */
+const OCR_DAILY_LIMIT_PER_USER = spendLimitByKey('ocr-documents');
 const MAX_IMAGE_BASE64_BYTES = 8_000_000; // ~8MB base64, той самий поріг, що PhotoVerificationService
 const VISION_API_KEY_REF = 'GOOGLE_VISION_API_KEY';
 
@@ -359,6 +364,17 @@ export class HealthService {
     // Зображення йде зовнішньому OCR-провайдеру (Google Cloud
     // Vision) — той самий клас ризику, що вже покриває EXTERNAL_AI
     // для будь-якого AI-виклику продукту, не новий тип згоди.
+    // Пункт [health-consent-was-a-doorman] 2026-09-30: здесь стоял
+    // ТОЛЬКО `EXTERNAL_AI`, с обоснованием «той же класс риска, что уже
+    // покрывает EXTERNAL_AI — не новый тип согласия». Обоснование
+    // неверно по одной причине: `EXTERNAL_AI` выдаётся один раз на
+    // старте продукта общим экраном, а `HEALTH_DATA` — осознанно,
+    // отдельным экраном домена. Распознавание лабораторного документа
+    // — самая чувствительная операция домена, и требовать для неё
+    // менее осознанного согласия, чем для чтения списка консультаций,
+    // было перевёрнуто. `HEALTH_DATA` теперь спрошен выше, в
+    // `assertOwnedConfig`; `EXTERNAL_AI` остаётся — он про другое, про
+    // выход данных за периметр.
     await this.consent.requireConsent(userId, ConsentType.EXTERNAL_AI, config.projectId);
     await this.assertUnderOcrRateLimit(userId);
 
@@ -446,12 +462,33 @@ export class HealthService {
 
   // ── Приватні перевірки власності ──
 
+  /** Пункт [health-consent-was-a-doorman] 2026-09-30 — согласие
+   * `HEALTH_DATA` проверялось РОВНО ОДИН РАЗ, при создании проекта
+   * (`health-onboarding.service.ts`), и больше нигде: ни ввод новых
+   * медицинских сведений, ни их отправка внешнему AI, ни сравнительная
+   * таблица согласия не перепроверяли. То есть отзыв `HEALTH_DATA` не
+   * запрещал ничего из того, ради чего он спрашивается отдельным
+   * экраном.
+   *
+   * Проверка стоит в ТРЁХ помощниках владения, через которые проходят
+   * ВСЕ операции домена, — а не двадцатью копиями по вызовам: копия
+   * проверки в каждом месте и есть причина, по которой часть мест
+   * остаётся без неё (тот же довод, что в `assertAudioMayLeaveDevice`
+   * и в `religious-content.ts`).
+   *
+   * `projectId` передаётся: согласие может быть выдано точечно на один
+   * проект, и без него `hasActiveConsent` нашёл бы только глобальное. */
+  private async assertHealthDataAllowed(userId: string, projectId: string) {
+    await this.consent.requireConsent(userId, ConsentType.HEALTH_DATA, projectId);
+  }
+
   private async assertOwnedConfig(userId: string, configId: string) {
     const config = await this.prisma.healthConfig.findUnique({ where: { id: configId } });
     if (!config) {
       throw new NotFoundException(`HealthConfig ${configId} not found`);
     }
     await assertOwnedHealthProject(this.prisma, userId, config.projectId);
+    await this.assertHealthDataAllowed(userId, config.projectId);
     return config;
   }
 
@@ -464,6 +501,7 @@ export class HealthService {
       throw new NotFoundException(`HealthProvider ${providerId} not found`);
     }
     await assertOwnedHealthProject(this.prisma, userId, provider.config.projectId);
+    await this.assertHealthDataAllowed(userId, provider.config.projectId);
     return provider;
   }
 
@@ -476,6 +514,7 @@ export class HealthService {
       throw new NotFoundException(`HealthConsultation ${consultationId} not found`);
     }
     await assertOwnedHealthProject(this.prisma, userId, consultation.provider.config.projectId);
+    await this.assertHealthDataAllowed(userId, consultation.provider.config.projectId);
     return consultation;
   }
 }

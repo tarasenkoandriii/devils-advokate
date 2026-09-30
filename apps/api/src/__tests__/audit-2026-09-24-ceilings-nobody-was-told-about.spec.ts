@@ -11,6 +11,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { SPEND_LIMITS, limitFrom, spendLimit } from '../common/spend-limits';
+import { PUBLIC_WRITE_LIMITS } from '../common/public-write-limits';
 
 const REPO = path.join(__dirname, '..', '..', '..', '..');
 const APPS = ['api', 'tma', 'admin', 'landing'];
@@ -64,6 +65,25 @@ describe('[ceilings-nobody-was-told-about] о потолках расходов 
     // Потолки читаются через общий разбор (`process.env[env]`), и по
     // тексту исходника их имён не видно.
     if (app === 'api') for (const l of SPEND_LIMITS) if (l.env) used.add(l.env);
+    /** ВТОРОЙ РЕЕСТР ДОБАВЛЕН 2026-09-30, Пункт
+     * [the-guard-missed-the-second-registry] — и это ДОСЛОВНОЕ
+     * повторение того дефекта, ради которого писан этот файл.
+     *
+     * `PUBLIC_WRITE_LIMITS` появился Пунктом
+     * [the-open-door-had-no-counter] и читает свои шесть переменных
+     * тем же `process.env[env]` через `resolveLimit`. В объединение
+     * выше он не попал — а по тексту исходника этих имён не видно,
+     * ровно как и имён `SPEND_LIMITS`. То есть все шесть были
+     * невидимы для обеих сторон сверки, и при этом экран потолков в
+     * админке печатает их оператору по имени
+     * («`PUBLIC_COMMENTS_PER_DISCUSSION` не задана»), а найти это имя
+     * в документах было негде.
+     *
+     * Урок, который стоит записать рядом: правило «что код читает, то
+     * и объявлено» держится не само — его держит ПОЛНОТА ОБЪЕДИНЕНИЯ.
+     * Каждый новый реестр потолков обязан быть дописан сюда, иначе
+     * правило начинает смотреть меньше, оставаясь зелёным. */
+    if (app === 'api') for (const l of PUBLIC_WRITE_LIMITS) if (l.env) used.add(l.env);
     return used;
   }
 
@@ -75,7 +95,9 @@ describe('[ceilings-nobody-was-told-about] о потолках расходов 
     // подгонять под неё формулировку смысла нет — тест от этого не
     // становится слабее и не становится сильнее.
     const checked = namesToCheck('api');
-    const registry = SPEND_LIMITS.map((l) => l.env).filter((e): e is string => e !== null);
+    const registry = [...SPEND_LIMITS, ...PUBLIC_WRITE_LIMITS]
+      .map((l) => l.env)
+      .filter((e): e is string => e !== null && e !== undefined);
     expect(registry.filter((e) => checked.has(e)).sort()).toEqual([...registry].sort());
   });
 
@@ -98,13 +120,21 @@ describe('[ceilings-nobody-was-told-about] о потолках расходов 
     // разбор — ошибка, на которой этот ряд сверок себя уже ловил.
     const used = readEnvNames(path.join(REPO, 'apps', 'api', 'src'));
     expect(used.size).toBeGreaterThan(3);
-    // И сам реестр не пуст — иначе объединение выше ничего бы не добавило.
+    // И сами реестры не пусты — иначе объединение выше ничего бы не
+    // добавило. ОБА, а не один: пустой второй реестр вернул бы правило
+    // в то состояние, в котором его застал Пункт
+    // [the-guard-missed-the-second-registry].
     expect(SPEND_LIMITS.filter((l) => l.env).length).toBeGreaterThan(5);
+    expect(PUBLIC_WRITE_LIMITS.filter((l) => l.env).length).toBeGreaterThan(5);
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: потолки расходов названы в таблице деплоя, а не только в коде', () => {
     const vercel = fs.readFileSync(path.join(REPO, 'VERCEL.md'), 'utf8');
-    const unnamed = SPEND_LIMITS.filter((l) => l.env && !vercel.includes(l.env)).map((l) => l.env);
+    // Оба реестра: потолки публичной записи оператор выставляет в той
+    // же панели и по той же таблице.
+    const unnamed = [...SPEND_LIMITS, ...PUBLIC_WRITE_LIMITS]
+      .filter((l) => l.env && !vercel.includes(l.env))
+      .map((l) => l.env);
     expect(unnamed).toEqual([]);
   });
 

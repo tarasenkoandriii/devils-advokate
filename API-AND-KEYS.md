@@ -44,7 +44,19 @@
 | **AssemblyAI** (STT + диаризация) | `ASSEMBLYAI_API_KEY` | `POST /v2/upload`, `POST /v2/transcript`, `GET /v2/transcript/{id}`, `GET /v3/token` (live) | расшифровка разговоров, голосовые реплики спарринга и чата по материалам, live-режимы | 500 на загрузке и расшифровке |
 | **AssemblyAI webhook** | `ASSEMBLYAI_WEBHOOK_SECRET` | входящий `POST` от провайдера | возврат результата расшифровки | **fail closed**: задача вообще не отправляется, вебхук отвечает 503 |
 | **AssemblyAI webhook** | `API_PUBLIC_BASE_URL` | адрес, который передаётся провайдеру | то же | ошибка до отправки задачи |
+| **Soniox** (STT ru/uk + диаризация) | `SONIOX_API_KEY` | `POST /v1/files`, `POST /v1/transcriptions`, `GET /v1/transcriptions/{id}`, `POST /v1/auth/temporary-api-key` (live) | расшифровка на РУССКОМ и УКРАИНСКОМ и неизвестном языке — основные языки продукта; live-режим для них же | живой режим для ru/uk недоступен, короткая запись уходит в фоллбек |
+| **Soniox webhook** | `STT_WEBHOOK_SECRET` | входящий `POST` от провайдера | возврат результата расшифровки (общий секрет вебхука распознавания) | **fail closed**: задача не отправляется |
 | **ElevenLabs** (TTS) | `ELEVENLABS_API_KEY` | `POST /v1/text-to-speech/{voiceId}` | озвучка реплик AI-собеседника | 500 на `POST /tts` |
+| **ElevenLabs** (STT, последний фоллбек) | `ELEVENLABS_API_KEY` | `POST /v1/speech-to-text` | универсальный фоллбек цепочки для любого языка; отзыв задачи (`discard`) НЕ поддерживает — см. Пункт [discarded-nothing-said-three] | цепочка распознавания остаётся без последнего звена |
+
+> **ПОПРАВКА, Пункт [three-said-seven] 2026-09-30.** Раздел назывался «Полный
+> реестр внешних API» и не содержал **Soniox** — провайдера распознавания
+> русского и украинского, то есть основных языков продукта. `SONIOX_API_KEY`
+> упоминался в файле один раз, в §2.3 «Где взять каждый ключ», то есть вне
+> реестра. Вместе с ним в §1.5 отсутствовали `STT_WEBHOOK_SECRET`,
+> `TRANSCRIPTIONS_PER_USER_PER_DAY`, `TRANSCRIPTION_MINUTES_PER_USER_PER_DAY`,
+> `TELEGRAM_MINI_APP_URL`, `TELEGRAM_BOT_USERNAME` и все семь `PUBLIC_*`.
+> «Полный» — это утверждение, а не заголовок.
 
 ### 1.3 Google
 
@@ -83,9 +95,16 @@
 | `CORS_ORIGIN` | список доменов через запятую (TMA + админка + лендинг) | **обязательна в проде** — там fail closed, без неё блокируются все cross-origin запросы |
 | `ALLOW_DEV_AUTH` | дев-входы | в проде `false`/не задавать |
 | `SECRET_PROVIDER_TYPE` | `env` (рабочий) либо `managed` (заглушка, бросает ошибку) | по умолчанию `env` |
-| `SCHEDULER_DISPATCH_SECRET` | `x-dispatch-secret` для трёх pg_cron-эндпоинтов | нужна, если используются фоновые задания |
+| `SCHEDULER_DISPATCH_SECRET` | `x-dispatch-secret` для четырёх pg_cron-эндпоинтов (`internal/reminders/dispatch`, `internal/calibration/recompute`, `intake/abandon-stale`, `internal/job-search/refetch`) и ещё трёх служебных маршрутов за тем же секретом: `internal/job-search/forwarded`, `telegram/register-webhook`, `telegram/webhook-info`. Было сказано «трёх» — Пункт [three-said-seven] 2026-09-30 | нужна, если используются фоновые задания |
 | `TELEGRAM_WEBHOOK_SECRET` | секрет входящего вебхука бота: уходит в `setWebhook` как `secret_token`, Telegram возвращает его в заголовке `X-Telegram-Bot-Api-Secret-Token`, приёмник сверяет (**fail closed**: не задан → `POST /telegram/webhook` отвечает 503) | нужна для К-20 — пересылки вакансий боту; без неё остальной продукт работает |
 | `API_PUBLIC_BASE_URL` | собственный публичный адрес API для вебхуков | нужна для расшифровки |
+| `STT_WEBHOOK_SECRET` | общий секрет вебхука распознавания (Soniox и прочие провайдеры кроме AssemblyAI, у которого свой) | **fail closed**: не задан — задача не отправляется |
+| `TRANSCRIPTIONS_PER_USER_PER_DAY` | суточный потолок расшифровок на пользователя; считает ПОПЫТКИ по журналу, один на все три двери (разговоры, голосовые реплики спарринга и чата по материалам) — Пункт [the-meter-was-on-one-door] | опциональна, дефолт 30 |
+| `TRANSCRIPTION_MINUTES_PER_USER_PER_DAY` | суточный потолок по суммарной длительности; длительность приходит от клиента и у голосовой реплики отсутствует, поэтому реплики держит потолок по числу | опциональна, дефолт 240 |
+| `PLACES_REQUESTS_PER_USER_PER_DAY` | суточный потолок обращений к Google Places: считаются ЗАПРОСЫ, а не операции — подбор заведений делает до четырёх за одно нажатие | опциональна, дефолт 100 |
+| `TELEGRAM_BOT_USERNAME` | имя бота для кнопки входа и ссылок мини-приложения | нужна для веб-входа |
+| `TELEGRAM_MINI_APP_URL` | адрес мини-приложения, который бот отдаёт в кнопке | нужна для К-20 |
+| `PUBLIC_*` (семь переменных) | потолки публичной записи: участники, заявки, комментарии, рассказы об опыте, комментарии по ссылке на вычитку. Полный список и умолчания — `VERCEL.md`, раздел «Потолки публичной записи»; источник — `apps/api/src/common/public-write-limits.ts` | опциональны, умолчания в коде |
 | `AI_JOB_DISPATCH_SECRET` | `x-dispatch-secret` воркера асинхронной AI-полосы (`/internal/ai-jobs/submit|poll|reap`, три pg_cron-джобы — `pg_cron_ai_jobs.sql`) | нужна для мультимодального анализа: без воркера джобы остаются в QUEUED и падают по lease |
 | `AI_IDEMPOTENCY_WINDOW_MINUTES` | окно идемпотентности синхронных AI-вызовов: повтор ИДЕНТИЧНОГО запроса того же пользователя внутри окна возвращает готовый результат без второй оплаты (защита от двойного клика/ретрая, не вечный кэш; 0 = выключено) | опциональна, дефолт 10 |
 | `AI_CALLS_PER_USER_PER_DAY` | суточный потолок AI-вызовов на пользователя (все фичи разом — проверка в AIRouter до создания джобы; 429 при превышении; 0 = выключено) | опциональна, дефолт 300 |

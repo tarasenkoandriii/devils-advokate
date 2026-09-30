@@ -1,6 +1,6 @@
 // Пункт [job-domain-v2] — приёмка ядра (§11, п. 1–16) на общем фейке Prisma.
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { TermsSheetService, coverageCounters, FORBIDDEN_SHEET_KEYS } from '../terms-sheet/terms-sheet.service';
+import { TermsSheetService, coverageCounters, FORBIDDEN_SHEET_KEYS, assertNoForbiddenSheetKeys } from '../terms-sheet/terms-sheet.service';
 import {
   TermsMatchingService,
   CLAUSES_SYSTEM_PROMPT,
@@ -192,6 +192,25 @@ describe('TermsSheetService — ядро (§11 п. 1–16)', () => {
     const sheet = await sheets.openForVacancy('u1', s.vacancy.id);
     const json = JSON.stringify(sheet);
     for (const key of FORBIDDEN_SHEET_KEYS) expect(json).not.toContain(`"${key}"`);
+    // Пункт [the-rule-lived-only-in-a-test] 2026-09-30: правило было
+    // объявлено и НЕ ПРИМЕНЯЛОСЬ нигде в продовом коде — единственным
+    // потребителем константы была эта спека. Теперь оно стоит на
+    // выходе `get()`, и проверка рядом смотрит, что проверка
+    // ДЕЙСТВИТЕЛЬНО различает, а не пропускает всё.
+    expect(() => assertNoForbiddenSheetKeys(sheet, 'проба')).not.toThrow();
+    expect(() => assertNoForbiddenSheetKeys({ ...sheet, score: 0.7 }, 'проба')).toThrow(/score/);
+    expect(() => assertNoForbiddenSheetKeys({ clauses: [{ verdict: 'плохо' }] }, 'проба')).toThrow(/verdict/);
+    // И не запрещает лишнего: `orderIndex` — не оценка.
+    expect(() => assertNoForbiddenSheetKeys({ clauses: [{ orderIndex: 1 }] }, 'проба')).not.toThrow();
+
+    // И ГЛАВНОЕ — что проверка стоит НА ВЫХОДЕ, а не только здесь.
+    // Мутация «убрать вызов из `get()`» переживала первую версию этой
+    // проверки: функция проверялась, применение — нет. Офферы
+    // уезжают в DTO строкой целиком (`markDeletedSources` её
+    // распространяет), поэтому засеянный оффер с ключом-оценкой
+    // доходит до ответа — и `get()` обязан упасть.
+    prisma.seed('offerDocument', { id: 'off-score', sheetId: sheet.id, sharedFromProjectId: null, rating: 5 });
+    await expect(sheets.get('u1', sheet.id)).rejects.toThrow(/rating/);
     const numericKeys = new Set<string>();
     const walk = (v: any, path: string) => {
       if (typeof v === 'number') numericKeys.add(path);

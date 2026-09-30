@@ -64,7 +64,11 @@ function healthSetup(modelAnswer: unknown) {
       return { text: JSON.stringify(modelAnswer), aiInferenceId: 'inf-1', jobId: 'job-1' };
     },
   };
-  const svc = new HealthService(prisma, aiRouter, {} as any, {} as any);
+  // Пункт [health-consent-was-a-doorman] 2026-09-30: домен здоровья
+  // перепроверяет согласие HEALTH_DATA у каждой операции, значит фейк
+  // согласия обязан быть настоящим, а не пустым объектом.
+  const consent = { requireConsent: async () => undefined, hasActiveConsent: async () => true };
+  const svc = new HealthService(prisma, aiRouter, {} as any, consent as any);
   return { svc, saved: () => saved, prompt: () => capturedPrompt };
 }
 

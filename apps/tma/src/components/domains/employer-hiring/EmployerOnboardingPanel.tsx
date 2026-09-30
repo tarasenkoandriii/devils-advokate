@@ -7,6 +7,7 @@
 // бриф и подтверждённые пункты, не AI-драфт. До идентификации компании
 // извлечение отвечает 409 COMPANY_REQUIRED — экран ведёт на «Компанию».
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from '../../NotLoadedNotice';
 import { domainApi } from '../../../lib/domains/api';
 import { DomainManifest } from '../../../lib/domains/types';
 import { AiErrorNotice } from '../AiErrorNotice';
@@ -17,6 +18,7 @@ export function EmployerOnboardingPanel({ manifest, projectId, conversationId: i
   const [conversationId, setConversationId] = useState<string | null>(initial);
   const [answers, setAnswers] = useState<Array<{ id: string; text: string }>>([]);
   const [checklist, setChecklist] = useState<string[] | null>(null);
+  const [checklistFailed, setChecklistFailed] = useState(false);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -29,7 +31,12 @@ export function EmployerOnboardingPanel({ manifest, projectId, conversationId: i
         if (!id) { id = (await domainApi.createOnboarding(manifest, projectId)).conversation.id; setConversationId(id); }
         const conv = await domainApi.getOnboarding(manifest, id);
         setAnswers(conv.answers ?? []);
-        setChecklist(await domainApi.checklist(manifest, id).catch(() => null));
+        // Пункт [the-checklist-that-said-nothing] 2026-09-30: тот же
+        // `.catch(() => null)` без причины, что и в общем онбординге
+        // домена — блок «что ещё стоит рассказать» исчезал молча.
+        let clFailed = false;
+        setChecklist(await domainApi.checklist(manifest, id).catch(() => { clFailed = true; return null; }));
+        setChecklistFailed(clFailed);
       } catch (e) { setError(e); }
     })();
   }, [manifest, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -50,6 +57,12 @@ export function EmployerOnboardingPanel({ manifest, projectId, conversationId: i
     <section className="domain-panel">
       <p className="card-section__empty">Расскажите о вакансии своими словами: кого ищете, что важно, какие условия. Всё сказанное станет внутренним брифом и черновиками пунктов листа — с цитатами из ваших слов; подтверждаете вы.</p>
       {companyRequired ? <p className="dtp-status dtp-status--warn">Сначала укажите компанию на вкладке «Компания» — бриф и пункты подписываются её реквизитами.</p> : <AiErrorNotice error={error} onConsentGranted={() => setError(null)} />}
+      {checklistFailed && (
+        <NotLoadedNotice
+          what="список «что ещё стоит рассказать»"
+          consequence="Онбординг может выглядеть законченным — это не значит, что рассказано всё."
+        />
+      )}
       {checklist && checklist.length > 0 && (
         <details><summary>О чём стоит рассказать</summary><ul>{checklist.map((c, i) => <li key={i}>{c}</li>)}</ul></details>
       )}

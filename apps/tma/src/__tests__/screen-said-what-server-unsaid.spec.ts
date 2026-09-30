@@ -65,7 +65,15 @@ function withoutComments(src: string): string {
 const FULL_RESULT: AccountDeletionResult = {
   deleted: true,
   removed: { projects: 4, conversations: 11, people: 3, consents: 6, intakeSessions: 0, mediaQueues: 0, aiInferences: 12, aiJobsCancelled: 2, aiJobsAnonymised: 2, auditEntriesScrubbed: 5 },
-  externalArtifacts: { evidenceBlobs: 2, deleted: 2, failed: 1, conversationAudioBlobs: 7, sttJobsDiscarded: 3 },
+  // Пункт [discarded-nothing-said-three] 2026-09-30: найдено и
+  // сделано — разные числа. Здесь нарочно РАЗНЫЕ: из семи аудиофайлов
+  // удалено пять, из трёх задач распознавания отозвана одна. Прежде
+  // поле было одно, и экран печатал число найденных как «удалено».
+  externalArtifacts: {
+    evidenceBlobs: 2, deleted: 2, failed: 1,
+    conversationAudioBlobs: 7, conversationAudioDeleted: 5, conversationAudioFailed: 2,
+    sttJobsInFlight: 3, sttJobsDiscarded: 1, sttJobsFailed: 2,
+  },
   notRemovedHere: serverNotRemovedHere(),
   // Пункт [cascade-took-a-stranger] 2026-09-26: по умолчанию пусто —
   // числа последствий для других проверяются своей спекой.
@@ -138,14 +146,52 @@ const scenarios: Array<[string, () => void | Promise<void>]> = [
   ['КЛЮЧЕВОЙ ТЕСТ: следы у внешних сторон названы числами, а не потеряны типом', () => {
     const html = reportHtml();
     assert(/Транзитных аудиофайлов[^<]*7/.test(html), 'число транзитных аудиофайлов не показано');
-    assert(/Задач распознавания[^<]*3/.test(html), 'число отозванных задач распознавания не показано');
+    assert(/Задач распознавания[^<]*3/.test(html), 'число задач распознавания в полёте не показано');
     assert(/внешнем хранилище[^<]*1/.test(html), 'число неудалённых файлов не показано');
+  }],
+
+  ['КЛЮЧЕВОЙ ТЕСТ: «найдено» и «сделано» — разные числа, и неудача говорит вслух', () => {
+    // Пункт [discarded-nothing-said-three] 2026-09-30. Экран печатал
+    // «Транзитных аудиофайлов разговоров удалено: 7» и «Задач
+    // распознавания отозвано у провайдера: 3», а оба числа были
+    // числами НАЙДЕННОГО: удаление аудиофайла best-effort, а отзыв
+    // задачи вообще не состоится, если провайдер отзыва не умеет
+    // (ElevenLabs, универсальный фоллбек цепочки, не умеет). Человек
+    // читал факт там, где была находка, — и его запись оставалась у
+    // субподрядчика весь retention.
+    const html = reportHtml();
+    assert(/удалено[^<]*5/.test(html), 'число реально удалённых аудиофайлов не показано');
+    assert(/отозвано у провайдера[^<]*1/.test(html), 'число реально отозванных задач не показано');
+    // И неудача — с role="alert", как у доказательств ДТП рядом.
+    assert(/НЕ удалено: 2/.test(html), 'о неудалённых аудиофайлах не сказано');
+    assert(/НЕ отозвано: 2/.test(html), 'о неотозванных задачах не сказано');
+    assert(/остаётся у подрядчика/.test(html), 'не сказано, что копия остаётся у подрядчика');
+    const alerts = (html.match(/role="alert"/g) ?? []).length;
+    assert(alerts >= 3, `неудачи показаны без role="alert": ${alerts}`);
+  }],
+
+  ['обратная проба: полный успех не выдумывает неудачи', () => {
+    const html = reportHtml({
+      ...FULL_RESULT,
+      externalArtifacts: {
+        evidenceBlobs: 2, deleted: 2, failed: 0,
+        conversationAudioBlobs: 7, conversationAudioDeleted: 7, conversationAudioFailed: 0,
+        sttJobsInFlight: 3, sttJobsDiscarded: 3, sttJobsFailed: 0,
+      },
+    });
+    assert(!html.includes('НЕ удалено'), 'отчёт пожаловался на неудачу, которой не было');
+    assert(!html.includes('НЕ отозвано'), 'отчёт пожаловался на неотозванные задачи, которых не было');
+    assert(!html.includes('остаётся у подрядчика'), 'отчёт напугал человека без причины');
   }],
 
   ['обратная проба: нулевые следы у внешних сторон не выдумываются', () => {
     const html = reportHtml({
       ...FULL_RESULT,
-      externalArtifacts: { evidenceBlobs: 0, deleted: 0, failed: 0, conversationAudioBlobs: 0, sttJobsDiscarded: 0 },
+      externalArtifacts: {
+        evidenceBlobs: 0, deleted: 0, failed: 0,
+        conversationAudioBlobs: 0, conversationAudioDeleted: 0, conversationAudioFailed: 0,
+        sttJobsInFlight: 0, sttJobsDiscarded: 0, sttJobsFailed: 0,
+      },
     });
     assert(!html.includes('Транзитных аудиофайлов'), 'отчёт сообщил о транзитных аудиофайлах, которых не было');
     assert(!html.includes('Задач распознавания'), 'отчёт сообщил об отозванных задачах, которых не было');

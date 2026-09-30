@@ -5,6 +5,7 @@ function createFakePrisma() {
   const facts = new Map<string, any>();
   const people = new Map<string, any>();
   const verifications: any[] = [];
+  const spendLog: any[] = [];
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
@@ -14,6 +15,15 @@ function createFakePrisma() {
     _seedVerification(v: any) { verifications.push({ id: v.id ?? nextId(), createdAt: new Date(), ...v }); },
     _getVerifications() { return verifications; },
 
+    // Пункт [the-meter-was-on-one-door] / [the-priciest-door-had-no-lock]
+    // 2026-09-30: расход платных вызовов считается по журналу — фейк
+    // обязан уметь его читать и писать, иначе потолок не выполнится.
+    auditLogEntry: {
+      count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
+      findMany: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action),
+      create: async ({ data }: any) => { spendLog.push(data); return data; },
+    },
+    _spendLog() { return spendLog; },
     personFact: {
       findUnique: async ({ where, include }: any) => {
         const f = facts.get(where.id);
@@ -87,9 +97,14 @@ const USER_ID = 'user-1';
 const PERSON_ID = 'person-1';
 const FACT_ID = 'fact-1';
 
-function seedOwnedFact(prisma: ReturnType<typeof createFakePrisma>) {
+function seedOwnedFact(prisma: ReturnType<typeof createFakePrisma>, scope = 'PROJECT') {
   prisma._seedPerson({ id: PERSON_ID, createdByUserId: USER_ID });
-  prisma._seedFact({ id: FACT_ID, personId: PERSON_ID, projectId: 'proj-1' });
+  // Пункт [never-published-was-published] 2026-09-30: `scope` у факта
+  // теперь читается — фото уходит в ПУБЛИЧНЫЙ Blob, и факт с пометкой
+  // «не публикуется ни при каких обстоятельствах» туда попадать не
+  // должен. Умолчание PROJECT, чтобы прежние сценарии остались о том,
+  // о чём были.
+  prisma._seedFact({ id: FACT_ID, personId: PERSON_ID, projectId: 'proj-1', scope });
 }
 
 async function run() {
@@ -126,11 +141,54 @@ async function run() {
     assertEqual(fetchCalled, false, 'сеть не вызывается вообще без согласия — проверка идёт раньше всего остального');
   });
 
+  test('КЛЮЧЕВОЙ ТЕСТ, Пункт [never-published-was-published] 2026-09-30: фото частного факта в публичный поиск не уходит', async () => {
+    // `assertOwnedFact` проверял только владение. Фото факта со
+    // `scope = PRIVATE_TO_USER` уходило в публичный Blob и в
+    // реверс-поиск — то есть на время поиска было реально публично в
+    // интернете, при прямом обещании «не публикуется ни при каких
+    // обстоятельствах».
+    const prisma = createFakePrisma();
+    seedOwnedFact(prisma, 'PRIVATE_TO_USER');
+    let fetchCalled = false;
+    (global as any).fetch = async () => { fetchCalled = true; return { ok: true, json: async () => ({}) }; };
+    const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
+    await assertThrowsAsync(
+      () => svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg'),
+      BadRequestException,
+      'verifyPhoto() для факта PRIVATE_TO_USER',
+    );
+    assertEqual(fetchCalled, false, 'сеть всё равно была задета — проверка стоит не раньше первого шага наружу');
+    assertEqual(prisma._getVerifications().length, 0, 'строка проверки всё равно создана');
+  });
+
+  test('обратная проба: «только вывод» публиковать РАЗРЕШЕНО — фото такого факта проверяется', async () => {
+    // PUBLIC_DERIVED_ONLY значит «из факта можно построить вывод, сам
+    // факт не публикуется». Реверс-поиск фото — это не публикация
+    // факта, а проверка изображения, и запретить её здесь значило бы
+    // выключить функцию под видом её починки.
+    const prisma = createFakePrisma();
+    seedOwnedFact(prisma, 'PUBLIC_DERIVED_ONLY');
+    (global as any).fetch = async (url: string, init: any) => {
+      if (init?.method === 'PUT') return { ok: true, json: async () => ({ url: 'https://store.public.blob.vercel-storage.com/x.jpg', pathname: 'x.jpg', contentType: 'image/jpeg' }) };
+      if (init?.method === 'DELETE') return { ok: true, json: async () => ({}) };
+      return { ok: true, json: async () => ({ visual_matches: [] }) };
+    };
+    const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
+    const out: any = await svc.verifyPhoto(USER_ID, FACT_ID, makeStreamFromBuffer(new Uint8Array([1, 2, 3])), 'image/jpeg');
+    assertEqual(typeof out === 'object' && out !== null, true, 'проверка фото отказала там, где отказывать не должна');
+  });
+
   test('verifyPhoto() проверяет rate limit — отказывает при достижении дневного лимита', async () => {
     const prisma = createFakePrisma();
     seedOwnedFact(prisma);
+    // Пункт [the-meter-counted-rows] 2026-09-30: потолок считает
+    // ПОПЫТКИ, а не строки результата. Прежде здесь засевались пять
+    // строк `PhotoVerification` — и это же было дефектом: один
+    // успешный поиск с двадцатью совпадениями создавал двадцать строк
+    // и съедал суточный потолок 5 целиком, а упавший до записи вызов
+    // не тратил его вовсе.
     for (let i = 0; i < 5; i++) {
-      prisma._seedVerification({ personFactId: FACT_ID, createdByUserId: USER_ID, verificationStatus: 'NO_SIMILAR_IMAGES_FOUND' });
+      await prisma.auditLogEntry.create({ data: { actorId: USER_ID, action: 'photo_verification.requested' } });
     }
     const svc = new PhotoVerificationService(prisma as any, new FakeSecretsService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(

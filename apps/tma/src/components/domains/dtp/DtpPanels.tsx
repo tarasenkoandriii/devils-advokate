@@ -21,7 +21,17 @@ export const useDtpList = useList;
 
 // ── Обзор ──
 
-export function DtpOverview({ config, counts }: { config: DtpConfig; counts: { participants: number; evidence: number; advisors: number } }) {
+/** Пункт [zero-was-a-failure] 2026-09-30: `null` значит «не
+ * загрузилось», и это НЕ то же, что ноль. Жирный «0» в блоке фактов о
+ * ДТП человек читает как ответ продукта о своём деле. */
+/** «—» вместо нуля, когда число не пришло. */
+function countText(n: number | null): string {
+  return n === null ? '—' : String(n);
+}
+
+export type DtpCounts = { participants: number | null; evidence: number | null; advisors: number | null };
+
+export function DtpOverview({ config, counts }: { config: DtpConfig; counts: DtpCounts }) {
   const grouped = new Map<string, DtpCriterion[]>();
   for (const c of config.criteria ?? []) grouped.set(c.category, [...(grouped.get(c.category) ?? []), c]);
   return (
@@ -29,10 +39,15 @@ export function DtpOverview({ config, counts }: { config: DtpConfig; counts: { p
       <div className="dtp-facts">
         <div><span className="dtp-facts__label">Когда</span><strong>{dateTime(config.occurredAt)}</strong></div>
         <div><span className="dtp-facts__label">Целевой бюджет</span><strong>{money(config.targetBudget, config.currency)}</strong></div>
-        <div><span className="dtp-facts__label">Участников</span><strong>{counts.participants}</strong></div>
-        <div><span className="dtp-facts__label">Доказательств</span><strong>{counts.evidence}</strong></div>
-        <div><span className="dtp-facts__label">Консультантов</span><strong>{counts.advisors}</strong></div>
+        <div><span className="dtp-facts__label">Участников</span><strong>{countText(counts.participants)}</strong></div>
+        <div><span className="dtp-facts__label">Доказательств</span><strong>{countText(counts.evidence)}</strong></div>
+        <div><span className="dtp-facts__label">Консультантов</span><strong>{countText(counts.advisors)}</strong></div>
       </div>
+      {(counts.participants === null || counts.evidence === null || counts.advisors === null) && (
+        <p className="dtp-status dtp-status--warn" role="alert">
+          Часть чисел не загрузилась — там, где стоит «—», продукт не знает ответа. Это не ноль.
+        </p>
+      )}
       <p className="dtp-goal">{config.goalDescription}</p>
       <h3>Критерии — что нужно выяснить</h3>
       {grouped.size === 0 && <p className="card-section__empty">Критериев нет — они появляются из онбординга.</p>}

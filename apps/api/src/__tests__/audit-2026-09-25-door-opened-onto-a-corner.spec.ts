@@ -27,8 +27,12 @@ describe('Пункт [door-opened-onto-a-corner] 2026-09-25: область жу
     // локальную карту `RESOURCE_OF`. Сторож [probe-checked-the-neighbour]
     // справедливо забраковал первую версию: она смотрела только на
     // импортированные реестры, то есть на соседнее выражение.
-    expect(Object.keys(DECISION_LABELS).length).toBe(34);
-    expect(Object.keys(RESOURCE_OF).length).toBe(34);
+    // 2026-09-30: стало 36 — прибавились два счётчика расхода
+    // (обращения к картам и проверки фото). Содержимого в этих
+    // записях нет, но в журнале человека они видны, и подпись им
+    // обязательна.
+    expect(Object.keys(DECISION_LABELS).length).toBe(36);
+    expect(Object.keys(RESOURCE_OF).length).toBe(36);
     expect(DECISION_SCOPES.length).toBe(10);
     expect(DECISIONS_OUT_OF_SCOPE.length).toBe(5);
   });

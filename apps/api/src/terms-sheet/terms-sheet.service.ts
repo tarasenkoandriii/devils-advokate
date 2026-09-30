@@ -46,8 +46,45 @@ import { isUniqueViolation } from '../common/unique-violation';
  * тестом. */
 export const MAX_OFFER_CHARS = 20_000;
 
-/** Ключи, которых в DTO листа быть не должно (приёмка 10). */
+/** Ключи, которых в DTO листа быть не должно (приёмка 10).
+ *
+ * Пункт [the-rule-lived-only-in-a-test] 2026-09-30: эта константа
+ * объявлялась здесь и НЕ ПРИМЕНЯЛАСЬ НИГДЕ в продовом коде —
+ * единственным её потребителем была одна спека, проверявшая текст JSON
+ * одного листа. Правило существовало, и держало оно ровно тот случай,
+ * который уже был написан; новое поле `score` в любом другом ответе
+ * домена прошло бы мимо.
+ *
+ * `assertNoForbiddenSheetKeys` — тот же реестр, применённый в рантайме
+ * на выходе. Он БРОСАЕТ, а не фильтрует: ключ с оценкой в ответе — это
+ * ошибка разработки, а не состояние человека, и молча вырезать поле
+ * значило бы скрыть её. Сообщение человеку при этом нейтральное:
+ * внутренняя ошибка, а не «у вас что-то не так». */
 export const FORBIDDEN_SHEET_KEYS = ['score', 'rank', 'probability', 'rating', 'verdict'] as const;
+
+/** Проверка выхода: ни на одном уровне ответа нет ключа-оценки.
+ * Сравнение по ПОЛНОМУ имени ключа, а не по подстроке: `orderIndex`
+ * содержит «order», но оценкой не является, и запрещать по подстроке
+ * значило бы выключить половину полей домена. */
+export function assertNoForbiddenSheetKeys(dto: unknown, where: string): void {
+  const forbidden = new Set<string>(FORBIDDEN_SHEET_KEYS);
+  const walk = (v: unknown, path: string): void => {
+    if (Array.isArray(v)) {
+      v.forEach((x) => walk(x, path));
+      return;
+    }
+    if (!v || typeof v !== 'object' || v instanceof Date) return;
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (forbidden.has(k)) {
+        throw new Error(
+          `Запрещённый ключ-оценка «${k}» в ответе ${where} (${path || 'корень'}): лист условий не выносит оценок — см. FORBIDDEN_SHEET_KEYS`,
+        );
+      }
+      walk(x, path ? `${path}.${k}` : k);
+    }
+  };
+  walk(dto, '');
+}
 
 const TERMINAL: ReadonlySet<TermsSheetStatus> = new Set([TermsSheetStatus.AGREED, TermsSheetStatus.DECLINED, TermsSheetStatus.WITHDRAWN]);
 
@@ -164,33 +201,14 @@ export function coverageCounters(clauses: ClauseWithCurrent[]) {
   return { total, byCategory };
 }
 
-/** Проекция позиций в старую форму matchBreakdown / criteriaBreakdown —
- * экраны и спеки v1 продолжают работать без правок ожиданий (приёмка 8). */
-export function projectBreakdown(
-  clauses: ClauseWithCurrent[],
-  refField: 'sourceCriterionId' | 'sourceQuestionnaireItemId',
-  raw: Array<{ id: string; sourceCriterionId: string | null; sourceQuestionnaireItemId: string | null }>,
-  coveredBy: TermsSide,
-) {
-  const refById = new Map(raw.map((r) => [r.id, r[refField]]));
-  const out: Array<{ criterionId?: string; questionnaireItemId?: string; coverage: ClauseCoverage; note: string; sourceSegmentId?: string | null }> = [];
-  for (const c of clauses) {
-    const ref = refById.get(c.id);
-    if (!ref || c.kind !== TermsClauseKind.REQUIREMENT) continue;
-    const pos = c.current[coveredBy];
-    const entry: (typeof out)[number] = {
-      coverage: pos?.coverage ?? ClauseCoverage.unknown,
-      note: pos?.note ?? '',
-    };
-    if (refField === 'sourceCriterionId') entry.criterionId = ref;
-    else {
-      entry.questionnaireItemId = ref;
-      entry.sourceSegmentId = pos?.evidenceKind === EvidenceKind.TRANSCRIPT_SEGMENT ? pos.evidenceRef : null;
-    }
-    out.push(entry);
-  }
-  return out;
-}
+// Пункт [written-for-the-person-never-delivered] 2026-09-30: здесь
+// жила `projectBreakdown` — «проекция позиций в старую форму
+// matchBreakdown / criteriaBreakdown, экраны и спеки v1 продолжают
+// работать без правок ожиданий (приёмка 8)». Ни один экран и ни одна
+// спека её не вызывали: обратная совместимость, написанная и никем не
+// использованная. Удалена, а не оставлена «на будущее» — мёртвый код
+// в этом проекте уже дважды оказывался ловушкой для следующего
+// читателя, который принимал его за работающий путь.
 
 /** Лист уже открыт — ОДИН текст и один `existingSheetId` на все пути.
  *
@@ -478,7 +496,7 @@ export class TermsSheetService {
     const clauses = await this.loadClauses(sheetId);
     const offers = await this.prisma.offerDocument.findMany({ where: { sheetId }, orderBy: { createdAt: 'asc' } });
     const cvVariants = await this.prisma.cvVariant.findMany({ where: { sheetId }, orderBy: { compiledAt: 'desc' }, select: { id: true, lang: true, compiledAt: true, reviewedAt: true } });
-    return {
+    const dto = {
       id: sheet.id,
       projectId: sheet.projectId,
       kind: sheet.kind,
@@ -498,6 +516,12 @@ export class TermsSheetService {
       createdAt: sheet.createdAt,
       updatedAt: sheet.updatedAt,
     };
+    // Проверка НА ВЫХОДЕ, а не только в спеке: `get()` — единственная
+    // дверь, через которую лист уходит наружу (все прочие методы
+    // возвращают `this.get(...)`), поэтому одного места достаточно, и
+    // оно же не даст правилу снова стать декларацией.
+    assertNoForbiddenSheetKeys(dto, 'TermsSheetService.get');
+    return dto;
   }
 
 

@@ -5,7 +5,7 @@ import { domainApi } from '../../../lib/domains/api';
 import { DomainManifest } from '../../../lib/domains/types';
 import { EntityForm } from '../EntityForm';
 import { haptic } from '../../../lib/telegram';
-import { DtpAdvisors, DtpFault, DtpOverview, DtpParticipants, useDtpList } from './DtpPanels';
+import { DtpAdvisors, DtpFault, DtpOverview, DtpParticipants, useDtpList, type DtpCounts } from './DtpPanels';
 import { BudgetByCurrency, ComparisonMatrix, CrossCheckList, TextDocument } from '../shared/ConsultationPipeline';
 import { DtpConfig, DtpEvidenceAccess, DtpEvidenceItem, BUDGET_CATEGORY_LABEL, dateTime } from './dtp-types';
 import { checkLocationConsent, LocationConsentPrompt } from '../../LocationConsentPrompt';
@@ -15,6 +15,7 @@ import { LOCATION_PURPOSES } from '../../../lib/location-purposes';
 
 function EvidenceCard({ e }: { e: DtpEvidenceItem }) {
   const [log, setLog] = useState<DtpEvidenceAccess[] | null>(null);
+  const [notRecorded, setNotRecorded] = useState(false);
   return (
     <div className="dtp-evidence">
       <div className="dtp-evidence__icon">{e.mediaType === 'VIDEO' ? '🎥' : '📷'}</div>
@@ -23,9 +24,38 @@ function EvidenceCard({ e }: { e: DtpEvidenceItem }) {
         <div className="dtp-muted">снято {dateTime(e.capturedAt)}</div>
         <div className="dtp-muted">{e.latitude !== null && e.longitude !== null ? `📍 ${e.latitude.toFixed(5)}, ${e.longitude.toFixed(5)}` : 'без геометки'} · хеш {e.fileHash.slice(0, 10)}…</div>
         <div className="entity-form__actions">
-          {e.blobUrl && <a className="dtp-link" href={e.blobUrl} target="_blank" rel="noreferrer">Открыть</a>}
+          {/* Пункт [the-log-that-logged-nothing] 2026-09-30: это была
+              ПРОСТАЯ ССЫЛКА на Blob — файл открывался минуя сервер, и
+              журнал доступа оставался всегда пуст, при том что экран
+              обещал «каждый просмотр пишется в журнал». Теперь
+              открытие сначала отмечается, и только потом файл
+              открывается. Отказ записи не мешает открыть своё
+              доказательство, но молчать о нём нельзя: журнал — это то,
+              чем человек собирается доказывать. */}
+          {e.blobUrl && (
+            <button
+              type="button"
+              className="dtp-link"
+              onClick={async () => {
+                try {
+                  await domainApi.postJson(`/dtp/evidence/${e.id}/opened`, {});
+                  setNotRecorded(false);
+                } catch {
+                  setNotRecorded(true);
+                }
+                window.open(e.blobUrl!, '_blank', 'noreferrer');
+              }}
+            >
+              Открыть
+            </button>
+          )}
           <button type="button" className="secondary" onClick={() => log ? setLog(null) : domainApi.getJson(`/dtp/evidence/${e.id}/access-log`).then(setLog)}>{log ? 'Скрыть журнал' : 'Журнал доступа'}</button>
         </div>
+        {notRecorded && (
+          <p role="alert" className="dtp-status dtp-status--warn">
+            Это открытие в журнал доступа записать не удалось — сам файл открыт, но в журнале его не будет.
+          </p>
+        )}
         {log && (
           <ul className="dtp-access-log">
             {log.length === 0 && <li className="dtp-muted">Доступов не было.</li>}
@@ -70,7 +100,12 @@ export function DtpEvidence({ configId, manifest }: { configId: string; manifest
 
   return (
     <section className="dtp-section">
-      <p className="dtp-hint">Файл получает хеш и время фиксации при загрузке, каждый просмотр пишется в журнал — это и есть «доказательная фиксация»: вы сможете показать, что снимок не менялся. Геометка — только по вашему согласию, и она сохраняется вместе с файлом.</p>
+      {/* Пункт [the-log-that-logged-nothing] 2026-09-30: здесь стояло
+          «каждый просмотр пишется в журнал» — и журнал был всегда
+          пуст. Теперь сказано ровно то, что записывается, и названо
+          то, что НЕ записывается: ссылку на файл можно передать, и
+          чужое открытие по ней продукт не увидит. */}
+      <p className="dtp-hint">Файл получает хеш и время фиксации при загрузке — это и есть «доказательная фиксация»: вы сможете показать, что снимок не менялся. Каждое открытие файла отсюда пишется в журнал доступа. Если вы передали ссылку на файл кому-то ещё, его открытия продукт не увидит — журнал знает только то, что происходит в нём. Геометка — только по вашему согласию, и она сохраняется вместе с файлом.</p>
       {error && <p role="alert" className="generation-error">{error}</p>}
       {pendingGeo && (
         <LocationConsentPrompt
@@ -100,13 +135,26 @@ const TABS = [
 
 export function DtpWorkspace({ config, manifest }: { config: DtpConfig; manifest: DomainManifest }) {
   const [tab, setTab] = useState('overview');
-  const [counts, setCounts] = useState({ participants: 0, evidence: 0, advisors: 0 });
+  // Пункт [zero-was-a-failure] 2026-09-30: здесь стояли три
+  // `.catch(() => [])` без причины и `?? 0` поверх них — то есть сбой
+  // любой из трёх загрузок печатался на вкладке «Обзор» жирными
+  // нулями в блоке ФАКТОВ о ДТП человека: «Участников 0 ·
+  // Доказательств 0 · Консультантов 0». Ни пометки, ни role="alert".
+  // Остальные вкладки того же воркспейса построены честно — `useDtpList`
+  // отдаёт `error`, и панели его показывают; не показывала ровно та
+  // вкладка, которая открывается первой и на которую человек смотрит,
+  // решая, собрал ли он доказательства для страховой.
+  //
+  // `null` вместо нуля: «неизвестно» и «ноль» — разные ответы, и
+  // отличить их обязан экран, а не человек.
+  const [counts, setCounts] = useState<DtpCounts>({ participants: null, evidence: null, advisors: null });
   useEffect(() => {
+    const len = (v: unknown) => (Array.isArray(v) ? v.length : null);
     void Promise.all([
-      domainApi.getJson(`/dtp/configs/${config.id}/participants`).catch(() => []),
-      domainApi.getJson(`/dtp/configs/${config.id}/evidence`).catch(() => []),
-      domainApi.getJson(`/dtp/configs/${config.id}/advisors`).catch(() => []),
-    ]).then(([p, e, a]) => setCounts({ participants: p.length ?? 0, evidence: e.length ?? 0, advisors: a.length ?? 0 }));
+      domainApi.getJson(`/dtp/configs/${config.id}/participants`).catch(() => null),
+      domainApi.getJson(`/dtp/configs/${config.id}/evidence`).catch(() => null),
+      domainApi.getJson(`/dtp/configs/${config.id}/advisors`).catch(() => null),
+    ]).then(([p, e, a]) => setCounts({ participants: len(p), evidence: len(e), advisors: len(a) }));
   }, [config.id, tab]);
   const entity = (key: string) => manifest.entities.find((e) => e.key === key)!;
   return (

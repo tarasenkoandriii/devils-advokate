@@ -35,10 +35,26 @@ export interface ExternalArtifactsReport {
   evidenceBlobs: number;
   evidenceDeleted: number;
   evidenceFailed: number;
-  /** Транзитные аудиофайлы разговоров (удаление — best-effort внутри AudioBlobService). */
+  /** Транзитные аудиофайлы разговоров: НАЙДЕНО / удалено / не удалось.
+   *
+   * Пункт [discarded-nothing-said-three] 2026-09-30: поле было одно, и
+   * имя его означало «сколько было», а подпись на экране говорила
+   * «удалено: N». Удаление здесь best-effort по честной причине
+   * (вебхук приходит один раз, ронять его обработку из-за неудачного
+   * удаления файла дороже), но причина глушения не делает верным
+   * утверждение об исходе. Три числа вместо одного — как у
+   * доказательств ДТП, где это уже закрыто Пунктом
+   * [delete-says-done]. */
   conversationAudioBlobs: number;
-  /** Задачи распознавания в полёте, отозванные у провайдера. */
+  conversationAudioDeleted: number;
+  conversationAudioFailed: number;
+  /** Задачи распознавания в полёте: НАЙДЕНО / отозвано / не отозвано.
+   *  Отзыв не состоится, если провайдер неизвестен, если он отзыва не
+   *  умеет (ElevenLabs — универсальный фоллбек — не умеет) или если
+   *  запрос упал. Прежде счётчик «отозвано» рос во всех трёх случаях. */
+  sttJobsInFlight: number;
   sttJobsDiscarded: number;
+  sttJobsFailed: number;
 }
 
 @Injectable()
@@ -68,7 +84,11 @@ export class ExternalArtifactsCleanupService {
       evidenceDeleted: 0,
       evidenceFailed: 0,
       conversationAudioBlobs: 0,
+      conversationAudioDeleted: 0,
+      conversationAudioFailed: 0,
+      sttJobsInFlight: 0,
       sttJobsDiscarded: 0,
+      sttJobsFailed: 0,
     };
 
     // 1) доказательства ДТП
@@ -111,24 +131,40 @@ export class ExternalArtifactsCleanupService {
     for (const c of conversations) {
       if (c.audioBlobPathname) {
         report.conversationAudioBlobs++;
-        await this.audioBlob.deleteByPathname(c.audioBlobPathname); // сам логирует отказ, не бросает
+        // Пункт [discarded-nothing-said-three] 2026-09-30: инкремент
+        // стоял ДО вызова и был единственным — то есть числом
+        // найденных, напечатанным как «удалено».
+        if (await this.audioBlob.deleteByPathname(c.audioBlobPathname)) report.conversationAudioDeleted++;
+        else report.conversationAudioFailed++;
       }
       if (c.status === ConversationProcessingStatus.TRANSCRIBING && c.externalTranscriptionJobId) {
         const { provider, externalJobId } = parseSttJobId(c.externalTranscriptionJobId);
-        await this.stt.discardOrphan(provider, externalJobId);
-        report.sttJobsDiscarded++;
+        report.sttJobsInFlight++;
+        if (await this.stt.discardOrphan(provider, externalJobId)) report.sttJobsDiscarded++;
+        else report.sttJobsFailed++;
       }
     }
 
     const [sparringJobs, materialJobs] = await this.findInFlightVoiceJobs(scope);
     for (const job of [...sparringJobs, ...materialJobs]) {
       const { provider, externalJobId } = parseSttJobId(job.externalTranscriptionJobId);
-      await this.stt.discardOrphan(provider, externalJobId);
-      report.sttJobsDiscarded++;
+      report.sttJobsInFlight++;
+      if (await this.stt.discardOrphan(provider, externalJobId)) report.sttJobsDiscarded++;
+      else report.sttJobsFailed++;
     }
 
     if (report.evidenceFailed > 0) {
       this.logger.warn(`Внешние артефакты: не удалось удалить ${report.evidenceFailed} файлов доказательств — нужна ручная чистка`);
+    }
+    if (report.conversationAudioFailed > 0) {
+      this.logger.warn(
+        `Внешние артефакты: не удалось удалить ${report.conversationAudioFailed} транзитных аудиофайлов — нужна ручная чистка`,
+      );
+    }
+    if (report.sttJobsFailed > 0) {
+      this.logger.warn(
+        `Внешние артефакты: ${report.sttJobsFailed} задач распознавания НЕ отозвано у провайдера — запись остаётся у него до конца retention`,
+      );
     }
     return report;
   }

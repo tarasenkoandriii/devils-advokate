@@ -31,6 +31,20 @@
 // документом.
 
 export interface SpendLimit {
+  /** Устойчивый ключ записи.
+   *
+   * Пункт [the-ceiling-lived-in-two-places] 2026-09-30: у зашитых
+   * потолков `env === null`, а `spendLimit()` искал запись ПО ИМЕНИ
+   * ПЕРЕМЕННОЙ — то есть до зашитых записей дотянуться было нечем, и
+   * места применения читали свои собственные копии чисел
+   * (`OCR_DAILY_LIMIT_PER_USER` в health.service.ts,
+   * `DAILY_LIMIT_PER_USER` в youtube-search.service.ts и в
+   * photo-verification.service.ts). Числа совпадали, реестр при этом
+   * объявлял себя «одним местом, где перечислены все потолки», а
+   * сверка документации шла по нему: правка константы в сервисе
+   * разъехалась бы с реестром МОЛЧА. Ключ есть у каждой записи —
+   * чтобы способ назвать потолок был один. */
+  key: string;
   /** Что ограничивается — словами, как сказал бы владелец. */
   what: string;
   /** Переменная окружения или `null`, если потолок зашит в коде. */
@@ -45,6 +59,7 @@ export interface SpendLimit {
 export const SPEND_LIMITS: SpendLimit[] = [
   {
     what: 'Текстовые AI-вызовы одного пользователя',
+    key: 'ai-calls',
     env: 'AI_CALLS_PER_USER_PER_DAY',
     fallback: 300,
     unit: 'вызовов в сутки',
@@ -52,6 +67,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Медиа-разборы одного пользователя (по типу задачи)',
+    key: 'ai-media-calls',
     env: 'AI_MEDIA_CALLS_PER_USER_PER_DAY',
     fallback: 20,
     unit: 'вызовов в сутки',
@@ -59,6 +75,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Длительность одного ролика в медиа-разборе',
+    key: 'media-review-duration',
     env: 'MEDIA_REVIEW_MAX_DURATION_SECONDS',
     fallback: 1200,
     unit: 'секунд на ролик',
@@ -66,6 +83,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Озвучка текста одного пользователя',
+    key: 'tts-calls',
     env: 'TTS_CALLS_PER_USER_PER_DAY',
     fallback: 100,
     unit: 'вызовов в сутки',
@@ -73,6 +91,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Пакетное сопоставление вакансий одного пользователя',
+    key: 'ai-batch-match',
     env: 'AI_BATCH_MATCH_PER_USER_PER_DAY',
     fallback: 100,
     unit: 'вызовов в сутки',
@@ -80,6 +99,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Запросы транскрибации одного пользователя',
+    key: 'transcriptions',
     env: 'TRANSCRIPTIONS_PER_USER_PER_DAY',
     fallback: 30,
     unit: 'записей в сутки',
@@ -87,6 +107,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Суммарная длительность транскрибаций одного пользователя',
+    key: 'transcription-minutes',
     env: 'TRANSCRIPTION_MINUTES_PER_USER_PER_DAY',
     fallback: 240,
     unit: 'минут в сутки',
@@ -95,6 +116,7 @@ export const SPEND_LIMITS: SpendLimit[] = [
   },
   {
     what: 'Окно повторного использования одинаковых AI-запросов',
+    key: 'ai-idempotency-window',
     env: 'AI_IDEMPOTENCY_WINDOW_MINUTES',
     fallback: 10,
     unit: 'минут окна',
@@ -102,6 +124,20 @@ export const SPEND_LIMITS: SpendLimit[] = [
       'это потолок НАОБОРОТ: внутри окна одинаковый запрос отдаётся готовым ответом и не оплачивается повторно, а 0 выключает переиспользование и увеличивает счёт',
   },
   {
+    // Пункт [the-priciest-door-had-no-lock] 2026-09-30: шесть
+    // маршрутов к Google Places не были ограничены ничем, а Places
+    // тарифицируется за каждый запрос — самая дорогая единица
+    // обращения из всех неограниченных путей продукта.
+    key: 'places-requests',
+    what: 'Обращения к картам (Google Places) одного пользователя',
+    env: 'PLACES_REQUESTS_PER_USER_PER_DAY',
+    fallback: 100,
+    unit: 'вызовов в сутки',
+    costs:
+      'биллинг Google Maps Platform по каждому запросу; одна генерация рекомендаций заведений делает до четырёх обращений (Nearby Search плюс Place Details на каждого кандидата)',
+  },
+  {
+    key: 'ocr-documents',
     what: 'Распознавание документов (OCR) одного пользователя',
     env: null,
     fallback: 10,
@@ -109,11 +145,25 @@ export const SPEND_LIMITS: SpendLimit[] = [
     costs: 'Cloud Vision; потолок зашит в коде — подкрутить без редеплоя нельзя',
   },
   {
+    key: 'youtube-search',
     what: 'Поиск по YouTube одного пользователя',
     env: null,
     fallback: 20,
     unit: 'вызовов в сутки',
     costs: 'квота YouTube Data API, общая на весь проект; потолок зашит в коде',
+  },
+  {
+    // Пункт [the-meter-counted-rows] 2026-09-30: этот потолок
+    // существовал зашитым числом и в реестре НЕ ЗНАЧИЛСЯ, хотя SerpApi
+    // платный и это именно потолок расходов. OCR и YouTube в реестре
+    // хотя бы перечислены как зашитые — этот не был и там.
+    key: 'photo-verification',
+    what: 'Проверки фото (реверс-поиск) одного пользователя',
+    env: null,
+    fallback: 5,
+    unit: 'вызовов в сутки',
+    costs:
+      'кредиты SerpApi (google_lens) плюс запись и удаление публичной копии в Vercel Blob; потолок зашит в коде — §4.4 ТЗ требует «особенно строгих лимитов», и число намеренно низкое',
   },
 ];
 
@@ -179,10 +229,21 @@ export function limitFrom(env: string | null, fallback: number): number {
   return resolveLimit(env, fallback).value;
 }
 
-/** Потолок по ключу реестра — чтобы место применения и документация
- * ссылались на одну запись, а не на две копии числа. */
+/** Потолок по имени переменной окружения — чтобы место применения и
+ * документация ссылались на одну запись, а не на две копии числа. */
 export function spendLimit(env: string): number {
   const entry = SPEND_LIMITS.find((l) => l.env === env);
   if (!entry) throw new Error(`Потолок ${env} не описан в SPEND_LIMITS`);
+  return limitFrom(entry.env, entry.fallback);
+}
+
+/** Потолок по ключу реестра. Нужен ровно для ЗАШИТЫХ потолков, у
+ * которых `env === null`: по имени переменной их было не найти, и
+ * поэтому места применения держали свои копии чисел. Опечатка в ключе
+ * падает громко — молчаливый ноль здесь означал бы «потолка нет», и
+ * никто бы не узнал. */
+export function spendLimitByKey(key: string): number {
+  const entry = SPEND_LIMITS.find((l) => l.key === key);
+  if (!entry) throw new Error(`Потолок ${key} не описан в SPEND_LIMITS`);
   return limitFrom(entry.env, entry.fallback);
 }

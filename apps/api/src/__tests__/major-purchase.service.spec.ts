@@ -6,6 +6,7 @@ function createFakePrisma() {
   const configs = new Map<string, any>();
   const variants = new Map<string, any>();
   const meetings = new Map<string, any>();
+  const placesSpend: any[] = [];
   const comparisons: any[] = [];
   const conversations = new Map<string, any>();
   const signals: any[] = [];
@@ -83,6 +84,14 @@ function createFakePrisma() {
         return include?.criteria ? { ...config, criteria: createdCriteria } : config;
       },
     },
+    // Пункт [the-priciest-door-had-no-lock] 2026-09-30: обращения к
+    // платным картам считаются по журналу — фейк обязан уметь его
+    // читать и писать, иначе потолок просто не выполнится.
+    auditLogEntry: {
+      count: async () => placesSpend.length,
+      create: async ({ data }: any) => { placesSpend.push(data); return data; },
+    },
+    _placesSpend() { return placesSpend; },
     purchaseVariant: {
       create: async ({ data }: any) => {
         const variant = { id: nextId(), askingPrice: null, currency: null, placeId: null, placeName: null, placeAddress: null, latitude: null, longitude: null, ...data };

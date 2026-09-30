@@ -18,9 +18,10 @@
 // не было способа её заполнить, TMA UI показывал лейбл диаризации
 // ("SPEAKER_00") как есть.
 
-import { ForbiddenException, HttpException, HttpStatus, Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { requireAIProvider } from '../common/require-provider';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertUnderDailyTranscriptionLimit, recordTranscriptionSpend } from '../stt/transcription-spend';
 import { isMissingColumnError, warnMigrationLagOnce } from '../common/enum-migration-lag';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -34,7 +35,6 @@ import { CreateConversationDto } from './dto/create-conversation.dto';
 import { RequestTranscriptionDto } from './dto/request-transcription.dto';
 import { ConversationProcessingStatus, ConversationSignalType } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
-import { spendLimit } from '../common/spend-limits';
 import { subsetOf } from '../common/enum-values';
 
 /** Сколько отметка о заборе вебхука считается живой. Больше, чем
@@ -52,7 +52,6 @@ const MEDIA_LEASE_REAP_BATCH = 100;
 /** Пункт [ceilings-nobody-was-told-about] 2026-09-24: тот же приём,
  * что у озвучки (`tts.synthesized`) — счётчик расхода живёт в журнале
  * действий, без содержимого записи. */
-const TRANSCRIPTION_USAGE_ACTION = 'transcription.requested';
 
 /** Сигналы, которые показывает раздел подачи речи: расхождение слов с
  * подачей и смена тона. Пункт [enum-copy-drifted] 2026-09-29 — сужение
@@ -121,47 +120,6 @@ export class ConversationsService implements OnModuleInit {
     });
   }
 
-  /** Суточные потолки транскрибации: по числу записей и по суммарной
-   * длительности. Два, а не один, и это не перестраховка:
-   * `durationSeconds` приходит ОТ КЛИЕНТА и может не быть указана вовсе,
-   * поэтому потолок по минутам ловит обычное использование, а держит
-   * расходы потолок по числу записей. Считать по длительности, которую
-   * вернул провайдер, было бы честнее — продукт её не хранит, и заводить
-   * ради счётчика колонку с ручной миграцией здесь не стали; это
-   * записано, а не умолчано. */
-  private async assertUnderDailyTranscriptionLimit(userId: string): Promise<void> {
-    const countLimit = spendLimit('TRANSCRIPTIONS_PER_USER_PER_DAY');
-    const minutesLimit = spendLimit('TRANSCRIPTION_MINUTES_PER_USER_PER_DAY');
-    if (countLimit === 0 && minutesLimit === 0) return;
-
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recent = await this.prisma.auditLogEntry.findMany({
-      where: { actorId: userId, action: TRANSCRIPTION_USAGE_ACTION, createdAt: { gte: since } },
-      select: { after: true },
-    });
-
-    if (countLimit > 0 && recent.length >= countLimit) {
-      // 429, как у остальных потолков: предел временный, не правовой.
-      throw new HttpException(
-        `Достигнут суточный лимит расшифровок (${countLimit}/сутки). Попробуйте позже.`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    if (minutesLimit > 0) {
-      const seconds = recent.reduce((sum: number, e: { after: unknown }) => {
-        const value = (e.after as { durationSeconds?: number | null } | null)?.durationSeconds;
-        return sum + (typeof value === 'number' && value > 0 ? value : 0);
-      }, 0);
-      if (seconds >= minutesLimit * 60) {
-        throw new HttpException(
-          `Достигнут суточный лимит расшифровки по длительности (${minutesLimit} мин/сутки). Попробуйте позже.`,
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-    }
-  }
-
   /** Единственная точка входа для запуска транскрибации+диаризации —
    * все приватность-проверки раздела 4.6 ТЗ идут здесь, до вызова
    * TranscriptionService, не после и не опционально. */
@@ -191,7 +149,7 @@ export class ConversationsService implements OnModuleInit {
     // одного файла (500 МБ). Платится она поминутно, и документ о
     // расходах называет её первой строкой. Потолок стоит ПОСЛЕ проверок
     // приватности и ДО первого платного шага.
-    await this.assertUnderDailyTranscriptionLimit(userId);
+    await assertUnderDailyTranscriptionLimit(this.prisma, userId);
 
     // Пункт [blob-upload] 2026-08-31 — два возможных источника файла,
     // выбор явный, а не «что нашлось». Обоснование — в
@@ -229,15 +187,7 @@ export class ConversationsService implements OnModuleInit {
     // дороже, чем пересчитать. Длительность кладём такой, какой её
     // назвал клиент (может не быть вовсе) — содержимого записи в
     // журнале нет, только её длина.
-    await this.prisma.auditLogEntry.create({
-      data: {
-        actorId: userId,
-        action: TRANSCRIPTION_USAGE_ACTION,
-        resource: 'Conversation',
-        resourceId: conversationId,
-        after: { durationSeconds: conversation.durationSeconds ?? null },
-      },
-    });
+    await recordTranscriptionSpend(this.prisma, userId, 'Conversation', conversationId, conversation.durationSeconds ?? null);
 
     const webhookUrl = this.buildWebhookUrl(conversationId);
     const { storedId, provider: usedProvider } = await this.stt.submitWebhookJob({

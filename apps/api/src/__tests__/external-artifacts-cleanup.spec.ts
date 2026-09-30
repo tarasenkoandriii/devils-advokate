@@ -14,7 +14,7 @@ jest.mock('../common/vercel-blob', () => ({
   ),
 }));
 
-function make(data: { evidence?: any[]; conversations?: any[]; sparring?: any[]; material?: any[]; token?: string | null } = {}) {
+function make(data: { evidence?: any[]; conversations?: any[]; sparring?: any[]; material?: any[]; token?: string | null; failPathnames?: string[]; failJobs?: string[] } = {}) {
   const calls = { audioBlobs: [] as string[], discarded: [] as string[], scopes: [] as any[] };
   const prisma: any = {
     dtpEvidenceItem: { findMany: async ({ where }: any) => { calls.scopes.push(where.config); return data.evidence ?? []; } },
@@ -23,8 +23,22 @@ function make(data: { evidence?: any[]; conversations?: any[]; sparring?: any[];
     materialChatVoiceReplyJob: { findMany: async () => data.material ?? [] },
   };
   const secrets = { resolve: async () => { if (data.token === null) throw new Error('no token'); return data.token ?? 'tok'; } };
-  const audioBlob = { deleteByPathname: async (p: string) => { calls.audioBlobs.push(p); } };
-  const stt = { discardOrphan: async (hint: string, id: string) => { calls.discarded.push(`${hint}:${id}`); } };
+  // Пункт [discarded-nothing-said-three] 2026-09-30: оба вызова теперь
+  // возвращают ИСХОД, и фейк обязан его отдавать — иначе проверка
+  // «найдено и сделано — разные числа» стала бы круговой.
+  // `failPathnames` / `failJobs` дают способ проверить неудачу.
+  const audioBlob = {
+    deleteByPathname: async (p: string) => {
+      calls.audioBlobs.push(p);
+      return !(data.failPathnames ?? []).includes(p);
+    },
+  };
+  const stt = {
+    discardOrphan: async (hint: string, id: string) => {
+      calls.discarded.push(`${hint}:${id}`);
+      return !(data.failJobs ?? []).includes(`${hint}:${id}`);
+    },
+  };
   return { svc: new ExternalArtifactsCleanupService(prisma, secrets as any, audioBlob as any, stt as any), calls };
 }
 
@@ -43,7 +57,11 @@ describe('ExternalArtifactsCleanupService', () => {
     const report = await svc.discardForUser('u1');
     expect(calls.audioBlobs).toEqual(['conversation-audio/c1/a.m4a', 'conversation-audio/c2/b.m4a']);
     expect(calls.discarded).toEqual(['soniox:tr-1', 'assemblyai:legacy-assembly-id', 'soniox:vr-1', 'assemblyai:mc-1']);
-    expect(report).toEqual({ evidenceBlobs: 2, evidenceDeleted: 1, evidenceFailed: 1, conversationAudioBlobs: 2, sttJobsDiscarded: 4 });
+    expect(report).toEqual({
+      evidenceBlobs: 2, evidenceDeleted: 1, evidenceFailed: 1,
+      conversationAudioBlobs: 2, conversationAudioDeleted: 2, conversationAudioFailed: 0,
+      sttJobsInFlight: 4, sttJobsDiscarded: 4, sttJobsFailed: 0,
+    });
     expect(calls.scopes[0]).toEqual({ project: { ownerId: 'u1' } });
   });
 
@@ -63,8 +81,36 @@ describe('ExternalArtifactsCleanupService', () => {
       return original({ where });
     };
     const report = await svc.discardForUser('u1');
+    expect(report.sttJobsInFlight).toBe(1);
     expect(report.sttJobsDiscarded).toBe(1);
+    expect(report.sttJobsFailed).toBe(0);
     expect(calls.discarded).toEqual(['soniox:vr-1']);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ, Пункт [discarded-nothing-said-three] 2026-09-30: найдено и сделано — разные числа', async () => {
+    // Прежде отчёт имел по ОДНОМУ полю на каждый вид, и оба были
+    // числами найденного. Экран печатал их как «удалено» и
+    // «отозвано», а запись человека оставалась у субподрядчика весь
+    // retention — и то же завышенное число уходило в аудит
+    // `user.deleted`.
+    const { svc } = make({
+      conversations: [
+        { id: 'c1', audioBlobPathname: 'a/1.m4a', status: 'TRANSCRIBING', externalTranscriptionJobId: 'soniox:tr-1' },
+        { id: 'c2', audioBlobPathname: 'a/2.m4a', status: 'UPLOADED', externalTranscriptionJobId: null },
+      ],
+      material: [{ externalTranscriptionJobId: 'elevenlabs:mc-1' }],
+      failPathnames: ['a/2.m4a'],
+      // ElevenLabs — универсальный последний фоллбек цепочки — отзыва
+      // не умеет вовсе: `discard` у него не реализован.
+      failJobs: ['elevenlabs:mc-1'],
+    });
+    const report = await svc.discardForUser('u1');
+    expect(report.conversationAudioBlobs).toBe(2);
+    expect(report.conversationAudioDeleted).toBe(1);
+    expect(report.conversationAudioFailed).toBe(1);
+    expect(report.sttJobsInFlight).toBe(2);
+    expect(report.sttJobsDiscarded).toBe(1);
+    expect(report.sttJobsFailed).toBe(1);
   });
 
   it('нет токена Blob — доказательства помечаются failed, остальное всё равно убирается', async () => {

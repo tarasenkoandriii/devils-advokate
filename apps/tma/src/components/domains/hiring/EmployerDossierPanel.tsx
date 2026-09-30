@@ -137,6 +137,12 @@ export function EmployerDossierPanel({ projectId, role, onChanged }: { projectId
                 досье, где отброшенное за неточную цитату стало четвёртым
                 названным видом отбрасывания рядом с тремя прежними. */}
             <SkippedNote skipped={out.data?.skippedWithoutQuote} />
+            {/* [the-rule-did-not-see-its-own-number] 2026-09-30: документ
+                уходил в модель обрезанным до 16 000 знаков, а под пустым
+                списком здесь стоит «Расхождений не найдено» —
+                утверждение обо ВСЁМ документе по его первой части.
+                Теперь усечение названо вслух. */}
+            {out.data?.intakeNote ? <p className="dtp-status dtp-status--warn" role="alert">{out.data.intakeNote}</p> : null}
             {Array.isArray(out.data?.discrepancies) ? (
               out.data.discrepancies.length === 0 ? <p className="card-section__empty">{out.data.reason ?? 'Расхождений между источниками и досье не найдено.'}</p> : (
                 <ul>{out.data.discrepancies.map((d: any, i: number) => <li key={i}><strong>{d.topic}</strong>: досье — «{d.factQuote}» ↔ документ — «{d.documentQuote}»{d.note ? <span className="dtp-muted"> · {d.note}</span> : null}</li>)}</ul>

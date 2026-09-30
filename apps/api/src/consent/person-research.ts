@@ -66,7 +66,21 @@ export const PERSON_RESEARCH_NOT_GATED: Array<{ site: string; why: string }> = [
   },
   {
     site: 'probing-detector/probing-detector.service.ts#analyze',
-    why: 'предмет — приём в конкретной реплике, а не свойство человека; вывод о личности запрещён отдельным фильтром',
+    // ПОПРАВКА, Пункт [the-second-line-stood-elsewhere] 2026-09-30.
+    // Здесь было сказано «вывод о личности запрещён отдельным
+    // фильтром» — и этого фильтра НЕ СУЩЕСТВОВАЛО: ни
+    // `hasPersonVerdict`, ни `NO_PERSON_VERDICT_RULE` в
+    // `probing-detector` не было, а `isValidProbingPayload` проверял
+    // только непустоту строки. То есть ОСВОБОЖДЕНИЕ ОТ СОГЛАСИЯ
+    // держалось на ссылке на несуществующую проверку.
+    //
+    // При этом в базу под именем названного человека ложится
+    // `ProbingTopic` со свободным текстом темы, числовой
+    // `confidence` (потолок 0.9) и `repeatCount` — то есть уверенность
+    // в том, что человек «целенаправленно прощупывает». Фильтр
+    // поставлен, и обе линии теперь на месте; освобождение от
+    // PERSON_RESEARCH опирается на них, а не на слова о них.
+    why: 'предмет — приём в конкретной реплике, а не свойство человека; вывод о личности запрещён и в промпте (NO_PERSON_VERDICT_RULE), и фильтром выхода (hasPersonVerdict в isValidProbingPayload)',
   },
   {
     site: 'source-conflict/source-conflict.service.ts#detect',

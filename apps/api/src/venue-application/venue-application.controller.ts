@@ -29,13 +29,18 @@ class ConfirmBookingDto {
 export class VenueApplicationController {
   constructor(private readonly venueApplication: VenueApplicationService) {}
 
+  // Пункт [the-priciest-door-had-no-lock] 2026-09-30: `userId` здесь
+  // появился ради потолка обращений к платным картам — считать расход
+  // не по кому было.
   @Get('venue-applications/search')
   async search(
+    @CurrentUser() userId: string,
     @Query('query') query: string,
     @Query('latitude') latitude?: string,
     @Query('longitude') longitude?: string,
   ) {
     return this.venueApplication.searchCandidates(
+      userId,
       query,
       latitude ? parseFloat(latitude) : undefined,
       longitude ? parseFloat(longitude) : undefined,
@@ -43,8 +48,8 @@ export class VenueApplicationController {
   }
 
   @Get('venue-applications/autofill/:googlePlaceId')
-  async autofill(@Param('googlePlaceId') googlePlaceId: string) {
-    return this.venueApplication.getAutofillData(googlePlaceId);
+  async autofill(@CurrentUser() userId: string, @Param('googlePlaceId') googlePlaceId: string) {
+    return this.venueApplication.getAutofillData(userId, googlePlaceId);
   }
 
   @Post('venue-applications')

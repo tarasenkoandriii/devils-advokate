@@ -23,8 +23,9 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 
 import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { PrismaService } from '../prisma/prisma.service';
+import { mayBePublished } from '../common/fact-scope';
 import { assertProjectOwnership } from '../common/project-ownership';
-import { ArgumentStance, LibraryModerationStatus } from '@prisma/client';
+import { ArgumentStance, LibraryModerationStatus, FactScope } from '@prisma/client';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { isUniqueViolation } from '../common/unique-violation';
 
@@ -74,11 +75,28 @@ export class LibraryService {
     const existing = await this.prisma.libraryEntry.findFirst({ where: { sourceProjectId: projectId } });
     if (existing) throw alreadySubmitted(existing.status);
 
+    // Пункт [never-published-was-published] 2026-09-30: отбор шёл по
+    // адресности и по знаку (`targetPersonId: null`, PRO/CON) и НЕ шёл
+    // по происхождению. Аргумент, построенный из факта со
+    // `scope = PRIVATE_TO_USER` («не публикуется ни при каких
+    // обстоятельствах»), копировался в публичную библиотеку по тексту.
+    // Поле `derivedFromPersonFactId` для этого и существует.
     const args = await this.prisma.argument.findMany({
       where: { projectId, targetPersonId: null, stance: { in: [ArgumentStance.PRO, ArgumentStance.CON] } },
+      include: { derivedFromPersonFact: { select: { scope: true } } },
     });
     if (args.length === 0) {
       throw new BadRequestException('В проекте пока нет общих аргументов за/против — нечего отправлять в библиотеку');
+    }
+    const publishable = args.filter((a: { derivedFromPersonFact?: { scope: FactScope } | null }) => {
+      const scope = a.derivedFromPersonFact?.scope;
+      return scope === undefined || mayBePublished(scope);
+    });
+    const heldBack = args.length - publishable.length;
+    if (publishable.length === 0) {
+      throw new BadRequestException(
+        'Все общие аргументы этого проекта построены из фактов, помеченных «не публикуется ни при каких обстоятельствах» — отправлять в библиотеку нечего.',
+      );
     }
 
     // Пункт [check-then-create-2] 2026-09-27: `sourceProjectId` уникален,
@@ -102,11 +120,20 @@ export class LibraryService {
       throw alreadySubmitted(winner.status);
     }
     await this.prisma.$transaction(
-      args.map((a: { text: string; stance: string }) =>
+      publishable.map((a: { text: string; stance: string }) =>
         this.prisma.libraryArgument.create({ data: { libraryEntryId: entry.id, text: a.text, stance: a.stance as ArgumentStance } }),
       ),
     );
-    return entry;
+    // Пробел назван вслух: человек отправил проект и должен знать, что
+    // ушло не всё и почему. Молчание здесь читалось бы как «ушло всё».
+    return {
+      ...entry,
+      heldBackPrivateFacts: heldBack,
+      heldBackNote:
+        heldBack > 0
+          ? `Не отправлено аргументов: ${heldBack}. Они построены из фактов, помеченных «не публикуется ни при каких обстоятельствах». Снять пометку можно у самого факта.`
+          : null,
+    };
   }
 
   /** Пункт [own-submission] 2026-09-04 — что человек может узнать о том,

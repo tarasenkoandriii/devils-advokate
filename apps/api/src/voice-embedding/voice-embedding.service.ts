@@ -45,6 +45,16 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+/** Сравнение с порогом — ОДНО место, и `verifyDetailed` зовёт именно
+ * его.
+ *
+ * Пункт [written-for-the-person-never-delivered] 2026-09-30: функция
+ * была реализована, покрыта тестом и НЕ ВЫЗЫВАЛАСЬ — продовый путь
+ * повторял то же сравнение собственным выражением
+ * (`similarity >= threshold`). Две копии одного правила о пороге
+ * голосовой биометрии, из которых проверена была неиспользуемая: тест
+ * зеленел на одной, решение о том, ЧЬИ слова уйдут в разбор
+ * поведения собеседника, принимала другая. */
 export function isMatch(reference: number[], candidate: number[], threshold: number = DEFAULT_THRESHOLD): boolean {
   return cosineSimilarity(reference, candidate) >= threshold;
 }
@@ -117,7 +127,8 @@ export class VoiceEmbeddingService {
       };
     }
     const similarity = cosineSimilarity(reference, candidateEmbedding);
-    return { isMatch: similarity >= threshold, similarity, threshold, calibrated: false };
+    // Через общий помощник, а не своим выражением: см. его шапку.
+    return { isMatch: isMatch(reference, candidateEmbedding, threshold), similarity, threshold, calibrated: false };
   }
 
   async hasEnrollment(userId: string): Promise<boolean> {

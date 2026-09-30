@@ -227,14 +227,31 @@ export class SttService {
    * известен только по форме вебхука (providerHint); без него — ничего.
    * Best-effort: ошибок наружу нет, вебхук всё равно подтверждается.
    */
-  async discardOrphan(providerHint: SttProviderName | null, externalJobId: string): Promise<void> {
-    if (!providerHint) return;
+  /** Пункт [discarded-nothing-said-three] 2026-09-30: раньше метод
+   * возвращал `void`, и вызывающий увеличивал счётчик «отозвано»
+   * БЕЗУСЛОВНО. Отзыв не состоится в трёх случаях: провайдер неизвестен
+   * по форме вебхука, провайдер отзыва НЕ УМЕЕТ (`discard` —
+   * опциональный метод интерфейса, и `ElevenLabsSttProvider` его не
+   * реализует, а ElevenLabs — универсальный последний фоллбек цепочки
+   * для любого языка), или запрос к провайдеру упал. Во всех трёх
+   * человек читал на экране «Задач распознавания отозвано у
+   * провайдера: 3» при трёх неотозванных — и его аудиозапись
+   * оставалась у субподрядчика весь retention. То же число уходило в
+   * запись аудита `user.deleted`.
+   *
+   * Ровно тот класс, который этот проект уже назвал и закрыл для
+   * доказательств ДТП Пунктом [delete-says-done] — в соседних восьми
+   * строках того же файла уборки. Возвращаем исход. */
+  async discardOrphan(providerHint: SttProviderName | null, externalJobId: string): Promise<boolean> {
+    if (!providerHint) return false;
     const provider = this.provider(providerHint);
-    if (!provider.discard) return;
+    if (!provider.discard) return false;
     try {
       await provider.discard(await this.apiKey(providerHint), externalJobId);
+      return true;
     } catch (err) {
       this.logger.warn(`Уборка бесхозной задачи ${providerHint}:${externalJobId} не удалась: ${err instanceof Error ? err.message : err}`);
+      return false;
     }
   }
 

@@ -27,16 +27,27 @@
 // Сказать «удалено» и оставить её там было бы обещанием без исполнения.
 
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { PublicDiscussionService } from '../public-discussion/public-discussion.service';
 
-const API_SRC = join(__dirname, '..');
-
-function code(rel: string): string {
-  return readFileSync(join(API_SRC, rel), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+/** Проекция по `select` / `include`, как это делает настоящая Prisma.
+ *
+ * Пункт [leak-was-checked-by-regexp] 2026-09-30: прежде фейк отдавал
+ * ФИКСИРОВАННУЮ форму строки, и поведенческий тест на утечку имени был
+ * бы круговым — что бы сервис ни попросил, фейк вернул бы своё. Поэтому
+ * утечка проверялась регуляркой по исходнику, а регулярка искала ровно
+ * одну форму записи (`include: { participant: true }`), которую рядом с
+ * `select` даже не скомпилировать. Теперь фейк отдаёт то, что спросили,
+ * и утечку видно на результате. */
+function project(row: any, args: any): any {
+  const shape = { ...(args?.select ?? {}), ...(args?.include ?? {}) };
+  const keys = Object.keys(shape).filter((k) => shape[k]);
+  if (keys.length === 0) return { ...row };
+  const out: any = {};
+  for (const k of keys) {
+    if (row[k] === undefined) continue;
+    out[k] = shape[k] === true ? row[k] : project(row[k], shape[k]);
+  }
+  return out;
 }
 
 function fakePrisma() {
@@ -62,14 +73,22 @@ function fakePrisma() {
     protocol: { findFirst: async () => null },
     closingMessage: { findFirst: async () => null },
     publicComment: {
-      findMany: async () =>
-        comments.map((c) => ({
-          id: c.id,
-          text: c.text,
-          createdAt: new Date(),
-          participantId: c.participantId,
-          participant: { displayName: c.participantId === 'me' ? 'Пётр' : 'Другой' },
-        })),
+      findMany: async (args: any) =>
+        comments.map((c) =>
+          project(
+            {
+              id: c.id,
+              text: c.text,
+              createdAt: new Date(),
+              participantId: c.participantId,
+              participant: {
+                id: c.participantId,
+                displayName: c.participantId === 'me' ? 'Пётр' : 'Другой',
+              },
+            },
+            args,
+          ),
+        ),
       findFirst: async ({ where }: any) =>
         comments.find(
           (c) => c.id === where.id && c.projectId === where.projectId && c.participantId === where.participantId,
@@ -77,11 +96,20 @@ function fakePrisma() {
       delete: async ({ where }: any) => comments.splice(comments.findIndex((c) => c.id === where.id), 1)[0],
     },
     publicArgumentSubmission: {
-      findMany: async () =>
-        submissions.map((sub) => ({
-          id: sub.id, text: sub.text, stance: 'PRO', status: sub.status,
-          upvotes: 0, downvotes: 0, participantId: sub.participantId, createdAt: new Date(),
-        })),
+      findMany: async (args: any) =>
+        submissions.map((sub) =>
+          project(
+            {
+              id: sub.id, text: sub.text, stance: 'PRO', status: sub.status,
+              upvotes: 0, downvotes: 0, participantId: sub.participantId, createdAt: new Date(),
+              participant: {
+                id: sub.participantId,
+                displayName: sub.participantId === 'me' ? 'Пётр' : 'Другой',
+              },
+            },
+            args,
+          ),
+        ),
       findFirst: async ({ where }: any) =>
         submissions.find(
           (sub) => sub.id === where.id && sub.projectId === where.projectId && sub.participantId === where.participantId,
@@ -136,20 +164,42 @@ describe('Публичный участник: своё имя и свои сл�
     expect(s.prisma._submissions()).toHaveLength(1);
   });
 
-  it('КЛЮЧЕВОЙ ТЕСТ: имя не уезжает туда, где его не показывают', () => {
+  it('КЛЮЧЕВОЙ ТЕСТ: имя не уезжает туда, где его не показывают', async () => {
     // Заявки отдавались с participant: true, хотя экран имя у них не
     // рисует. Невидимая на странице выдача.
-    // Смотреть надо в ПУБЛИЧНОЕ чтение, а не в первое совпадение по
-    // файлу: соседний метод `listSubmissions` — для АВТОРА проекта, за
-    // гвардом, и там имя на месте по праву. Первая версия проверки взяла
-    // первое вхождение и объявила нарушением честный код — восьмая за
-    // сессию ошибка разбора, и снова «проверка смотрит не туда».
-    const src = code('public-discussion/public-discussion.service.ts');
-    const publicView = src.slice(src.indexOf('async publicView('));
-    const submissionsRead = publicView.slice(publicView.indexOf('publicArgumentSubmission.findMany'));
-    const block = submissionsRead.slice(0, submissionsRead.indexOf('}),'));
-    expect({ block, includesParticipant: /include: \{ participant: true \}/.test(block) })
-      .toEqual({ block, includesParticipant: false });
+    //
+    // ПОПРАВКА, Пункт [leak-was-checked-by-regexp] 2026-09-30. Прежде
+    // здесь стояла регулярка по исходнику, и у неё было два изъяна
+    // разом. Первый: она искала ОДНУ форму записи — `include: {
+    // participant: true }` — рядом с `select`, а Prisma запрещает
+    // `select` и `include` вместе, то есть ловимую форму нельзя было
+    // даже скомпилировать. Второй: реалистичная утечка
+    // (`participant: { select: { displayName: true } }` ВНУТРИ
+    // `select`, ровно как у соседнего комментария) проходила мимо.
+    // Проверка была написана на форму записи, а не на то, дойдёт ли
+    // имя до ответа. Теперь спрашивается ответ.
+    //
+    // Смотреть надо в ПУБЛИЧНОЕ чтение, а не в соседний метод
+    // `listSubmissions` — тот для АВТОРА проекта, за гвардом, и там имя
+    // на месте по праву.
+    const s = setup();
+    s.prisma._seedSubmission({ participantId: 'me', text: 'аргумент', status: 'PENDING' });
+
+    const view: any = await s.service.publicView('tok');
+    const submission = view.submissions[0];
+
+    // Закрытый список полей, а не «нет одного известного поля»: любое
+    // новое поле в публичной выдаче заявки обязано быть названо здесь.
+    expect(Object.keys(submission).sort()).toEqual(
+      ['createdAt', 'downvotes', 'id', 'mine', 'stance', 'status', 'text', 'upvotes'].sort(),
+    );
+    expect(submission.participant).toBe(undefined);
+    // И обратная половина того же вопроса: у комментария имя ДОЛЖНО
+    // дойти — иначе этот тест был бы зелен и на сервисе, который не
+    // отдаёт ничего.
+    s.prisma._seedComment({ participantId: 'me', text: 'мой' });
+    const withComment: any = await s.service.publicView('tok');
+    expect(withComment.comments[0].authorName).toBe('Пётр');
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: у комментариев имя ОСТАЁТСЯ — его там показывают', async () => {

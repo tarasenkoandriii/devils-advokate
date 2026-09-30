@@ -32,6 +32,7 @@
 import { projectFactsScopeWhere } from '../common/fact-scope';
 import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { hasPersonVerdict, NO_PERSON_VERDICT_RULE } from '../common/no-person-verdict';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { MotiveConfidenceLevel } from '@prisma/client';
@@ -68,7 +69,24 @@ interface RawMotiveHypothesis {
   suggestsFigurantStatus?: boolean;
 }
 
+/** Пункт [the-second-line-stood-elsewhere] 2026-09-30 — вторая линия
+ * защиты стояла не у тех разборов, предмет которых — человек.
+ *
+ * `hasPersonVerdict` применялся в ТРЁХ местах: детектор манипуляций,
+ * живой детектор манипуляций, паралингвистика. Все три разбирают ПРИЁМ
+ * В РЕПЛИКЕ. А у разборов, чей предмет — САМ НАЗВАННЫЙ ЧЕЛОВЕК
+ * (портрет общения, прецеденты его поведения, гипотезы о его мотивах),
+ * стоял ТОЛЬКО промпт. Собственный реестр продукта
+ * (`consent/person-research.ts`, `PERSON_RESEARCH_GATED`) называет эти
+ * три сайта поимённо — то есть проект знал, где предмет опаснее всего,
+ * и вторую линию там не поставил.
+ *
+ * Шапка `no-person-verdict.ts` сама говорит, зачем вторая линия: «он
+ * ГРУБЫЙ… Первая линия — промпт; это вторая, на случай, когда первая
+ * не сработала». И её же шапка говорит, что сравнивались ДВА разбора —
+ * на этом сверка и остановилась. */
 export function isValidMotivePayload(text: string): boolean {
+  if (hasPersonVerdict(text)) return false;
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return false;
@@ -86,7 +104,9 @@ export function isValidMotivePayload(text: string): boolean {
 }
 
 const DEFAULT_SYSTEM_PROMPT =
-  'Тебе даны известные факты, наблюдения и цель пользователя. Построй СПИСОК АЛЬТЕРНАТИВНЫХ гипотез о вероятных мотивах фигуранта в этой ситуации — НЕ единственный "правильный" мотив, а несколько правдоподобных версий. КРИТИЧЕСКИ ВАЖНО: формулируй каждую гипотезу как "возможное объяснение", НИКОГДА не как установленный факт о человеке — не пиши "его мотив — X", пиши "одно из возможных объяснений — X". Для каждой гипотезы укажи: explanation — само объяснение; supportingFactsSummary — на основании каких конкретно известных фактов строится это предположение; confidence — LOW/MEDIUM/HIGH, честная грубая оценка, не ложная точность; alignmentWithUserGoal — если есть данные о цели пользователя, в чём эта гипотеза о мотиве фигуранта совпадает или конфликтует с целью пользователя, по пунктам, не общей фразой; compromiseSuggestion — конкретное предложение, как сгладить именно этот вероятный конфликт интересов, если он есть; suggestsFigurantStatus — true, ТОЛЬКО если эта гипотеза указывает на РЕАЛЬНЫЙ, содержательный конфликт интересов между целью пользователя и вероятным мотивом фигуранта (не просто расхождение во мнениях) — иначе false, не ставь true "на всякий случай". Если фактов недостаточно для содержательной гипотезы — не выдумывай, верни меньше гипотез или пустой список. Ответь СТРОГО валидным JSON-массивом объектов вида {"explanation": string, "supportingFactsSummary": string, "confidence": "LOW"|"MEDIUM"|"HIGH", "alignmentWithUserGoal": string, "compromiseSuggestion": string, "suggestsFigurantStatus": boolean}. Без пояснений вне JSON.';
+  'Тебе даны известные факты, наблюдения и цель пользователя. Построй СПИСОК АЛЬТЕРНАТИВНЫХ гипотез о вероятных мотивах фигуранта в этой ситуации — НЕ единственный "правильный" мотив, а несколько правдоподобных версий. КРИТИЧЕСКИ ВАЖНО: формулируй каждую гипотезу как "возможное объяснение", НИКОГДА не как установленный факт о человеке — не пиши "его мотив — X", пиши "одно из возможных объяснений — X". Для каждой гипотезы укажи: explanation — само объяснение; supportingFactsSummary — на основании каких конкретно известных фактов строится это предположение; confidence — LOW/MEDIUM/HIGH, честная грубая оценка, не ложная точность; alignmentWithUserGoal — если есть данные о цели пользователя, в чём эта гипотеза о мотиве фигуранта совпадает или конфликтует с целью пользователя, по пунктам, не общей фразой; compromiseSuggestion — конкретное предложение, как сгладить именно этот вероятный конфликт интересов, если он есть; suggestsFigurantStatus — true, ТОЛЬКО если эта гипотеза указывает на РЕАЛЬНЫЙ, содержательный конфликт интересов между целью пользователя и вероятным мотивом фигуранта (не просто расхождение во мнениях) — иначе false, не ставь true "на всякий случай". Если фактов недостаточно для содержательной гипотезы — не выдумывай, верни меньше гипотез или пустой список. Ответь СТРОГО валидным JSON-массивом объектов вида {"explanation": string, "supportingFactsSummary": string, "confidence": "LOW"|"MEDIUM"|"HIGH", "alignmentWithUserGoal": string, "compromiseSuggestion": string, "suggestsFigurantStatus": boolean}. Без пояснений вне JSON.' +
+  ' ' +
+  NO_PERSON_VERDICT_RULE;
 
 @Injectable()
 export class MotiveAnalysisService {

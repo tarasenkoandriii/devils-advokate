@@ -112,10 +112,13 @@ export function warnMigrationLagOnce(
   );
 }
 
-/** Только для тестов: сбросить память о выданных предупреждениях. */
-export function resetEnumMigrationLagWarnings(): void {
-  warned.clear();
-}
+// Пункт [written-for-the-person-never-delivered] 2026-09-30: здесь
+// была `resetEnumMigrationLagWarnings` — «только для тестов, сбросить
+// память о выданных предупреждениях». Её вытеснил
+// `resetMigrationLagForTests` выше, который чистит ОБЕ памяти, и
+// причина названа там же: порознь они разойдутся. Оставлять рядом
+// половинчатый сброс значило бы держать наготове ровно ту ошибку,
+// против которой написан целый.
 
 // ── Пункт [lag-told-only-the-log] 2026-09-24 ──
 //

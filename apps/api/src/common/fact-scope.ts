@@ -65,6 +65,46 @@ export const ANALYSIS_SCOPES = (Object.keys(FACT_SCOPE_IN_ANALYSIS) as FactScope
   (s) => FACT_SCOPE_IN_ANALYSIS[s],
 );
 
+/** Пункт [never-published-was-published] 2026-09-30.
+ *
+ * Абзац выше оставлял ответственность за публикацию «тем местам,
+ * которые публикуют». Публикующих мест было два, и НИ ОДНО область
+ * видимости не читало:
+ *
+ *   photo-verification.service.ts — `assertOwnedFact()` проверял
+ *     владение и НЕ проверял `scope`. Фото, привязанное к факту со
+ *     `scope = PRIVATE_TO_USER`, уходило в публичный Blob и в
+ *     реверс-поиск: на время поиска оно реально публично в интернете
+ *     (продукт сам это признаёт и просит под это отдельное согласие).
+ *     Модуль вообще не входил в число файлов, импортирующих этот.
+ *
+ *   library.service.ts — фильтрует по `targetPersonId` и `stance`, но
+ *     не по происхождению: `Argument` с `derivedFromPersonFactId`,
+ *     указывающим на факт `PRIVATE_TO_USER`, копировался в публичную
+ *     библиотеку по тексту.
+ *
+ * «Не публикуется ни при каких обстоятельствах» — это обещание
+ * продукта, и держать его обязан код, а не абзац о коде.
+ */
+export const NEVER_PUBLISHED: Record<FactScope, boolean> = {
+  [FactScope.PROJECT]: false,
+  [FactScope.PERSON_GLOBAL]: false,
+  [FactScope.PRIVATE_TO_USER]: true,
+  // «Из факта можно построить Argument, сам факт не публикуется» —
+  // публикуется именно ВЫВОД, и это разрешено полем.
+  [FactScope.PUBLIC_DERIVED_ONLY]: false,
+};
+
+/** Отказ человеку, когда он просит опубликовать то, что помечено как
+ * непубликуемое. Текст один на все публикующие места. */
+export const NEVER_PUBLISHED_REFUSAL =
+  'Этот факт помечен как «не публикуется ни при каких обстоятельствах» — отправить его наружу нельзя. Снять пометку можно у самого факта, если вы действительно этого хотите.';
+
+/** Можно ли выпускать факт с такой областью видимости наружу. */
+export function mayBePublished(scope: FactScope): boolean {
+  return !NEVER_PUBLISHED[scope];
+}
+
 /** Разбор ВНУТРИ ПРОЕКТА: проектные факты этого проекта плюс
  * перенесённые человеком глобальные. Дословно по описанию поля. */
 export function projectFactsScopeWhere(projectId: string) {

@@ -6,6 +6,7 @@
 // user-level страница, тот же паттерн, что /calibration и /privacy.
 
 import { useEffect, useState } from 'react';
+import { NotLoadedNotice } from '../../components/NotLoadedNotice';
 import { useRouter } from 'next/navigation';
 import {
   getOnboarding,
@@ -42,18 +43,44 @@ export default function SettingsPage() {
 
   useBackButton(() => router.push('/'));
 
+  // Пункт [settings-showed-defaults-as-yours] 2026-09-30 — здесь стоял
+  // `.catch(() => {})` без причины, и последствия были такие.
+  //
+  // Экран рисовался на НАЧАЛЬНЫХ значениях состояния и выдавал их за
+  // настройки человека:
+  //
+  //  1. «Геолокация не разрешена — будет запрошена при первом
+  //     использовании» — утверждение о факте. И вместе с ним ИСЧЕЗАЛА
+  //     кнопка «Отозвать разрешение»: она стоит в ветке
+  //     `locationGranted`. Пункт 77/§3.32 обещает «разрешение отзываемо
+  //     в любой момент из настроек» — при сбое одного GET отзывать
+  //     оказывалось нечего, и экран утверждал, что нечего.
+  //  2. Человеку, который вероисповедание указал, экран велел указать
+  //     его «в анкете при первом входе» — то есть сделать то, что
+  //     делается только при первом входе.
+  //  3. Оба переключателя «Всегда показывать…» показывались
+  //     выключенными независимо от реального значения.
+  //
+  // Две загрузки — два признака сбоя: подпись обязана стоять у той
+  // настройки, которая не пришла, а не одна на весь экран. Тот же
+  // образец, что в `PeopleSection` (Пункт [empty-looked-like-an-answer]).
+  const [preferencesFailed, setPreferencesFailed] = useState(false);
+  const [consentsFailed, setConsentsFailed] = useState(false);
+
   useEffect(() => {
-    Promise.all([
-      getOnboarding().then((data) => {
-        setReligionSet(!!data.religion);
-        setAlwaysShowQuote(data.alwaysShowQuote);
-        setAlwaysShowAnecdote(data.alwaysShowAnecdote);
-        setReminderFrequency(data.religiousReminderFrequency);
-      }),
-      listConsents().then((consents) => setLocationGranted(hasConsent(consents, 'LOCATION'))),
-    ])
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    void Promise.all([
+      getOnboarding()
+        .then((data) => {
+          setReligionSet(!!data.religion);
+          setAlwaysShowQuote(data.alwaysShowQuote);
+          setAlwaysShowAnecdote(data.alwaysShowAnecdote);
+          setReminderFrequency(data.religiousReminderFrequency);
+        })
+        .catch(() => setPreferencesFailed(true)),
+      listConsents()
+        .then((consents) => setLocationGranted(hasConsent(consents, 'LOCATION')))
+        .catch(() => setConsentsFailed(true)),
+    ]).finally(() => setLoading(false));
   }, []);
 
   async function handleToggleQuote() {
@@ -132,7 +159,12 @@ export default function SettingsPage() {
       {/* Пункт 77 (§3.32 ТЗ) — не зависит от religionSet, показывается всегда. */}
       <div className="settings-page__section">
         <p className="steelman-case__label">Геолокация</p>
-        {locationGranted ? (
+        {consentsFailed ? (
+          <NotLoadedNotice
+            what="состояние согласия на геолокацию"
+            consequence="Разрешено оно или нет — отсюда сейчас не видно, и отозвать его с этого экрана нельзя, пока связь не восстановится."
+          />
+        ) : locationGranted ? (
           <>
             <p className="conversations-section__hint">
               Разрешено: подсказка города при онбординге, прогноз погоды для встреч, поиск заведений рядом.
@@ -146,7 +178,12 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {!religionSet ? (
+      {preferencesFailed ? (
+        <NotLoadedNotice
+          what="ваши настройки показа цитат и анекдотов"
+          consequence="Переключатели ниже не показаны намеренно: выключенными они выглядели бы как ваш выбор."
+        />
+      ) : !religionSet ? (
         <p className="conversations-section__hint">
           Цитаты и анекдоты по ситуации доступны после того, как вы укажете вероисповедание в анкете при первом
           входе.

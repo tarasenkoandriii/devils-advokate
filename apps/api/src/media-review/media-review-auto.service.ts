@@ -20,7 +20,7 @@ import {
   ConversationSourceType,
   MediaReviewItemStatus,
 } from '@prisma/client';
-import { spendLimit } from '../common/spend-limits';
+import { spendLimit, spendLimitByKey } from '../common/spend-limits';
 import type { FailureKind } from '../ai-router/failure-reason';
 
 export const MEDIA_PUBLIC_REVIEW_TASK_TYPE = 'media-public-review';
@@ -31,7 +31,14 @@ export const MEDIA_PUBLIC_REVIEW_TASK_TYPE = 'media-public-review';
  * в контекст с запасом; 8-часовой суточный free-tier лимит даёт ~24
  * таких ролика в сутки НА ВЕСЬ ПРОДУКТ (не на пользователя, §9.3).
  * Длительность — единственный доступный нам рычаг стоимости. */
-export const MEDIA_REVIEW_MAX_DURATION_SECONDS = 1200;
+/** Пункт [written-for-the-person-never-delivered] 2026-09-30: это была
+ * ВТОРАЯ КОПИЯ умолчания. Прод читает только
+ * `spendLimit('MEDIA_REVIEW_MAX_DURATION_SECONDS')`, то есть
+ * `fallback: 1200` из реестра расходов; константа жила лишь потому,
+ * что с ней сверялась спека. Измени `fallback` в реестре — спека
+ * сверилась бы с устаревшим двойником и осталась ЗЕЛЁНОЙ. Теперь
+ * значение приходит из реестра по ключу, и разойтись им нечем. */
+export const MEDIA_REVIEW_MAX_DURATION_SECONDS = spendLimitByKey('media-review-duration');
 
 /** Пункт [duration-limit-env] 2026-09-01 (из «на потом» Пункта
  * [sandbox-cycle-2]) — потолок перекрывается переменной окружения

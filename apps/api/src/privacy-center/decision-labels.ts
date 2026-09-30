@@ -74,6 +74,12 @@ export const DECISION_LABELS: Record<string, DecisionLabel> = {
   'prompt_version.rolled_back': { what: 'Внутренняя версия промпта откачена', by: 'оператор продукта' },
   'transcription.requested': { what: 'Запрошена расшифровка записи', by: 'вы сами' },
   'tts.synthesized': { what: 'Текст озвучен синтезом речи', by: 'вы сами' },
+  // Пункт [the-priciest-door-had-no-lock] / [the-meter-counted-rows]
+  // 2026-09-30: обе записи существуют ТОЛЬКО как счётчики расхода —
+  // никакого содержимого в них нет. Подпись всё равно обязательна:
+  // человек видит запись в своём журнале и должен понимать, что это.
+  'places.request': { what: 'Обращение к картам (поиск или карточка заведения)', by: 'вы сами' },
+  'photo_verification.requested': { what: 'Запрошена проверка фото реверс-поиском', by: 'вы сами' },
 };
 
 export interface DescribedDecision {

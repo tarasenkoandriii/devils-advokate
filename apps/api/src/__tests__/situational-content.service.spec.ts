@@ -1,5 +1,17 @@
 import { SituationalContentService } from '../situational-content/situational-content.service';
-import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+
+/** Фейк согласия. Пункт [the-consent-that-stopped-nothing] 2026-09-30:
+ * религиозный контент гейтится СОГЛАСИЕМ, а не только полем
+ * `religion`, — значит и в тестах согласие обязано быть.
+ * `granted` можно снять, чтобы проверить отзыв. */
+class FakeConsentService {
+  granted = true;
+  async hasActiveConsent() { return this.granted; }
+  async requireConsent() {
+    if (!this.granted) throw new ForbiddenException({ code: 'CONSENT_REQUIRED' });
+  }
+}
 
 function createFakePrisma() {
   const projects = new Map<string, any>();
@@ -101,28 +113,28 @@ async function run() {
   test('generateQuote() бросает NotFoundException для чужого проекта', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: PROJECT_ID, ownerId: 'other-user' });
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generateQuote(USER_ID, PROJECT_ID), NotFoundException, 'generateQuote() на чужой проект');
   });
 
   test('КЛЮЧЕВОЙ ТЕСТ: generateQuote() бросает BadRequestException, если вероисповедание не указано', async () => {
     const prisma = createFakePrisma();
     seedProjectWithReligion(prisma, null);
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generateQuote(USER_ID, PROJECT_ID), BadRequestException, 'generateQuote() без указанного вероисповедания');
   });
 
   test('generateAnecdote() тоже бросает BadRequestException без указанного вероисповедания', async () => {
     const prisma = createFakePrisma();
     seedProjectWithReligion(prisma, null);
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generateAnecdote(USER_ID, PROJECT_ID), BadRequestException, 'generateAnecdote() без указанного вероисповедания');
   });
 
   test('generateQuote() создаёт запись с раздельными quoteText и sourceReference', async () => {
     const prisma = createFakePrisma();
     seedProjectWithReligion(prisma);
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
 
     const quote = await svc.generateQuote(USER_ID, PROJECT_ID);
     assertEqual(quote.quoteText, 'Не суди, да не судим будешь', 'текст цитаты сохранён');
@@ -132,7 +144,7 @@ async function run() {
   test('generateAnecdote() создаёт запись без какого-либо поля источника', async () => {
     const prisma = createFakePrisma();
     seedProjectWithReligion(prisma);
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
 
     const anecdote = await svc.generateAnecdote(USER_ID, PROJECT_ID);
     assertEqual(anecdote.text, 'Забавная история про переезд', 'текст анекдота сохранён');
@@ -143,14 +155,14 @@ async function run() {
     const prisma = createFakePrisma();
     seedProjectWithReligion(prisma);
     const failingRouter = { execute: async () => { throw new Error('provider down'); } };
-    const svc = new SituationalContentService(prisma as any, failingRouter as any);
+    const svc = new SituationalContentService(prisma as any, failingRouter as any, new FakeConsentService() as any);
     await assertThrowsAsync(() => svc.generateQuote(USER_ID, PROJECT_ID), BadGatewayException, 'generateQuote() при недоступности провайдера');
   });
 
   test('listQuotes()/listAnecdotes() возвращают записи проекта', async () => {
     const prisma = createFakePrisma();
     seedProjectWithReligion(prisma);
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
     await svc.generateQuote(USER_ID, PROJECT_ID);
     await svc.generateAnecdote(USER_ID, PROJECT_ID);
 
@@ -161,7 +173,7 @@ async function run() {
   test('updatePreferences() сохраняет alwaysShowQuote/alwaysShowAnecdote раздельно', async () => {
     const prisma = createFakePrisma();
     prisma._seedUser({ id: USER_ID });
-    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any);
+    const svc = new SituationalContentService(prisma as any, new FakeAIRouterService() as any, new FakeConsentService() as any);
 
     const updated = await svc.updatePreferences(USER_ID, { alwaysShowQuote: true });
     assertEqual(updated.alwaysShowQuote, true, 'alwaysShowQuote включён');

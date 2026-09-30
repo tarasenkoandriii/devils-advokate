@@ -126,7 +126,15 @@ import {
   ProtectedNoteType,
 } from './types';
 
-export const CURRENT_EXTERNAL_AI_CONSENT_VERSION = 'v1';
+/** Пункт [written-for-the-person-never-delivered] 2026-09-30: здесь
+ * лежала ВТОРАЯ копия версии текста согласия. Серверный реестр
+ * (`CURRENT_CONSENT_VERSIONS`) был написан ради человека и не
+ * отдавался ни одним маршрутом — то есть правка на сервере разошлась
+ * бы с тем, что клиент записывает в согласие, молча. Копии больше нет,
+ * версия приходит с сервера. */
+export function getConsentVersions(): Promise<{ versions: Record<string, string> }> {
+  return apiGet<{ versions: Record<string, string> }>('/consent/versions');
+}
 
 export function bootstrap(): Promise<BootstrapResponse> {
   return apiGet<BootstrapResponse>('/bootstrap');
@@ -333,8 +341,24 @@ export function getPrivacyOverview(): Promise<PrivacyOverview> {
   return apiGet<PrivacyOverview>('/privacy/overview');
 }
 
-export function deletePersonData(personId: string): Promise<{ deleted: boolean }> {
-  return apiDelete<{ deleted: boolean }>(`/privacy/person/${personId}`);
+/** Пункт [the-button-was-named-as-the-remedy] 2026-09-30: сервер
+ * отдавал `{ deleted: true }` — и человек не узнавал, что удаление
+ * записи о человеке забирает не всё. Кнопку при этом реестр
+ * последствий отзыва согласия PERSON_RESEARCH называет СРЕДСТВОМ. */
+export interface PersonDeletionResult {
+  deleted: boolean;
+  removedHere: string[];
+  notRemovedHere: string[];
+  notRemovedHereNote: string;
+}
+
+export function deletePersonData(personId: string): Promise<PersonDeletionResult> {
+  return apiDelete<PersonDeletionResult>(`/privacy/person/${personId}`);
+}
+
+/** Тот же список ДО решения — источник один, копий текста на экране нет. */
+export function getPersonDeletionPreview(): Promise<Omit<PersonDeletionResult, 'deleted'>> {
+  return apiGet<Omit<PersonDeletionResult, 'deleted'>>('/privacy/person/deletion-preview');
 }
 
 export interface AccountDeletionResult {
@@ -348,8 +372,20 @@ export interface AccountDeletionResult {
     evidenceBlobs: number;
     deleted: number;
     failed: number;
+    /** Пункт [discarded-nothing-said-three] 2026-09-30: было по одному
+     * числу на каждый из двух видов, и экран печатал их как
+     * «удалено» / «отозвано». Оба — числа НАЙДЕННОГО: удаление
+     * аудиофайла best-effort, а отзыв задачи распознавания не
+     * состоится вовсе, если провайдер отзыва не умеет (ElevenLabs,
+     * универсальный фоллбек, не умеет). Человек читал «отозвано: 3»
+     * при трёх неотозванных, и его запись оставалась у субподрядчика.
+     * Теперь исход отделён от находки. */
     conversationAudioBlobs: number;
+    conversationAudioDeleted: number;
+    conversationAudioFailed: number;
+    sttJobsInFlight: number;
     sttJobsDiscarded: number;
+    sttJobsFailed: number;
   };
   notRemovedHere: string[];
   /** Что удаление забрало у других — тем же списком, что человек видел
@@ -1190,12 +1226,21 @@ export function moderatePublicSubmission(
 // Пункт 57 (backend) — Library (§3.5 ТЗ), owner-side (за
 // TelegramAuthGuard). Публичная сторона — см. lib/public-api.ts.
 
+/** Пункт [never-published-was-published] 2026-09-30: отправка теперь
+ * может НЕ ОТПРАВИТЬ часть аргументов — те, что построены из фактов,
+ * помеченных «не публикуется ни при каких обстоятельствах». Пробел
+ * обязан быть назван: молчание читалось бы как «ушло всё». */
+export interface LibrarySubmitResult extends LibraryEntry {
+  heldBackPrivateFacts: number;
+  heldBackNote: string | null;
+}
+
 export function submitProjectToLibrary(
   projectId: string,
   title: string,
   category: string,
-): Promise<LibraryEntry> {
-  return apiPost<LibraryEntry>(`/projects/${projectId}/submit-to-library`, { title, category });
+): Promise<LibrarySubmitResult> {
+  return apiPost<LibrarySubmitResult>(`/projects/${projectId}/submit-to-library`, { title, category });
 }
 
 /** Пункт [own-submission] 2026-09-04 — судьба отправленного в

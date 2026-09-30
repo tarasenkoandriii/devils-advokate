@@ -15,8 +15,9 @@
 // отзывов выходит из области видимости сразу после вызова, не
 // попадает ни в один аргумент create().
 
-import { BadGatewayException, BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, HttpException, HttpStatus, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { placesRequestsLeft, spendPlacesRequest } from '../common/places-spend';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -64,6 +65,12 @@ export class VenueRecommendationService {
 
     const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
 
+    // Пункт [the-priciest-door-had-no-lock] 2026-09-30: эта операция —
+    // самая дорогая из шести дверей к платным картам: Nearby Search
+    // плюс Place Details ПО КАЖДОМУ кандидату, до четырёх обращений за
+    // одно нажатие. Потолка не было вовсе.
+    await spendPlacesRequest(this.prisma, userId, 'venue-recommendation/nearby');
+
     let candidates;
     try {
       candidates = await searchNearbyVenues(latitude, longitude, apiKey);
@@ -74,10 +81,25 @@ export class VenueRecommendationService {
       throw new BadRequestException('Поблизости не найдено подходящих заведений');
     }
 
+    // Потолок на ОСТАТОК операции проверяется ЗДЕСЬ, до цикла, и
+    // осознанно целиком: обращений дальше будет столько, сколько
+    // кандидатов. Упереться в потолок на середине значило бы вернуть
+    // список из одного заведения там, где их три, — пробел, который
+    // выглядит как полнота. Отказ с понятной причиной честнее
+    // неполного ответа, выданного за полный.
+    const shortlist = candidates.slice(0, MAX_CANDIDATES);
+    if ((await placesRequestsLeft(this.prisma, userId)) < shortlist.length) {
+      throw new HttpException(
+        `Достигнут суточный лимит обращений к картам — на подбор заведений нужно ещё ${shortlist.length} обращений. Попробуйте позже.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const created: VenueRecommendation[] = [];
-    for (const candidate of candidates.slice(0, MAX_CANDIDATES)) {
+    for (const candidate of shortlist) {
       let details;
       try {
+        await spendPlacesRequest(this.prisma, userId, 'venue-recommendation/details');
         details = await getPlaceDetails(candidate.placeId, apiKey);
       } catch {
         continue; // одно заведение не отдало детали — пропускаем, не роняем всю генерацию
