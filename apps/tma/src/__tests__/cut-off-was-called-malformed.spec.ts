@@ -17,6 +17,8 @@
 
 process.env.NEXT_PUBLIC_DEV_USER_ID = 'test-user-1';
 
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { nonJsonMessage, humanizeApiError, ApiRequestError } from '../lib/api';
 import { resolveApiBaseUrl, LOCAL_API_BASE_URL } from '../lib/api-base-url';
 
@@ -90,41 +92,54 @@ const scenarios: Array<[string, () => void | Promise<void>]> = [
   [
     'КЛЮЧЕВОЙ: на платформе отсутствие адреса API — отказ, а не localhost',
     () => {
-      const err = assertThrows(
-        () => resolveApiBaseUrl({ VERCEL: '1' } as unknown as NodeJS.ProcessEnv),
-        'сборка на платформе без NEXT_PUBLIC_API_BASE_URL',
-      );
+      const err = assertThrows(() => resolveApiBaseUrl(undefined, true), 'сборка на платформе без адреса');
       assertTrue(err.message.includes('NEXT_PUBLIC_API_BASE_URL'), 'в отказе должно быть названо имя переменной');
-      assertThrows(() => resolveApiBaseUrl({ VERCEL_ENV: 'preview' } as unknown as NodeJS.ProcessEnv), 'превью тоже уезжает людям');
       // Пустая строка — то же самое, что отсутствие: переменная,
       // созданная в панели и оставленная пустой, встречается чаще.
-      assertThrows(() => resolveApiBaseUrl({ VERCEL: '1', NEXT_PUBLIC_API_BASE_URL: '  ' } as unknown as NodeJS.ProcessEnv), 'пустое значение');
+      assertThrows(() => resolveApiBaseUrl('  ', true), 'пустое значение на платформе');
+    },
+  ],
+  [
+    'КЛЮЧЕВОЙ: значение берётся из статической ссылки process.env.ИМЯ',
+    () => {
+      // Первая версия читала окружение через параметр-объект, и сборщик
+      // такое подставить не может: на сервере работало, в браузере
+      // значение снова было undefined и адрес снова падал на localhost.
+      // Сборка при этом зеленела. Здесь проверяется ТЕКСТ источника —
+      // именно его и подставляет сборщик.
+      const raw = readFileSync(join(process.cwd(), 'src', 'lib', 'api-base-url.ts'), 'utf8');
+      // КОММЕНТАРИИ ВЫБРАСЫВАЮТСЯ. Первая версия этой самой проверки
+      // покраснела на объяснении, в котором ПРОЦИТИРОВАНО прежнее,
+      // неверное обращение `env.NEXT_PUBLIC_…` — то есть наказала за
+      // рассказ о дефекте. Девятый случай этой ловушки за сессию.
+      const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      assertTrue(
+        src.includes('rawValue: string | undefined = process.env.NEXT_PUBLIC_API_BASE_URL'),
+        'значение по умолчанию обязано быть статической ссылкой process.env.NEXT_PUBLIC_API_BASE_URL',
+      );
+      assertTrue(!/[^.]\benv\.NEXT_PUBLIC_API_BASE_URL\b/.test(src), 'чтение через переменную сборщик не подставит');
+      assertTrue(!/[^.]\benv\.VERCEL\b/.test(src), 'то же для признака платформы');
+      // И проба самой чистки: цитата в комментарии не должна считаться кодом.
+      assertTrue(raw.includes('env.NEXT_PUBLIC_API_BASE_URL'), 'в объяснении прежнее обращение процитировано');
     },
   ],
   [
     'обратная проба: вне платформы дефолт разработки остаётся',
     () => {
-      assertEqual(resolveApiBaseUrl({} as unknown as NodeJS.ProcessEnv), LOCAL_API_BASE_URL, 'локально дефолт уместен');
-      // NODE_ENV=production сам по себе не признак платформы: локальная
-      // сборка и CI идут с ним же, и падать на них — ломать сборку там,
-      // где дефолт как раз верен.
-      assertEqual(
-        resolveApiBaseUrl({ NODE_ENV: 'production' } as unknown as NodeJS.ProcessEnv),
-        LOCAL_API_BASE_URL,
-        'NODE_ENV не должен считаться признаком платформы',
-      );
+      assertEqual(resolveApiBaseUrl(undefined, false), LOCAL_API_BASE_URL, 'локально дефолт уместен');
+      assertEqual(resolveApiBaseUrl('', false), LOCAL_API_BASE_URL, 'пустое значение локально — тот же дефолт');
     },
   ],
   [
     'хвостовой слэш снимается один раз в одном месте',
     () => {
       assertEqual(
-        resolveApiBaseUrl({ NEXT_PUBLIC_API_BASE_URL: 'https://api.example.com/' } as unknown as NodeJS.ProcessEnv),
+        resolveApiBaseUrl('https://api.example.com/', false),
         'https://api.example.com',
         'иначе склейка даёт //path и отказ выглядит как «объекта нет»',
       );
       assertEqual(
-        resolveApiBaseUrl({ NEXT_PUBLIC_API_BASE_URL: 'https://api.example.com///' } as unknown as NodeJS.ProcessEnv),
+        resolveApiBaseUrl('https://api.example.com///', false),
         'https://api.example.com',
         'несколько слэшей тоже',
       );

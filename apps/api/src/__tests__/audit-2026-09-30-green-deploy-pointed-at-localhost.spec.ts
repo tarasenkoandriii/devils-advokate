@@ -96,8 +96,23 @@ describe('Пункт [green-deploy-pointed-at-localhost]: адрес API — о�
   it('обе копии правила проверяют одни и те же признаки платформы', () => {
     for (const copy of COPIES) {
       const src = code(copy);
-      expect(src.includes('env.VERCEL ?? ')).toBe(true);
-      expect(src.includes('env.VERCEL_ENV ?? ')).toBe(true);
+      // Пункт [the-bundler-does-not-read-variables] 2026-09-30 — правка
+      // поверх правки, найденная НА ЖИВОМ ДЕПЛОЕ уже после зелёной
+      // сборки. Первая версия принимала окружение параметром и читала
+      // `env.NEXT_PUBLIC_API_BASE_URL`; сборщик подставляет значение
+      // только в БУКВАЛЬНЫЙ текст `process.env.ИМЯ`, поэтому на сервере
+      // (пререндер, проверка предела) всё работало и сборка проходила, а
+      // в браузере значение снова было undefined и адрес снова падал на
+      // localhost. Зелёная сборка проверяла серверную половину, ломалась
+      // клиентская. Отсюда правило: ссылки СТАТИЧЕСКИЕ.
+      expect(src.includes('process.env.NEXT_PUBLIC_API_BASE_URL')).toBe(true);
+      expect(src.includes('process.env.VERCEL ?? ')).toBe(true);
+      expect(src.includes('process.env.VERCEL_ENV ?? ')).toBe(true);
+      // Ни одного чтения через переменную-окружение: именно его сборщик
+      // и не подставляет.
+      expect(/[^.]\benv\.NEXT_PUBLIC_API_BASE_URL\b/.test(src)).toBe(false);
+      expect(/[^.]\benv\.VERCEL\b/.test(src)).toBe(false);
+      expect(src.includes('NodeJS.ProcessEnv')).toBe(false);
       // Признак — платформа, а НЕ NODE_ENV: локальная сборка и CI идут
       // с NODE_ENV=production, и по нему правило роняло бы сборку там,
       // где дефолт разработки как раз уместен.

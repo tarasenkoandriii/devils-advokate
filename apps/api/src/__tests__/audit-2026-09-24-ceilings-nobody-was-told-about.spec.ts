@@ -21,6 +21,14 @@ const APPS = ['api', 'tma', 'admin', 'landing'];
 const PLATFORM_PROVIDED: Array<{ name: string; why: string }> = [
   { name: 'NODE_ENV', why: 'выставляет сборщик (Next.js/Nest), значение в .env.example только сбивало бы с толку' },
   { name: 'PORT', why: 'выставляет платформа (Vercel/локальный запуск), продукт лишь читает' },
+  // Пункт [green-deploy-pointed-at-localhost] 2026-09-30: обе появились
+  // как ПРИЗНАК ПЛАТФОРМЫ — по ним мини-приложение и админка отличают
+  // сборку, которая уедет людям, от локальной, где дефолт разработки
+  // уместен. Объявлять их в `.env.example` нельзя именно потому, что
+  // объявление означало бы «оператор их выставляет»: выставленная руками
+  // VERCEL=1 в локальном окружении уронила бы локальную сборку.
+  { name: 'VERCEL', why: 'выставляет платформа на всех своих сборках; признак «этот бандл уедет людям», руками не задаётся' },
+  { name: 'VERCEL_ENV', why: 'выставляет платформа (production/preview/development); тот же признак, что VERCEL, для превью' },
 ];
 
 function readEnvNames(dir: string): Map<string, string[]> {
@@ -178,7 +186,20 @@ describe('[ceilings-nobody-was-told-about] о потолках расходов 
 
   it('у каждого исключения из правила записана причина', () => {
     for (const p of PLATFORM_PROVIDED) expect(p.why.length).toBeGreaterThan(30);
-    expect(PLATFORM_PROVIDED.length).toBeLessThanOrEqual(3);
+    // Потолок был 3 при двух записях — то есть ровно один запас, и это
+    // сделано намеренно: список исключений не должен расти молча.
+    // Поднят до 4 Пунктом [green-deploy-pointed-at-localhost]
+    // 2026-09-30, когда добавились `VERCEL` и `VERCEL_ENV`. Это ОДИН
+    // признак («бандл уедет людям»), записанный двумя именами платформы,
+    // а не два независимых исключения, — поэтому запас снова один, а не
+    // два. Поднимать потолок ради очередной записи можно только так:
+    // назвав Пункт и причину здесь же, иначе проверка превращается в
+    // формальность, которую обходят цифрой.
+    expect(PLATFORM_PROVIDED.length).toBeLessThanOrEqual(4);
+    // И обратная сторона: обе новые записи — действительно платформенные
+    // имена, а не переменные продукта, спрятанные в список исключений.
+    const platformNames = PLATFORM_PROVIDED.filter((p) => p.name.startsWith('VERCEL')).map((p) => p.name);
+    expect(platformNames.sort()).toEqual(['VERCEL', 'VERCEL_ENV']);
   });
 
   // Проверки, которым файлы не нужны (сам реестр), живут в
