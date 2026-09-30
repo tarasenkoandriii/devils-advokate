@@ -29,14 +29,17 @@ function sourceLabel(row: SpendCeilingRow): string {
 }
 
 export function SpendCeilingsCard({ state }: { state: SpendCeilingsState }) {
-  const broken = state.rows.filter((r) => r.source === 'умолчание: значение не прочитано');
+  // Число берётся ГОТОВЫМ с сервера, а не пересчитывается здесь: свой
+  // счёт по `state.rows` не видел второй таблицы, и ошибка в потолке
+  // публичной записи в сводку не попадала. Поймано мутацией — вернее,
+  // собственной проверкой, написанной сразу после второй таблицы.
   return (
     <div className="card" style={{ marginBottom: 20 }}>
       <h2 style={{ marginTop: 0 }}>Потолки расходов на этом развёртывании</h2>
 
-      {broken.length > 0 && (
+      {state.misconfigured > 0 && (
         <p className="warn" role="status">
-          Настроено с ошибкой: {broken.length}. Переменная задана, но значение не прочиталось — продукт работает на
+          Настроено с ошибкой: {state.misconfigured}. Переменная задана, но значение не прочиталось — продукт работает на
           умолчании, то есть рычаг нажат не был. Это не то же самое, что «потолок не выставляли».
         </p>
       )}
@@ -66,6 +69,40 @@ export function SpendCeilingsCard({ state }: { state: SpendCeilingsState }) {
           ))}
         </tbody>
       </table>
+
+      {/* Пункт [the-open-door-had-no-counter] 2026-09-30 — отдельной
+          таблицей, а не вперемешку с расходами: это не деньги, и назвать
+          их расходами значило бы соврать в заголовке. */}
+      <h3>Потолки публичной записи</h3>
+      <p className="muted">
+        Сколько можно написать, зная только ссылку. Денег это не стоит — ни один публичный маршрут не доходит
+        до AI и озвучки; цена в строках базы и в засоренном обсуждении.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Что ограничено</th>
+            <th>Действует</th>
+            <th>Откуда</th>
+            <th>Что было бы без потолка</th>
+          </tr>
+        </thead>
+        <tbody>
+          {state.publicWrite.map((r) => (
+            <tr key={r.what}>
+              <td>{r.what}</td>
+              <td>{r.off ? 'без потолка' : `${r.value} ${r.unit}`}</td>
+              <td className={r.source === 'умолчание: значение не прочитано' ? 'warn' : 'muted'}>{sourceLabel(r)}</td>
+              <td className="muted">{r.costs}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul className="muted">
+        {state.publicWriteDoesNotDo.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
 
       {/* Чего блок не знает — на экране, а не только в комментарии:
           оператор читает экран, а не исходник. */}

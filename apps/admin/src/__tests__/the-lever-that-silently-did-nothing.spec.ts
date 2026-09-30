@@ -17,7 +17,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { SpendCeilingsCard } from '../components/SpendCeilingsCard';
-import type { SpendCeilingRow, SpendCeilingsState } from '../lib/types';
+import type { PublicWriteCeilingRow, SpendCeilingRow, SpendCeilingsState } from '../lib/types';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(message);
@@ -38,11 +38,16 @@ function row(over: Partial<SpendCeilingRow> = {}): SpendCeilingRow {
   };
 }
 
-function state(rows: SpendCeilingRow[]): SpendCeilingsState {
+function state(rows: SpendCeilingRow[], publicWrite: PublicWriteCeilingRow[] = []): SpendCeilingsState {
+  const all = [...rows, ...publicWrite];
   return {
     rows,
-    misconfigured: rows.filter((r) => r.source === 'умолчание: значение не прочитано').length,
-    off: rows.filter((r) => r.off).length,
+    // Пункт [the-open-door-had-no-counter] 2026-09-30: у блока появилась
+    // вторая таблица; её проверяет своя спека.
+    publicWrite,
+    publicWriteDoesNotDo: ['Счёта по IP нет.'],
+    misconfigured: all.filter((r) => r.source === 'умолчание: значение не прочитано').length,
+    off: all.filter((r) => r.off).length,
     doesNotKnow: ['Показано то, что продукт прочитал из окружения ЭТОГО процесса.'],
   };
 }
@@ -89,6 +94,45 @@ const scenarios: Array<[string, () => void | Promise<void>]> = [
   ['зашитый потолок назван зашитым, а не умолчанием', () => {
     const out = html([row({ what: 'Поиск по YouTube', env: null, source: 'зашито в коде', raw: null, value: 20 })]);
     assert(out.includes('зашито в коде'), `зашитый потолок не отличён от умолчания: ${out.slice(0, 220)}`);
+  }],
+
+  ['КЛЮЧЕВОЙ ТЕСТ: потолки публичной записи показаны ОТДЕЛЬНОЙ таблицей, а не среди расходов', () => {
+    const pw: PublicWriteCeilingRow = {
+      what: 'Комментариев в одном обсуждении',
+      env: 'PUBLIC_COMMENTS_PER_DISCUSSION',
+      value: 1000,
+      unit: 'в обсуждении',
+      source: 'окружение',
+      raw: '1000',
+      fallback: 1000,
+      costs: 'утёкшая ссылка наполняет обсуждение шумом',
+      off: false,
+      scope: 'обсуждение',
+    };
+    const out = renderToStaticMarkup(createElement(SpendCeilingsCard, { state: state([row()], [pw]) }));
+    assert(out.includes('Потолки публичной записи'), 'второй таблицы нет вовсе');
+    assert(out.includes('Комментариев в одном обсуждении'), 'потолок публичной записи не нарисован');
+    assert(out.includes('Счёта по IP нет'), 'граница потолков публичной записи не показана оператору');
+    // И не выдаётся за расходы: деньги тут ни при чём, и это сказано.
+    assert(out.includes('Денег это не стоит'), 'не сказано, что публичная запись денег не стоит');
+  }],
+
+  ['КЛЮЧЕВОЙ ТЕСТ: ошибка настройки публичного потолка попадает в общую тревогу', () => {
+    const broken: PublicWriteCeilingRow = {
+      what: 'Участников в обсуждении',
+      env: 'PUBLIC_PARTICIPANTS_PER_DISCUSSION',
+      value: 200,
+      unit: 'в обсуждении',
+      source: 'умолчание: значение не прочитано',
+      raw: 'много',
+      fallback: 200,
+      costs: 'шум',
+      off: false,
+      scope: 'обсуждение',
+    };
+    const out = renderToStaticMarkup(createElement(SpendCeilingsCard, { state: state([row()], [broken]) }));
+    assert(out.includes('Настроено с ошибкой: 1'), `ошибка во второй таблице не попала в сводку: ${out.slice(0, 200)}`);
+    assert(out.includes('много'), 'оператор не видит, что написал в публичном потолке');
   }],
 
   ['чего блок не знает — написано на экране, а не только в комментарии', () => {

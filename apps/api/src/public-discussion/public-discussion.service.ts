@@ -31,6 +31,8 @@
 // публичных голосований.
 
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+
+import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PAGE_LIMIT, pagedList, takeWithProbe } from '../common/page';
@@ -241,6 +243,11 @@ export class PublicDiscussionService {
    * ОДИН раз — тому, кто вошёл. Больше он не появляется нигде. */
   async joinAsParticipant(token: string, displayName?: string) {
     const project = await this.findProjectByToken(token);
+    // Пункт [the-open-door-had-no-counter] 2026-09-30: до этой строки
+    // знание ссылки позволяло завести сколько угодно участников.
+    await assertUnderPublicWriteLimit('participants-per-discussion', () =>
+      this.prisma.publicParticipant.count({ where: { projectId: project.id } }),
+    );
     return this.prisma.publicParticipant.create({
       data: { projectId: project.id, displayName: displayName?.trim() || null },
       // Единственное место во всём проекте, где `withdrawToken`
@@ -256,6 +263,17 @@ export class PublicDiscussionService {
     }
     if (participantId) {
       await this.assertParticipantBelongsToProject(participantId, project.id);
+    }
+    // Пункт [the-open-door-had-no-counter] 2026-09-30: очередь модерации
+    // разбирает человек, и неограниченная очередь означает, что её не
+    // разберут никогда.
+    await assertUnderPublicWriteLimit('submissions-per-discussion', () =>
+      this.prisma.publicArgumentSubmission.count({ where: { projectId: project.id } }),
+    );
+    if (participantId) {
+      await assertUnderPublicWriteLimit('submissions-per-participant', () =>
+        this.prisma.publicArgumentSubmission.count({ where: { projectId: project.id, participantId } }),
+      );
     }
     // Пункт [badge-was-the-key] 2026-09-24: подача заявки возвращала
     // строку целиком, вместе с `participantId`. Своё удостоверение
@@ -379,6 +397,14 @@ export class PublicDiscussionService {
     }
     if (participantId) {
       await this.assertParticipantBelongsToProject(participantId, project.id);
+    }
+    await assertUnderPublicWriteLimit('comments-per-discussion', () =>
+      this.prisma.publicComment.count({ where: { projectId: project.id } }),
+    );
+    if (participantId) {
+      await assertUnderPublicWriteLimit('comments-per-participant', () =>
+        this.prisma.publicComment.count({ where: { projectId: project.id, participantId } }),
+      );
     }
     // Пункт [badge-was-the-key] 2026-09-24: наружу возвращается только
     // id созданного — страница всё равно перечитывает список, а лишние

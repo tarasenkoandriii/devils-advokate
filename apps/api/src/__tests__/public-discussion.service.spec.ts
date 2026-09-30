@@ -60,6 +60,9 @@ function createFakePrisma() {
       },
     },
     publicParticipant: {
+      // Пункт [the-open-door-had-no-counter] 2026-09-30: публичная
+      // запись считает, сколько уже есть. Ноль — этот тест про другое.
+      count: async () => 0,
       create: async ({ data }: any) => {
         const p = { id: nextId(), createdAt: new Date(), ...data };
         participants.push(p);
@@ -68,6 +71,9 @@ function createFakePrisma() {
       findFirst: async ({ where }: any) => participants.find((p) => p.id === where.id && p.projectId === where.projectId) ?? null,
     },
     publicArgumentSubmission: {
+      // Пункт [the-open-door-had-no-counter] 2026-09-30: публичная
+      // запись считает, сколько уже есть. Ноль — этот тест про другое.
+      count: async () => 0,
       create: async ({ data }: any) => {
         const s = { id: nextId(), status: 'PENDING', upvotes: 0, downvotes: 0, createdAt: new Date(), ...data };
         submissions.push(s);
@@ -101,6 +107,9 @@ function createFakePrisma() {
       },
     },
     publicComment: {
+      // Пункт [the-open-door-had-no-counter] 2026-09-30: публичная
+      // запись считает, сколько уже есть. Ноль — этот тест про другое.
+      count: async () => 0,
       create: async ({ data }: any) => {
         const c = { id: nextId(), createdAt: new Date(), ...data };
         comments.push(c);

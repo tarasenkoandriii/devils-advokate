@@ -87,6 +87,9 @@ function createFakePrisma() {
       },
     },
     libraryExperience: {
+      // Пункт [the-open-door-had-no-counter] 2026-09-30: публичная
+      // запись считает, сколько уже есть. Ноль — этот тест про другое.
+      count: async () => 0,
       create: async ({ data }: any) => {
         const e = { id: nextId(), createdAt: new Date(), ...data };
         experiences.push(e);

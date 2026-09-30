@@ -646,8 +646,14 @@ export interface SpendCeilingRow {
   off: boolean;
 }
 
+export interface PublicWriteCeilingRow extends SpendCeilingRow {
+  scope: string;
+}
+
 export interface SpendCeilingsState {
   rows: SpendCeilingRow[];
+  publicWrite: PublicWriteCeilingRow[];
+  publicWriteDoesNotDo: string[];
   misconfigured: number;
   off: number;
   doesNotKnow: string[];

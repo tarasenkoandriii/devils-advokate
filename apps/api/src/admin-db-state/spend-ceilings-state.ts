@@ -29,6 +29,7 @@
 // вкладка).
 
 import { SPEND_LIMITS, resolveLimit, type LimitSource } from '../common/spend-limits';
+import { PUBLIC_WRITE_LIMITS, PUBLIC_WRITE_NOT_LIMITED_HERE } from '../common/public-write-limits';
 
 export interface CeilingRow {
   readonly what: string;
@@ -47,8 +48,20 @@ export interface CeilingRow {
   readonly off: boolean;
 }
 
+/** Потолок публичной записи — та же строка, плюс по чему он считается.
+ *  Пункт [the-open-door-had-no-counter] 2026-09-30. */
+export interface PublicWriteRow extends CeilingRow {
+  readonly scope: string;
+}
+
 export interface CeilingsState {
   readonly rows: readonly CeilingRow[];
+  /** Потолки публичной записи — отдельной таблицей, а не вперемешку:
+   *  это не расходы, и назвать их расходами значило бы соврать в
+   *  заголовке. */
+  readonly publicWrite: readonly PublicWriteRow[];
+  /** Чего потолки публичной записи НЕ делают — словами, на экран. */
+  readonly publicWriteDoesNotDo: readonly string[];
   /** Сколько потолков настроено с ошибкой. Отдельным числом, чтобы
    *  оператор увидел это, не читая таблицу. */
   readonly misconfigured: number;
@@ -92,10 +105,30 @@ export function ceilingsState(): CeilingsState {
       off: resolved.value === 0 && l.env !== null && ZERO_MEANS_OFF.has(l.env),
     };
   });
+  const publicWrite: PublicWriteRow[] = PUBLIC_WRITE_LIMITS.map((l) => {
+    const resolved = resolveLimit(l.env, l.fallback);
+    return {
+      what: l.what,
+      env: l.env,
+      value: resolved.value,
+      unit: `${l.scope === 'участник' ? 'от одного участника' : l.scope === 'обсуждение' ? 'в обсуждении' : 'под записью'}`,
+      source: resolved.source,
+      raw: resolved.raw,
+      fallback: l.fallback,
+      costs: l.why,
+      // Ноль здесь ВСЕГДА означает «без потолка»: так устроен
+      // `assertUnderPublicWriteLimit`, и другого смысла у нуля нет.
+      off: resolved.value === 0,
+      scope: l.scope,
+    };
+  });
+  const all = [...rows, ...publicWrite];
   return {
     rows,
-    misconfigured: rows.filter((r) => r.source === 'умолчание: значение не прочитано').length,
-    off: rows.filter((r) => r.off).length,
+    publicWrite,
+    publicWriteDoesNotDo: PUBLIC_WRITE_NOT_LIMITED_HERE,
+    misconfigured: all.filter((r) => r.source === 'умолчание: значение не прочитано').length,
+    off: all.filter((r) => r.off).length,
     doesNotKnow: CEILINGS_DOES_NOT_KNOW,
   };
 }
