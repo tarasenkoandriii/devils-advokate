@@ -43,6 +43,14 @@ function projectsFake(cascadeForPersonFacts: boolean) {
   ];
   const consents: any[] = [{ id: 'c-1', userId: 'u-1', projectId: 'proj-1', consentType: 'EXTERNAL_AI' }];
   const prisma: any = {
+    // Пункт [project-deletion-took-a-stranger] 2026-09-30: удаление
+    // считает чужие потери ДО каскада. Ноль по всем — этот тест про
+    // СВОИ данные; чужие проверяет своя сверка.
+    publicComment: { count: async () => 0 },
+    publicArgumentSubmission: { count: async () => 0 },
+    publicParticipant: { count: async () => 0 },
+    clientReport: { count: async () => 0 },
+    employerAgencyEngagement: { count: async () => 0 },
     project: {
       findFirst: async ({ where }: any) =>
         where.id === 'proj-1' && where.ownerId === 'u-1' ? { id: 'proj-1', ownerId: 'u-1' } : null,

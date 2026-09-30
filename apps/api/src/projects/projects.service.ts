@@ -13,6 +13,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExternalArtifactsCleanupService } from '../common/external-artifacts/external-artifacts-cleanup.service';
+import { projectTakesFromOthers, PROJECT_LOSSES_NOTE, PROJECT_NOT_REMOVED_HERE } from './project-deletion-impact';
 import { assertProjectOwnership } from '../common/project-ownership';
 
 export interface CreateProjectInput {
@@ -101,8 +102,36 @@ export class ProjectsService {
     });
   }
 
-  async remove(userId: string, projectId: string): Promise<{ deleted: true; notRemovedHere: string[] }> {
+  /** Что удаление проекта заберёт у других — ДО решения.
+   *
+   * Пункт [project-deletion-took-a-stranger] 2026-09-30: у удаления
+   * аккаунта такой предпросмотр есть с 2026-09-26, у проекта не было.
+   * Экран удаления проекта при этом сам себе ставил правило «что именно
+   * исчезнет — сказано ДО нажатия». */
+  async deletionPreview(userId: string, projectId: string) {
     await assertProjectOwnership(this.prisma, userId, projectId);
+    return {
+      takesFromOthers: await projectTakesFromOthers(this.prisma, projectId),
+      takesFromOthersNote: PROJECT_LOSSES_NOTE,
+      notRemovedHere: [...PROJECT_NOT_REMOVED_HERE],
+    };
+  }
+
+  async remove(
+    userId: string,
+    projectId: string,
+  ): Promise<{
+    deleted: true;
+    notRemovedHere: string[];
+    tookFromOthers: Awaited<ReturnType<typeof projectTakesFromOthers>>;
+    tookFromOthersNote: string;
+  }> {
+    await assertProjectOwnership(this.prisma, userId, projectId);
+    // Считаем ДО каскада — после него считать нечего. Та же граница, что
+    // у удаления аккаунта, и та же единственная сторона возможной
+    // ошибки: число может оказаться меньше факта, если кто-то напишет
+    // комментарий между подсчётом и удалением.
+    const tookFromOthers = await projectTakesFromOthers(this.prisma, projectId);
     // Аудит 2026-09-02 (продолжение): каскад снимает строки, но не файлы
     // в хранилище (доказательства ДТП, транзитное аудио разговоров) и не
     // задачи распознавания у провайдера. «Удалить всё» обещало всё —
@@ -122,25 +151,11 @@ export class ProjectsService {
     // ему что-то делать дальше.
     return {
       deleted: true,
-      notRemovedHere: [
-        // Записи о согласиях — журнал того, на что человек соглашался и
-        // когда отзывал; он переживает и удаление аккаунта (см. Privacy
-        // Center). Удалять его вместе с проектом значило бы стирать
-        // доказательство собственных решений человека.
-        'Записи о выданных и отозванных согласиях: они принадлежат вам, а не проекту, и остаются в вашем разделе приватности.',
-        // Личные записи о людях, явно перенесённые за пределы проекта.
-        'Личные записи о людях со статусом «общая запись» (PERSON_GLOBAL): вы переносили их из проекта осознанно, и они остаются у карточки человека. Записи, привязанные к этому проекту, удалены вместе с ним.',
-        'Журнал безопасной отправки (что и кому уходило) — остаётся как след ваших собственных действий.',
-        'Записи библиотеки, опубликованные из этого проекта: они уже живут в общей библиотеке, ссылка на проект просто снимается.',
-        // Пункт [delete-project] 2026-09-04: здесь стояло «Журнал аудита —
-        // хранится без персональных данных» — ЧЕТВЁРТАЯ копия
-        // утверждения, которое Пункт [audit-trail] в тот же день нашёл
-        // неверным и исправил. Исправил в трёх местах из четырёх: тест,
-        // который должен был это держать, читал только
-        // privacy-center.service.ts, и копия здесь правку пережила.
-        // Сторож, суженный до одного файла, отчитывается за весь дом.
-        'Журнал решений о вашем аккаунте (ограничение, блокировка, удаление): записи о самих решениях остаются — это то, чем решение можно оспорить; свободные заметки оператора удаляются вместе с аккаунтом.',
-      ],
+      // Что забрало у других — тем же списком, что человек видел до
+      // решения. Молчание здесь читалось бы как «ни у кого ничего».
+      tookFromOthers,
+      tookFromOthersNote: PROJECT_LOSSES_NOTE,
+      notRemovedHere: [...PROJECT_NOT_REMOVED_HERE],
     };
   }
 }

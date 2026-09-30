@@ -1,11 +1,21 @@
 import { ProjectsService } from '../projects/projects.service';
 import { NotFoundException } from '@nestjs/common';
 
-function createFakePrisma() {
+function createFakePrisma(losses: Record<string, number> = {}) {
   const projects = new Map<string, any>();
   let idCounter = 0;
+  // Пункт [project-deletion-took-a-stranger] 2026-09-30: удаление
+  // считает, что заберёт у других, ДО каскада. Фейк, у которого этих
+  // моделей нет, падал бы на верном коде — а «падает» и «неверно» здесь
+  // разные вещи.
+  const counter = (model: string) => ({ count: async () => losses[model] ?? 0 });
 
   return {
+    publicComment: counter('publicComment'),
+    publicArgumentSubmission: counter('publicArgumentSubmission'),
+    publicParticipant: counter('publicParticipant'),
+    clientReport: counter('clientReport'),
+    employerAgencyEngagement: counter('employerAgencyEngagement'),
     _seedProject(p: any) { projects.set(p.id, p); },
     project: {
       create: async ({ data }: any) => {

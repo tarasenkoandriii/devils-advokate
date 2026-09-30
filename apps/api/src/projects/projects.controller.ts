@@ -64,6 +64,14 @@ export class ProjectsController {
     return this.projects.update(userId, id, dto);
   }
 
+  /** Пункт [project-deletion-took-a-stranger] 2026-09-30: что удаление
+   * заберёт у ДРУГИХ — до решения, а не после. Отдельным чтением, как у
+   * удаления аккаунта: человек должен успеть это прочитать. */
+  @Get(':id/deletion-preview')
+  async deletionPreview(@CurrentUser() userId: string, @Param('id') id: string) {
+    return this.projects.deletionPreview(userId, id);
+  }
+
   @Delete(':id')
   async remove(@CurrentUser() userId: string, @Param('id') id: string) {
     // Сверка удаления проекта 2026-09-04: ответ теперь содержит и список

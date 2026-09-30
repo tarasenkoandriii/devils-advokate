@@ -176,14 +176,36 @@ export function getProjectDetail(projectId: string): Promise<ProjectDetail> {
 // удалить весь аккаунт. При этом экран приватности прямо сообщал:
 // «Удаление отдельного проекта — на его странице». Указание на кнопку,
 // которой нет, хуже отсутствия кнопки: оно закрывает вопрос.
+/** Что удаление заберёт у ДРУГИХ — по одной строке на вид потери.
+ *  Пункт [project-deletion-took-a-stranger] 2026-09-30. */
+export interface ProjectLoss {
+  key: string;
+  count: number;
+  text: string;
+  why: string;
+}
+
 export interface ProjectDeletionResult {
   deleted: true;
   /** Что переживает удаление проекта — с причиной, человеческим текстом. */
+  notRemovedHere: string[];
+  /** Что удаление ЗАБРАЛО у других. Пустой массив — значит ничего. */
+  tookFromOthers: ProjectLoss[];
+  tookFromOthersNote: string;
+}
+
+export interface ProjectDeletionPreview {
+  takesFromOthers: ProjectLoss[];
+  takesFromOthersNote: string;
   notRemovedHere: string[];
 }
 
 export function deleteProject(projectId: string): Promise<ProjectDeletionResult> {
   return apiDelete<ProjectDeletionResult>(`/projects/${projectId}`);
+}
+
+export function projectDeletionPreview(projectId: string): Promise<ProjectDeletionPreview> {
+  return apiGet<ProjectDeletionPreview>(`/projects/${projectId}/deletion-preview`);
 }
 
 export function generateArguments(projectId: string, engineId?: string): Promise<Argument[]> {
