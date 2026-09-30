@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getAdminDbState } from '../../lib/endpoints';
+import { SpendCeilingsCard } from '../../components/SpendCeilingsCard';
 import type { AdminDbState, DbStateSection } from '../../lib/types';
 import { SchemaTablesCard } from '../../components/SchemaTablesCard';
 
@@ -102,6 +103,14 @@ export default function DbStatePage() {
               schema.prisma». Предупреждение читал тот, кто открыл
               документ; сам продукт о расхождении не знал ничего. */}
                     <SchemaTablesCard section={state.schemaTables} />
+
+          {/* ── Потолки расходов: что действует НА ЭТОМ развёртывании ──
+              Пункт [the-lever-that-silently-did-nothing] 2026-09-30.
+              Реестр потолков существовал с 2026-09-24 и не читался ни
+              одним экраном: оператор не мог узнать ни действующих
+              значений, ни того, что выставленная им переменная не
+              прочиталась и рычаг не сработал. */}
+          <SpendCeilingsCard state={state.spendCeilings} />
 
           {/* ── 0. Ручные миграции: что не применено НА ЭТОМ инстансе ──
               Пункт [latest-migration-was-from-memory] 2026-09-24. Раньше

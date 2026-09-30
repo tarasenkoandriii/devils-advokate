@@ -29,6 +29,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { compareCronJobs, CronJobPresence } from './expected-cron-jobs';
 import { MANUAL_MIGRATIONS } from './manual-migrations';
 import { compareSchemaTables, type SchemaTablesDrift } from './schema-tables';
+import { ceilingsState, type CeilingsState } from './spend-ceilings-state';
 
 export interface DbStateCronJob {
   jobname: string;
@@ -138,6 +139,12 @@ export class AdminDbStateService {
     // ничто; теперь проверяет — ровно в том объёме, который можно
     // утверждать точно, и говорит, чего не проверяет.
     schemaTables: DbStateSection<SchemaTablesDrift>;
+    // Пункт [the-lever-that-silently-did-nothing] 2026-09-30: потолки
+    // расходов на ЭТОМ развёртывании — и причина, по которой каждый
+    // действует. НЕ через safe(): здесь нет ни запроса к базе, ни
+    // внешнего вызова, падать нечему, и обёртка изображала бы риск,
+    // которого нет.
+    spendCeilings: CeilingsState;
   }> {
     await this.assertOperator(operatorUserId);
     const [cronJobs, cronRuns, httpResponses, aiJobs, manualMigrations, schemaTables] = await Promise.all([
@@ -155,7 +162,17 @@ export class AdminDbStateService {
     const expectedCron: DbStateSection<DbStateExpectedCron> = Array.isArray(cronJobs)
       ? compareCronJobs(cronJobs)
       : cronJobs;
-    return { generatedAt: new Date().toISOString(), cronJobs, expectedCron, cronRuns, httpResponses, aiJobs, manualMigrations, schemaTables };
+    return {
+      generatedAt: new Date().toISOString(),
+      cronJobs,
+      expectedCron,
+      cronRuns,
+      httpResponses,
+      aiJobs,
+      manualMigrations,
+      schemaTables,
+      spendCeilings: ceilingsState(),
+    };
   }
 
   /** Пункт [latest-migration-was-from-memory] 2026-09-24. Проба по

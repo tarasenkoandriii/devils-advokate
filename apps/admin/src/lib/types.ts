@@ -621,6 +621,36 @@ export interface AdminDbState {
   httpResponses: DbStateSection<DbStateHttpResponse[]>;
   aiJobs: DbStateSection<DbStateAiJobs>;
   manualMigrations: DbStateSection<DbStateMigration[]>;
+  spendCeilings: SpendCeilingsState;
+}
+
+/** Пункт [the-lever-that-silently-did-nothing] 2026-09-30 — потолки
+ *  расходов на этом развёртывании. `source` — главное поле: без него
+ *  «владелец выставил 300», «владелец ничего не выставлял» и «владелец
+ *  выставил, но значение не прочиталось» выглядели одинаково. */
+export type SpendLimitSource =
+  | 'окружение'
+  | 'умолчание: переменная не задана'
+  | 'умолчание: значение не прочитано'
+  | 'зашито в коде';
+
+export interface SpendCeilingRow {
+  what: string;
+  env: string | null;
+  value: number;
+  unit: string;
+  source: SpendLimitSource;
+  raw: string | null;
+  fallback: number;
+  costs: string;
+  off: boolean;
+}
+
+export interface SpendCeilingsState {
+  rows: SpendCeilingRow[];
+  misconfigured: number;
+  off: number;
+  doesNotKnow: string[];
 }
 export interface SandboxFactCheck {
   language: string | null;

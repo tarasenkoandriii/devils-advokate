@@ -129,8 +129,15 @@ describe('[unclosed-list-closed-itself] утверждения документ�
 
       // Вынесли бы в компонент — блок стало бы чем рисовать, и абзац
       // документа обязан был бы измениться.
+      //
+      // Комментарии снимаются и здесь. 2026-09-30 эта проверка покраснела
+      // на `SpendCeilingsCard.tsx`, который лишь УПОМИНАЕТ блок в своей
+      // шапке («у него до сих пор нет теста, потому что он внутри
+      // страницы»). Правило про упоминание было записано тремя строками
+      // выше и применено к одной из трёх выборок — то самое «правило
+      // было, просто не везде», в стороже, которому был один день.
       const inComponents = readdirSync(join(REPO, 'apps', 'admin', 'src', 'components')).filter((f) =>
-        readFileSync(join(REPO, 'apps', 'admin', 'src', 'components', f), 'utf8').includes(BLOCK),
+        withoutComments(readFileSync(join(REPO, 'apps', 'admin', 'src', 'components', f), 'utf8')).includes(BLOCK),
       );
       expect(inComponents).toEqual([]);
 
