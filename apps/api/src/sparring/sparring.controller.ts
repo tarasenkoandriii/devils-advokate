@@ -42,6 +42,31 @@ class SubmitVoiceReplyDto {
 export class SparringController {
   constructor(private readonly sparring: SparringService) {}
 
+  // ─────────────────────────────────────────────────────────────────
+  // Пункт [the-wildcard-ate-the-webhook] 2026-09-30 — ЭТОТ ОБРАБОТЧИК
+  // ОБЯЗАН БЫТЬ ОБЪЯВЛЕН ВЫШЕ МАРШРУТОВ С `:sessionId`.
+  //
+  // Express подбирает маршрут по ПОРЯДКУ РЕГИСТРАЦИИ, а регистрация
+  // идёт в порядке объявления методов. Пока этот метод стоял последним,
+  // запрос провайдера на `/{prefix}/webhook/voice-reply` попадал в
+  // `:sessionId/voice-reply` c `sessionId = 'webhook'` — то есть под
+  // `TelegramAuthGuard`, который провайдера, разумеется, не пускает.
+  // Результат расшифровки не приходил НИКОГДА, а разговор оставался
+  // ждать. Найдено на живом деплое перечислением роутера: из 705
+  // маршрутов перехвачено было четыре, и два из них — вот эти вебхуки.
+  //
+  // Намерение при этом было записано в шапке файла («вебхук НЕ под
+  // TelegramAuthGuard») — порядок объявления его молча отменял. Правило
+  // держит `audit-2026-09-30-the-wildcard-ate-the-webhook.spec.ts`: он
+  // поднимает приложение и требует, чтобы ни один буквальный путь не
+  // перехватывался маршрутом с параметром.
+  // ─────────────────────────────────────────────────────────────────
+  @Post('sparring-sessions/webhook/voice-reply')
+  @UseGuards(SttWebhookGuard)
+  async voiceReplyWebhook(@Body() payload: unknown) {
+    return this.sparring.handleVoiceReplyWebhook(payload);
+  }
+
   @Post('projects/:projectId/sparring-sessions')
   @UseGuards(TelegramAuthGuard)
   async start(
@@ -124,9 +149,4 @@ export class SparringController {
     return this.sparring.getVoiceReplyStatus(userId, sessionId, jobId);
   }
 
-  @Post('sparring-sessions/webhook/voice-reply')
-  @UseGuards(SttWebhookGuard)
-  async voiceReplyWebhook(@Body() payload: unknown) {
-    return this.sparring.handleVoiceReplyWebhook(payload);
-  }
 }

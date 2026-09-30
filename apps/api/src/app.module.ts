@@ -154,7 +154,6 @@ import { DtpModule } from './dtp/dtp.module';
     SchedulerModule,
     DecisionOutcomeModule,
     SparringModule,
-    PublicDiscussionModule,
     LibraryModule,
     PersonFactsModule,
     MotiveAnalysisModule,
@@ -217,7 +216,31 @@ import { DtpModule } from './dtp/dtp.module';
     LegalDisclaimerModule,
     HealthModule,
     FamilyLawModule,
-    DtpModule,
+    DtpModule,    // ─────────────────────────────────────────────────────────────
+    // Пункт [the-wildcard-ate-the-webhook] 2026-09-30 —
+    // PublicDiscussionModule РЕГИСТРИРУЕТСЯ ПОСЛЕДНИМ, И ЭТО НЕ
+    // ОФОРМЛЕНИЕ.
+    //
+    // Его контроллер объявлен как `@Controller('public/:token')` —
+    // параметр стои́т на том же уровне, что буквальные `public/library`
+    // (LibraryModule) и `public/venues` (VenueApplicationModule).
+    // Express подбирает маршрут по порядку регистрации, а он идёт в
+    // порядке этого массива: пока этот модуль стоял выше, `GET
+    // /public/library` и `GET /public/venues` попадали в обработчик
+    // обсуждений и отвечали «Ссылка на обсуждение недействительна» —
+    // два публичных экрана были нерабочими, а текст отказа говорил не
+    // о том, что случилось.
+    //
+    // Переносить сам маршрут обсуждений на отдельный префикс нельзя:
+    // токены уже разосланы людям, и такие ссылки перестали бы
+    // открываться. Поэтому порядок, а порядок держит проверка
+    // `audit-2026-09-30-the-wildcard-ate-the-webhook.spec.ts`: она
+    // поднимает приложение и требует, чтобы ни один буквальный путь не
+    // перехватывался маршрутом с параметром. Алфавитная сортировка
+    // импортов или новый модуль рядом сломали бы это молча.
+    // ─────────────────────────────────────────────────────────────
+    PublicDiscussionModule,
+
   ],
 })
 export class AppModule {}
