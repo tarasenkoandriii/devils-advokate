@@ -1,13 +1,13 @@
 // ТЗ domain-ui-and-voice-intake §2 — HTTP-слой intake-квиза.
-import { Body, Controller, Get, Headers, Param, Post, UnauthorizedException, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, UseGuards, UseInterceptors } from '@nestjs/common';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { NotRestrictedGuard } from '../telegram-auth/not-restricted.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SecretsService } from '../secrets/secrets.service';
 import { IntakeScenario, IntakeService } from './intake.service';
-import { safeSecretEqual } from '../common/timing-safe-equal';
 import { IsOptional, IsString, Matches, MaxLength, MinLength} from 'class-validator';
+import { assertSharedSecret } from '../common/dispatch-secret';
 
 export class TextDto {
   // Пункт [validation] 2026-09-01: ответ квиза уходит в LLM-контекст —
@@ -84,8 +84,8 @@ export class IntakeController {
 
   @Post('abandon-stale')
   async abandonStale(@Headers('x-dispatch-secret') providedSecret: string) {
-    const expected = await this.secrets.resolve(DISPATCH_SECRET_REF);
-    if (!safeSecretEqual(providedSecret, expected)) throw new UnauthorizedException();
+    // Пункт [the-registry-promised-401-and-gave-500] 2026-09-30.
+    await assertSharedSecret(this.secrets, DISPATCH_SECRET_REF, providedSecret);
     return this.intake.abandonStale();
   }
 }

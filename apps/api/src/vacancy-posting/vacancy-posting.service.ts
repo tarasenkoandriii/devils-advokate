@@ -25,7 +25,7 @@ import { BadGatewayException, BadRequestException, Injectable, NotFoundException
 import { EvidenceKind, ProjectMode, RecruitingTeamType, TermsClauseKind, TermsSide } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
+import { assertUnderPublicWriteLimit, publicWriteLimit } from '../common/public-write-limits';
 import { assertCounterpartyProjectNotFrozen } from '../project-freeze/assert-not-frozen';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
@@ -345,16 +345,61 @@ export class VacancyPostingService {
     // него о модерационном статусе чужого проекта.
     const posting = await this.prisma.vacancyPosting.findUnique({ where: { id: share.postingId }, select: { projectId: true } });
     if (posting) await assertCounterpartyProjectNotFrozen(this.prisma, posting.projectId);
-    const existing = ((share.comments as unknown) as Array<{ at: string; text: string }>) ?? [];
     // Пункт [the-ceiling-lived-in-two-places] 2026-09-30: было зашитое
     // `> 100` с отказом, который ничего не объяснял. Потолок и его
-    // формулировка теперь живут в реестре публичной записи — том
-    // единственном месте, где они перечислены и откуда их печатает
-    // экран оператора.
-    await assertUnderPublicWriteLimit('comments-per-posting-review', async () => existing.length);
-    const comments = [...existing, { at: new Date().toISOString(), text: text.trim().slice(0, 2000) }];
-    await this.prisma.postingReviewShare.update({ where: { id: share.id }, data: { comments: comments as never } });
-    return { ok: true, comments: comments.length };
+    // формулировка живут в реестре публичной записи — том единственном
+    // месте, где они перечислены и откуда их печатает экран оператора.
+    //
+    // Пункт [two-comments-one-survived] 2026-09-30 — ЗАПИСЬ АТОМАРНА, И
+    // ЭТО НЕ ОПТИМИЗАЦИЯ.
+    //
+    // Раньше здесь было чтение JSON-колонки, склейка в памяти и запись
+    // целиком. Два комментария, отправленных по одной ссылке
+    // одновременно, читали один и тот же массив и записывали его
+    // поверх друг друга: побеждал последний, первый ИСЧЕЗАЛ БЕЗ СЛЕДА.
+    // Ни отказа, ни строки в логе — заказчик видел «ok» и свой
+    // комментарий, которого через секунду не было. Ровно тот же класс,
+    // что уже исправляли у голосов переходом на `{ increment: 1 }`;
+    // здесь он остался, потому что у JSON-колонки такого оператора у
+    // Prisma нет.
+    //
+    // Поэтому один SQL-оператор: добавление элемента и проверка потолка
+    // в одном `UPDATE` с условием. Postgres выполняет его под блокировкой
+    // строки, так что второй запрос видит уже дополненный массив.
+    // Сырой SQL здесь — тот же приём, что в `ai-router` (`SKIP LOCKED`
+    // при заборе джоб): когда важна одновременность, Prisma-обёртки
+    // недостаточно.
+    // Ноль в реестре означает «не ограничивай» — как у потолков
+    // расходов. В условии SQL это пришлось бы читать как «меньше нуля»,
+    // то есть запретить всё, поэтому ноль превращается в предел int4:
+    // условие остаётся одним и тем же оператором, а смысл сохраняется.
+    const configured = publicWriteLimit('comments-per-posting-review').value;
+    const limit = configured === 0 ? 2_147_483_647 : configured;
+    const entry = JSON.stringify([{ at: new Date().toISOString(), text: text.trim().slice(0, 2000) }]);
+    const updated = await this.prisma.$queryRaw<Array<{ count: number }>>`
+      UPDATE posting_review_shares
+         SET comments = COALESCE(comments, '[]'::jsonb) || ${entry}::jsonb
+       WHERE id = ${share.id}
+         AND jsonb_array_length(COALESCE(comments, '[]'::jsonb)) < ${limit}
+      RETURNING jsonb_array_length(comments)::int AS count
+    `;
+    if (updated.length === 0) {
+      // Ноль строк = условие потолка не выполнилось. Отказ берётся из
+      // реестра, чтобы текст был один и тот же с остальными потолками
+      // публичной записи; счёт читается заново, а не берётся из
+      // прочитанного выше (он уже мог измениться).
+      await assertUnderPublicWriteLimit('comments-per-posting-review', async () => {
+        const fresh = await this.prisma.postingReviewShare.findUnique({
+          where: { id: share.id },
+          select: { comments: true },
+        });
+        return (((fresh?.comments as unknown) as Array<unknown>) ?? []).length;
+      });
+      // Сюда попадаем, только если потолок внезапно НЕ достигнут — то
+      // есть строка исчезла между двумя запросами. Ссылка недействительна.
+      throw new NotFoundException('Ссылка недействительна или просрочена');
+    }
+    return { ok: true, comments: updated[0].count };
   }
 
   // ── Внутреннее ──

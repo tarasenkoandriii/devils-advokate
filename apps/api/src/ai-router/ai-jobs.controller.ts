@@ -16,19 +16,18 @@ import {
   NotFoundException,
   Param,
   Post,
-  UnauthorizedException,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
-import { safeSecretEqual } from '../common/timing-safe-equal';
 import { SecretsService } from '../secrets/secrets.service';
 import { AIRouterService } from './ai-router.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { VoiceReplyReaperService } from '../stt/voice-reply-reaper.service';
 import { CacheRetentionService } from '../privacy-center/cache-retention.service';
+import { assertSharedSecret } from '../common/dispatch-secret';
 
 const DISPATCH_SECRET_REF = 'AI_JOB_DISPATCH_SECRET';
 
@@ -67,10 +66,11 @@ export class AIJobsDispatchController {
   ) {}
 
   private async assertSecret(providedSecret: string) {
-    const expected = await this.secrets.resolve(DISPATCH_SECRET_REF);
-    if (!safeSecretEqual(providedSecret, expected)) {
-      throw new UnauthorizedException('Invalid dispatch secret');
-    }
+    // Пункт [the-registry-promised-401-and-gave-500] 2026-09-30: один
+    // способ на все server-to-server маршруты. 401 — секрет не совпал,
+    // 503 — переменная не настроена у нас; раньше второй случай давал
+    // 500 «Internal server error», и оператор искал поломку в коде.
+    await assertSharedSecret(this.secrets, DISPATCH_SECRET_REF, providedSecret);
   }
 
   @Post('submit')

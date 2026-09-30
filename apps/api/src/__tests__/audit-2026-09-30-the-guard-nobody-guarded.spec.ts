@@ -127,6 +127,14 @@ describe('[the-guard-nobody-guarded] сравнение секретов', () =>
       const src = code(file.slice(API_SRC.length + 1));
       sites += (src.match(/safeSecretEqual\(/g) ?? []).length;
     }
-    expect(sites).toBe(10);
+    // Было 10 до Пункта [the-registry-promised-401-and-gave-500]
+    // 2026-09-30. Стало 5: пять контроллеров общего секрета перешли на
+    // `common/dispatch-secret.ts`, и своё сравнение у них исчезло —
+    // вместе с пятью копиями режима отказа, из-за которых не
+    // выставленная переменная давала 500 вместо 503. Число уменьшилось
+    // потому, что копий стало меньше, а не потому, что проверок стало
+    // меньше: что все шесть идут через одно место, держит
+    // `audit-2026-09-30-the-ceiling-asked-you-to-identify-yourself.spec.ts`.
+    expect(sites).toBe(5);
   });
 });

@@ -270,11 +270,34 @@ export class PublicDiscussionService {
     await assertUnderPublicWriteLimit('submissions-per-discussion', () =>
       this.prisma.publicArgumentSubmission.count({ where: { projectId: project.id } }),
     );
-    if (participantId) {
-      await assertUnderPublicWriteLimit('submissions-per-participant', () =>
-        this.prisma.publicArgumentSubmission.count({ where: { projectId: project.id, participantId } }),
-      );
-    }
+    // Пункт [the-ceiling-asked-you-to-identify-yourself] 2026-09-30 —
+    // ЛИЧНЫЙ ПОТОЛОК ПРИМЕНЯЕТСЯ И К АНОНИМНОЙ ЗАПИСИ.
+    //
+    // Раньше проверка стояла под `if (participantId)`. Поле
+    // необязательное, и клиент, его НЕ приславший, не попадал под
+    // личный потолок вообще — его держал только общий на обсуждение.
+    // То есть обещание «не больше N от одного» обходилось тем, что
+    // человек не называл себя, и обходилось бесплатно: назваться стоит
+    // строки в таблице участников (их потолок 200), а не назваться —
+    // ничего. Личный потолок существовал ровно для того, чтобы очередь
+    // модерации разобрал человек, и для анонимной записи не работал.
+    //
+    // Анонимные записи считаются ОДНОЙ общей корзиной того же размера:
+    // назвавшийся получает свой счёт, не назвавшиеся делят один. Это
+    // осознанный размен, и он назван: в людном обсуждении анонимная
+    // запись кончится быстрее, и правильный ответ на это —
+    // присоединиться (это бесплатно), а не поднять потолок.
+    //
+    // Честная граница, уже записанная в шапке файла: `PublicParticipant`
+    // не identity-система, и повторная регистрация под другим именем
+    // по-прежнему возможна. Она стоит строки участника и упирается в
+    // потолок участников; это дороже, чем пустое поле, и потому другой
+    // разговор.
+    await assertUnderPublicWriteLimit('submissions-per-participant', () =>
+      this.prisma.publicArgumentSubmission.count({
+        where: { projectId: project.id, participantId: participantId ?? null },
+      }),
+    );
     // Пункт [badge-was-the-key] 2026-09-24: подача заявки возвращала
     // строку целиком, вместе с `participantId`. Своё удостоверение
     // подавший и так знает — но правило поверхности не делает
@@ -401,11 +424,13 @@ export class PublicDiscussionService {
     await assertUnderPublicWriteLimit('comments-per-discussion', () =>
       this.prisma.publicComment.count({ where: { projectId: project.id } }),
     );
-    if (participantId) {
-      await assertUnderPublicWriteLimit('comments-per-participant', () =>
-        this.prisma.publicComment.count({ where: { projectId: project.id, participantId } }),
-      );
-    }
+    // Пункт [the-ceiling-asked-you-to-identify-yourself] 2026-09-30 —
+    // то же, что у заявок выше: личный потолок обходился пустым полем.
+    await assertUnderPublicWriteLimit('comments-per-participant', () =>
+      this.prisma.publicComment.count({
+        where: { projectId: project.id, participantId: participantId ?? null },
+      }),
+    );
     // Пункт [badge-was-the-key] 2026-09-24: наружу возвращается только
     // id созданного — страница всё равно перечитывает список, а лишние
     // поля в ответе это лишние поля наружу.

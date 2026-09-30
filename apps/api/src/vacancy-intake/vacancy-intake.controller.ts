@@ -2,16 +2,16 @@
 // К-13/К-17/К-18/К-19/К-25/К-26/К-27). Внутренние маршруты (тик refetch,
 // пересылка боту) — за x-dispatch-secret, как остальные /internal.
 import { JobVacancyResponseStatus } from '@prisma/client';
-import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UnauthorizedException, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { ProjectFrozenGuard } from '../project-freeze/project-frozen.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SecretsService } from '../secrets/secrets.service';
-import { safeSecretEqual } from '../common/timing-safe-equal';
 import { VacancyIntakeService } from './vacancy-intake.service';
 import { JobSearchToolsService } from './job-search-tools.service';
+import { assertSharedSecret } from '../common/dispatch-secret';
 
 // Тот же секрет, что у остальных плановых тиков (scheduler, calibration, intake) — один класс server-to-server вызова.
 const DISPATCH_SECRET_REF = 'SCHEDULER_DISPATCH_SECRET';
@@ -205,8 +205,8 @@ export class JobSearchInternalController {
   ) {}
 
   private async assertSecret(provided: string) {
-    const expected = await this.secrets.resolve(DISPATCH_SECRET_REF);
-    if (!safeSecretEqual(provided, expected)) throw new UnauthorizedException();
+    // Пункт [the-registry-promised-401-and-gave-500] 2026-09-30.
+    await assertSharedSecret(this.secrets, DISPATCH_SECRET_REF, provided);
   }
 
   /** Тик pg_cron (К-16): раз в сутки, порция 20. */

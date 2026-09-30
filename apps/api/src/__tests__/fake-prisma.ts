@@ -110,6 +110,40 @@ export class FakePrisma {
    * согласованности здесь нет и быть не может. Тест на этом фейке
    * доказывает ровно одно: что запись идёт одной операцией, чей провал
    * не оставляет половины. */
+  /** Сырой SQL, который понимает РОВНО ОДИН оператор — тот, что ввёл
+   *  Пункт [two-comments-one-survived] 2026-09-30 (атомарное добавление
+   *  комментария к ссылке вычитки с проверкой потолка в том же
+   *  запросе).
+   *
+   *  Честная граница, и она здесь важнее удобства: фейк НЕ умеет
+   *  исполнять SQL. Он распознаёт этот единственный оператор по форме и
+   *  повторяет его смысл на строках в памяти. На любой другой сырой
+   *  запрос он БРОСАЕТ, а не возвращает пустой массив, — иначе первый
+   *  же новый `$queryRaw` в продуктовом коде проходил бы в тестах
+   *  «успешно», ничего не сделав, и спека зеленела бы на действии,
+   *  которого не было. Это та же порода, что «сверка, которой не на что
+   *  смотреть»: фейк, отвечающий на всё, проверяет ничего. */
+  async $queryRaw(strings: TemplateStringsArray | string[], ...values: any[]) {
+    const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
+    const isCommentAppend =
+      sql.includes('UPDATE posting_review_shares') &&
+      sql.includes('jsonb_array_length') &&
+      sql.includes("|| ");
+    if (!isCommentAppend) {
+      throw new Error(
+        `FakePrisma.$queryRaw: этот фейк знает только атомарное добавление комментария к posting_review_shares. ` +
+          `Получен другой запрос — научите фейк ЯВНО, а не рассчитывайте на молчаливый пустой ответ:\n${sql}`,
+      );
+    }
+    const [entryJson, id, limit] = values as [string, string, number];
+    const row = this.rows('postingReviewShare').find((r: any) => r.id === id) as any;
+    if (!row) return [];
+    const existing = Array.isArray(row.comments) ? row.comments : [];
+    if (existing.length >= Number(limit)) return [];
+    row.comments = [...existing, ...JSON.parse(entryJson)];
+    return [{ count: row.comments.length }];
+  }
+
   async $transaction(arg: any) {
     if (typeof arg !== 'function') return Promise.all(arg);
     const snapshot = new Map<string, Row[]>();

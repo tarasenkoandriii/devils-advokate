@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, UnauthorizedException, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, UseGuards, UseInterceptors } from '@nestjs/common';
 import { TelegramAuthGuard } from '../telegram-auth/telegram-auth.guard';
 import { CurrentUser } from '../telegram-auth/current-user.decorator';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { SchedulerService } from './scheduler.service';
 import { SecretsService } from '../secrets/secrets.service';
-import { safeSecretEqual } from '../common/timing-safe-equal';
+import { assertSharedSecret } from '../common/dispatch-secret';
 
 const DISPATCH_SECRET_REF = 'SCHEDULER_DISPATCH_SECRET';
 const BOT_TOKEN_REF = 'TELEGRAM_BOT_TOKEN';
@@ -67,10 +67,8 @@ export class SchedulerDispatchController {
 
   @Post('dispatch')
   async dispatch(@Headers('x-dispatch-secret') providedSecret: string) {
-    const expectedSecret = await this.secrets.resolve(DISPATCH_SECRET_REF);
-    if (!safeSecretEqual(providedSecret, expectedSecret)) {
-      throw new UnauthorizedException('Invalid dispatch secret');
-    }
+    // Пункт [the-registry-promised-401-and-gave-500] 2026-09-30.
+    await assertSharedSecret(this.secrets, DISPATCH_SECRET_REF, providedSecret);
     const botToken = await this.secrets.resolve(BOT_TOKEN_REF);
     return this.scheduler.dispatchDueReminders(botToken);
   }

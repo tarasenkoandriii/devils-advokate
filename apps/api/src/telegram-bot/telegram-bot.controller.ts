@@ -19,6 +19,7 @@ import { safeSecretEqual } from '../common/timing-safe-equal';
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { TelegramBotService, TELEGRAM_WEBHOOK_HEADER, TELEGRAM_WEBHOOK_SECRET_REF } from './telegram-bot.service';
 import type { TelegramUpdate } from './telegram-update';
+import { assertSharedSecret } from '../common/dispatch-secret';
 
 const DISPATCH_SECRET_REF = 'SCHEDULER_DISPATCH_SECRET';
 
@@ -56,8 +57,9 @@ export class TelegramBotController {
   }
 
   private async assertDispatchSecret(provided: string) {
-    const expected = await this.secrets.resolve(DISPATCH_SECRET_REF).catch(() => null);
-    if (!expected) throw new ServiceUnavailableException(`${DISPATCH_SECRET_REF} не настроен`);
-    if (!safeSecretEqual(provided, expected)) throw new UnauthorizedException();
+    // Пункт [the-registry-promised-401-and-gave-500] 2026-09-30: этот
+    // контроллер был ЕДИНСТВЕННЫМ, кто отказывал честно, — и потому
+    // стал образцом для общего места. Своя копия больше не нужна.
+    await assertSharedSecret(this.secrets, DISPATCH_SECRET_REF, provided);
   }
 }

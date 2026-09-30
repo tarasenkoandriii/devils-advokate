@@ -3,12 +3,12 @@
 // не запускается по HTTP от пользователя, см. обоснование в самом
 // сервисе.
 
-import { Controller, Get, Headers, Post, Req, UnauthorizedException, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Headers, Post, Req, UseGuards, UseInterceptors } from '@nestjs/common';
 import { AdminSessionGuard, AdminAuthenticatedRequest } from '../admin-auth/admin-session.guard';
 import { ApiResponseInterceptor } from '../common/api-response.interceptor';
 import { CalibrationService } from './calibration.service';
 import { SecretsService } from '../secrets/secrets.service';
-import { safeSecretEqual } from '../common/timing-safe-equal';
+import { assertSharedSecret } from '../common/dispatch-secret';
 
 const DISPATCH_SECRET_REF = 'SCHEDULER_DISPATCH_SECRET'; // переиспользован тот же секрет, что у SchedulerDispatchController — тот же класс server-to-server вызова, заводить отдельный секрет ради одного нового плановую задания было бы избыточно
 
@@ -45,10 +45,8 @@ export class CalibrationDispatchController {
 
   @Post('recompute')
   async recompute(@Headers('x-dispatch-secret') providedSecret: string) {
-    const expectedSecret = await this.secrets.resolve(DISPATCH_SECRET_REF);
-    if (!safeSecretEqual(providedSecret, expectedSecret)) {
-      throw new UnauthorizedException('Invalid dispatch secret');
-    }
+    // Пункт [the-registry-promised-401-and-gave-500] 2026-09-30.
+    await assertSharedSecret(this.secrets, DISPATCH_SECRET_REF, providedSecret);
     return this.calibration.recomputeCalibration();
   }
 }
