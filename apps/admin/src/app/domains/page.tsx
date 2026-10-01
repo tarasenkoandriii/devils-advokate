@@ -22,8 +22,17 @@ export default function DomainsPage() {
   const [rows, setRows] = useState<DomainSummaryRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mediaQueues, setMediaQueues] = useState<AdminMediaReviewQueues | null>(null);
+  // Пункт [loading-never-ended] 2026-10-01: здесь стоял
+  // `.catch(() => undefined)`, и при отказе API `mediaQueues` оставался
+  // null — то есть строка «Загрузка…» ниже висела вечно. Оператор читал
+  // СБОЙ как «ещё считается», причём в блоке, по которому решают, жив ли
+  // конвейер YouTube-разбора. Соседний экран (`/media-review`) отказ
+  // показывает; этот — нет. Своё состояние отказа, а не общий `error`:
+  // доменные итоги и очереди медиа — два независимых запроса, и падение
+  // второго не должно прятать первый.
   useEffect(() => { getDomainsSummary().then(setRows).catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить')); }, []);
-  useEffect(() => { listAdminMediaReviewQueues().then(setMediaQueues).catch(() => undefined); }, []);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  useEffect(() => { listAdminMediaReviewQueues().then(setMediaQueues).catch((e) => setMediaError(e instanceof Error ? e.message : 'Не удалось загрузить очереди медиа')); }, []);
 
   // Пункт [ceiling-hid-inside-a-total] 2026-09-24: здесь этот экран
   // СКЛАДЫВАЛ полученные очереди в итоги, а сервер отдавал их с
@@ -69,7 +78,8 @@ export default function DomainsPage() {
         мультимодальный разбор (Gemini). Детали и очереди — на вкладке{' '}
         <Link href="/media-review">Медиа</Link>, живой прогон — в <Link href="/sandbox">Sandbox</Link>.
       </p>
-      {!media && <p className="muted">Загрузка…</p>}
+      {mediaError && <p role="alert" style={{ color: '#b00' }}>Не удалось загрузить очереди медиа: {mediaError}</p>}
+      {!media && !mediaError && <p className="muted">Загрузка…</p>}
       {media && (
         <table>
           <thead>

@@ -12,6 +12,7 @@ import type {
   EvaluationRun,
   CalibrationStatus,
   TelemetrySummaryRow,
+  TelemetryCoverage,
   TelemetryByModelRow,
   AIJobDetail,
   AuditLogRow,
@@ -191,7 +192,7 @@ export function getTelemetrySummary(from?: string, to?: string) {
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   const qs = params.toString();
-  return apiGet<TelemetrySummaryRow[]>(`/admin/telemetry/summary${qs ? `?${qs}` : ''}`);
+  return apiGet<{ rows: TelemetrySummaryRow[]; coverage: TelemetryCoverage }>(`/admin/telemetry/summary${qs ? `?${qs}` : ''}`);
 }
 
 export function getTelemetryByModel(from?: string, to?: string) {
@@ -199,7 +200,7 @@ export function getTelemetryByModel(from?: string, to?: string) {
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   const qs = params.toString();
-  return apiGet<TelemetryByModelRow[]>(`/admin/telemetry/by-model${qs ? `?${qs}` : ''}`);
+  return apiGet<{ rows: TelemetryByModelRow[]; coverage: TelemetryCoverage }>(`/admin/telemetry/by-model${qs ? `?${qs}` : ''}`);
 }
 
 export function getTelemetryTaskDetail(taskType: string, limit = 50, status?: string) {

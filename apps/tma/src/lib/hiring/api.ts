@@ -190,11 +190,29 @@ export const candidateConsentApi = {
     apiPost<{ consentRevokedAt: string; sharesRevoked?: number; alreadyRevoked?: boolean; message: string }>(`/candidate-profiles/${candidateProfileId}/revoke-consent`, body),
 };
 
+/** Исход отзыва самошеринга — та же форма, что у отзыва кандидатом
+ *  (`CandidateRevocation` в `lib/public-api`): два текста плюс признак
+ *  недойденной вглубь цепочки. */
+export interface SelfShareRevocation {
+  shareId: string;
+  revokedAt: string;
+  copiesRevoked: number;
+  depthExhausted: boolean;
+  alsoDone: string;
+  doesNotUndo: string;
+}
+
 export const selfShareApi = {
   consentText: () => apiGet<{ version: string; text: string; [k: string]: unknown }>('/job-search/self-share/consent-text'),
   create: (sheetId: string, body: { cvVariantId: string; visibleClauseIds: string[]; edge: 'to_agency' | 'to_employer'; consentVersion?: string | null }) => apiPost<{ shareId: string; deepLink: string; expiresAt: string; edge: string }>(`/job-search/terms-sheets/${sheetId}/self-share`, body),
   list: (sheetId: string) => apiGet<any[]>(`/job-search/terms-sheets/${sheetId}/self-shares`),
-  revoke: (shareId: string) => apiPost<any>(`/job-search/self-shares/${shareId}/revoke`, {}),
+  // Пункт [the-outcome-reached-one-route-of-three] 2026-10-01: здесь был
+  // `apiPost<any>`, и из-за него исход отзыва нельзя было НАРИСОВАТЬ —
+  // поля, которые сервер считает, в типе отсутствовали, а экран результат
+  // выбрасывал. Тип повторяет форму, общую для всех трёх маршрутов
+  // отзыва.
+  revoke: (shareId: string) =>
+    apiPost<SelfShareRevocation>(`/job-search/self-shares/${shareId}/revoke`, {}),
   preview: (token: string) => apiGet<any>(`/candidate-shares/self/${token}/preview`),
   accept: (token: string, projectId: string) => apiPost<any>('/candidate-shares/accept', { token, projectId }),
 };

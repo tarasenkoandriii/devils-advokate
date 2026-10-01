@@ -6,11 +6,33 @@
 // Агрегация — живой запрос при каждом обращении (findMany за период +
 // вычисление в JS), НЕ предвычисленная rollup-таблица (§4.1 ТЗ,
 // буквально: "не строить инфраструктуру под нагрузку, которой пока
-// нет"). Вычисление в JS, а не raw SQL GROUP BY/percentile_cont — тот
-// же выбор тестируемости, что уже сделан в CalibrationService: сервис
-// проверяется той же fake-Prisma-моделью моков (findMany), без
-// зависимости от реальной Postgres в этой среде разработки, где сети
-// к живой базе нет вообще.
+// нет").
+//
+// ПОПРАВКА, Пункт [the-example-stopped-being-an-example] 2026-09-30.
+// Здесь стояло: «Вычисление в JS, а не raw SQL GROUP BY/percentile_cont
+// — тот же выбор тестируемости, что уже сделан в CalibrationService».
+// К этому дню обоснование ссылалось на образец, КОТОРЫЙ САМ ПЕРЕСТАЛ
+// так делать: сверка фоновых чтений исправила `CalibrationService`
+// ровно за это («было: findMany без потолка по всей таблице — все
+// подтверждённые исходы всех пользователей в память ради четырёх
+// средних»), и он считает в базе через `groupBy`. То есть пример,
+// приведённый в оправдание, к моменту чтения доказывал обратное.
+// Сама причина (тестируемость на фейке без живой Postgres) остаётся
+// верной, и вычисление остаётся в JS; неверной была ссылка.
+//
+// ВТОРАЯ ПОЛОВИНА, и она про поведение, а не про текст. Чтение шло БЕЗ
+// ПОТОЛКА, а `from`/`to` необязательны — значит по умолчанию экран
+// читал ВСЮ таблицу `AIJob`, которая растёт на строку с каждым
+// AI-вызовом каждого пользователя и не чистится никогда. Числа при
+// этом честные (итог по всему), но читается для них всё, и в пределе
+// это не «медленно», а 504 от платформы: агрегат считается внутри
+// функции с потолком 60 с.
+//
+// Поэтому: выборка ограничена и УПОРЯДОЧЕНА ПО СВЕЖЕСТИ, а ответ
+// НАЗЫВАЕТ, по скольким вызовам он посчитан. Это не «потолок,
+// спрятанный внутри итога» (Пункт [ceiling-hid-inside-a-total]): там
+// итог по срезу выдавали за итог по всему, здесь срез назван вслух и
+// печатается оператору.
 
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +40,26 @@ import { subsetOf } from '../common/enum-values';
 import { AIJobStatus } from '@prisma/client';
 
 const NULL_GROUP_KEY = '__NULL_TASK_TYPE__';
+
+/** Сколько последних задач берётся в сводку.
+ *
+ *  Не `DEFAULT_PAGE_LIMIT` (200): двести AI-вызовов — это часы работы
+ *  одного человека, и перцентиль по такой выборке говорит о вчерашнем
+ *  дне, а не о системе. Пять тысяч — запас на порядок больше, при
+ *  котором агрегат остаётся осмысленным, а чтение — ограниченным. */
+export const TELEMETRY_MAX_JOBS = 5_000;
+
+/** По скольким задачам посчитан агрегат. Отдаётся ВМЕСТЕ с числами: без
+ *  этого оператор не может отличить «столько и было» от «показаны
+ *  последние». */
+export interface TelemetryCoverage {
+  /** Сколько задач попало в расчёт. */
+  jobsCounted: number;
+  /** Потолок выборки. */
+  limit: number;
+  /** Есть ли за пределами выборки ещё задачи. */
+  truncated: boolean;
+}
 
 /** Конечные состояния задачи — те, по которым считается сводка. Пункт
  * [enum-copy-drifted] 2026-09-29: QUEUED и RUNNING сюда не входят
@@ -79,6 +121,27 @@ export class TelemetryService {
     }
   }
 
+  /** Последние задачи за период, с зондом на «есть ещё».
+   *
+   *  Зонд обязан быть съеден — правило `common/page.ts` («кто взял зонд,
+   *  тот обязан его съесть»): здесь он превращается в `truncated`, а в
+   *  расчёт уходит ровно потолок строк. */
+  private async recentJobs(from?: string, to?: string): Promise<{ jobs: JobRow[]; coverage: TelemetryCoverage }> {
+    const rows: JobRow[] = await this.prisma.aIJob.findMany({
+      where: this.buildDateFilter(from, to),
+      // Сверка [tie-is-random] поймала первую версию этой правки: у
+      // среза с потолком обязан быть ОПРЕДЕЛЁННЫЙ порядок, иначе
+      // «последние 5000» при совпавших метках времени — произвольные
+      // 5000. Задачи создаются пачками и попадают в одну миллисекунду
+      // легко, поэтому вторым ключом идёт уникальный столбец.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: TELEMETRY_MAX_JOBS + 1,
+    });
+    const truncated = rows.length > TELEMETRY_MAX_JOBS;
+    const jobs = truncated ? rows.slice(0, TELEMETRY_MAX_JOBS) : rows;
+    return { jobs, coverage: { jobsCounted: jobs.length, limit: TELEMETRY_MAX_JOBS, truncated } };
+  }
+
   private buildDateFilter(from?: string, to?: string) {
     const where: any = {};
     if (from || to) {
@@ -129,10 +192,10 @@ export class TelemetryService {
   }
 
   /** §4.1: сводка по каждому taskType за период. */
-  async getSummary(userId: string, from?: string, to?: string): Promise<TelemetrySummaryRow[]> {
+  async getSummary(userId: string, from?: string, to?: string): Promise<{ rows: TelemetrySummaryRow[]; coverage: TelemetryCoverage }> {
     await this.assertOperator(userId);
 
-    const jobs: JobRow[] = await this.prisma.aIJob.findMany({ where: this.buildDateFilter(from, to) });
+    const { jobs, coverage } = await this.recentJobs(from, to);
 
     const groups = new Map<string, JobRow[]>();
     for (const job of jobs) {
@@ -146,14 +209,18 @@ export class TelemetryService {
     for (const [key, bucketJobs] of groups) {
       rows.push({ taskType: key === NULL_GROUP_KEY ? null : key, ...this.aggregate(bucketJobs) });
     }
-    return rows;
+    return { rows, coverage };
   }
 
   /** §4.3: тот же агрегат, группировка по modelVersionId вместо taskType. */
-  async getByModel(userId: string, from?: string, to?: string): Promise<Array<Omit<TelemetrySummaryRow, 'taskType'> & { modelVersion: string }>> {
+  async getByModel(
+    userId: string,
+    from?: string,
+    to?: string,
+  ): Promise<{ rows: Array<Omit<TelemetrySummaryRow, 'taskType'> & { modelVersion: string }>; coverage: TelemetryCoverage }> {
     await this.assertOperator(userId);
 
-    const jobs: JobRow[] = await this.prisma.aIJob.findMany({ where: this.buildDateFilter(from, to) });
+    const { jobs, coverage } = await this.recentJobs(from, to);
     const modelVersionIds = [...new Set(jobs.map((j) => j.modelVersionId))];
     const versions = await this.prisma.aIModelVersion.findMany({ where: { id: { in: modelVersionIds } } });
     const versionById = new Map<string, string>(versions.map((v: any) => [v.id as string, v.version as string]));
@@ -169,7 +236,7 @@ export class TelemetryService {
     for (const [modelVersionId, bucketJobs] of groups) {
       rows.push({ modelVersion: versionById.get(modelVersionId) ?? modelVersionId, ...this.aggregate(bucketJobs) });
     }
-    return rows;
+    return { rows, coverage };
   }
 
   /** §4.2: последние N вызовов конкретной фичи, с деталями провалов. */

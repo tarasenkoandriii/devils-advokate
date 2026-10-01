@@ -20,7 +20,7 @@
 //   • личность автора пересланного сообщения не доезжает даже сюда (см.
 //     telegram-update.ts).
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ProjectMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecretsService } from '../secrets/secrets.service';
@@ -29,6 +29,7 @@ import { sendTelegramMessage, TelegramSendError } from '../common/telegram-bot-c
 import { buildStartDeepLink } from '../common/telegram-deep-link';
 import { publicApiBaseUrl } from '../common/public-base-url';
 import { MIN_FORWARD_TEXT_CHARS, ParsedUpdate, parseUpdate, TelegramUpdate } from './telegram-update';
+import { telegramRefusalHint, telegramSecretProblem } from './webhook-secret-format';
 
 export const BOT_TOKEN_REF = 'TELEGRAM_BOT_TOKEN';
 export const TELEGRAM_WEBHOOK_SECRET_REF = 'TELEGRAM_WEBHOOK_SECRET';
@@ -168,9 +169,21 @@ export class TelegramBotService {
   /** Регистрация вебхука у Telegram — операторская команда, а не автозапуск:
    * адрес зависит от окружения, и переустанавливать его при каждом старте
    * инстанса значит менять прод из превью-деплоя. */
-  async registerWebhook(): Promise<{ url: string; ok: boolean; description?: string }> {
+  async registerWebhook(): Promise<{ url: string; ok: boolean; description?: string; hint?: string }> {
     const token = await this.secrets.resolve(BOT_TOKEN_REF);
     const secret = await this.secrets.resolve(TELEGRAM_WEBHOOK_SECRET_REF);
+    // Пункт [the-provider-had-rules-nobody-wrote-down] 2026-10-01:
+    // формат проверяется ДО обращения к провайдеру. Иначе владелец
+    // узнаёт об алфавите `secret_token` из английской строки Telegram
+    // («secret token contains illegal characters») — после того, как
+    // выставил переменную, сделал редеплой и выполнил команду.
+    const problem = telegramSecretProblem(secret);
+    if (problem) {
+      throw new BadRequestException(
+        `${TELEGRAM_WEBHOOK_SECRET_REF} не подходит для Telegram — ${problem.message} ` +
+          'Вебхук НЕ зарегистрирован: значение у нас и у Telegram осталось прежним.',
+      );
+    }
     const url = `${publicApiBaseUrl()}${TELEGRAM_WEBHOOK_PATH}`;
     const response = await fetch(`${TELEGRAM_API_HOST}/bot${token}/setWebhook`, {
       method: 'POST',
@@ -185,7 +198,14 @@ export class TelegramBotService {
       }),
     });
     const data = (await response.json().catch(() => ({}))) as { ok?: boolean; description?: string };
-    return { url, ok: data.ok === true, description: data.description };
+    const ok = data.ok === true;
+    // Отказ провайдера не отдаётся пересказом чужой строки: к нему
+    // прикладывается приписка о том, ЧЬЁ наше значение Telegram
+    // отверг. Обоснование — в шапке `webhook-secret-format.ts`,
+    // вторая половина пункта.
+    return ok
+      ? { url, ok, description: data.description }
+      : { url, ok, description: data.description, hint: telegramRefusalHint(data.description) };
   }
 
   async webhookInfo(): Promise<Record<string, unknown>> {

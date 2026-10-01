@@ -24,6 +24,7 @@ import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeLanguageCode } from '../common/ai-response-language';
 import { blockedNotice } from './moderation-notice';
+import { isDevAuthAllowed } from '../admin-auth/dev-login';
 import {
   validateTelegramInitData,
   TelegramInitDataInvalidError,
@@ -147,8 +148,35 @@ export class TelegramAuthGuard implements CanActivate {
    * Telegram ID и было видно в БД, что запись тестовая).
    */
   private async tryDevBypass(request: AuthenticatedRequest): Promise<{ id: string; isRestricted: boolean; isBlocked: boolean; restrictedNote: string | null; restrictedAt: Date | null; blockedNote: string | null; blockedAt: Date | null } | null> {
-    const allowDevAuth = this.config.get<string>('ALLOW_DEV_AUTH') === 'true';
-    if (!allowDevAuth) return null;
+    // Пункт [one-fuse-where-the-neighbour-had-two] 2026-10-01.
+    //
+    // ЗДЕСЬ БЫЛО ОДНО УСЛОВИЕ: `ALLOW_DEV_AUTH === 'true'`. У соседа —
+    // admin dev-входа — их ДВА, и `admin-auth/dev-login.ts` прямо
+    // объясняет почему: «даже если ALLOW_DEV_AUTH случайно утечёт в
+    // продовое окружение (скопировали .env, забыли переменную в
+    // Vercel-проекте), на проде NODE_ENV=production выставляется
+    // платформой автоматически, и вход останется закрытым». Тот же файл
+    // называл расхождение историческим — «в отличие от
+    // TelegramAuthGuard, где исторически проверяется только
+    // ALLOW_DEV_AUTH».
+    //
+    // ПОЧЕМУ ЭТО НЕ МЕЛОЧЬ. Второй предохранитель стоял у входа с
+    // правами оператора, где последствия виднее, и НЕ стоял у входа
+    // пользователя — а этим guard'ом закрыты 540 маршрутов из 705,
+    // то есть все записи о проектах, людях и разговорах. Заголовок
+    // `X-Dev-User-Id: 42` при утёкшей переменной аутентифицирует как
+    // `telegramId=dev-42` вообще без подписи Telegram. Одна ошибка
+    // конфигурации не должна открывать продукт — здесь она открывала
+    // больше, чем у соседа, которого защитили первым.
+    //
+    // Проверка берётся готовой функцией, а не повторяется условием:
+    // три копии одного флага — ровно тот способ, которым он и
+    // разъезжается (это и сказано в шапке `dev-login.ts`).
+    const devAuthAllowed = isDevAuthAllowed({
+      ALLOW_DEV_AUTH: this.config.get<string>('ALLOW_DEV_AUTH'),
+      NODE_ENV: this.config.get<string>('NODE_ENV'),
+    });
+    if (!devAuthAllowed) return null;
 
     const devUserId = request.headers['x-dev-user-id'];
     if (!devUserId || Array.isArray(devUserId)) return null;

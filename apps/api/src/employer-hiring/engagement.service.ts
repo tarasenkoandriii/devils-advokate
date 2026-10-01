@@ -20,6 +20,8 @@ import { termIsCurrent } from '../common/term-validity';
 import { ClientBriefOrigin, EngagementStatus, ProjectMode, RecruitingTeamType } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { appendPostingReviewComment } from '../vacancy-posting/posting-review-comments';
+import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { assertInterviewPoolProjectAccess } from '../interview-pool/interview-pool-access';
 import { assertProjectNotFrozen, assertCounterpartyProjectNotFrozen } from '../project-freeze/assert-not-frozen';
@@ -231,8 +233,35 @@ export class EngagementService {
       create: { postingId: revision.postingId, revisionId: revision.id, token, expiresAt: engagement.expiresAt, comments: [] },
       update: { revisionId: revision.id },
     });
-    const comments = [...(((share.comments as unknown) as Array<{ at: string; text: string }>) ?? []), { at: new Date().toISOString(), text: dto.text.trim().slice(0, 2000), from: 'employer' }];
-    return this.prisma.postingReviewShare.update({ where: { id: share.id }, data: { comments: comments as never } });
+    // Пункт [the-atomic-fix-stayed-on-one-path] 2026-10-01.
+    //
+    // ЗДЕСЬ БЫЛО чтение JSON-колонки, склейка в памяти и запись целиком —
+    // то самое, что для ПУБЛИЧНОГО пути к той же колонке исправили
+    // Пунктом [two-comments-one-survived] 2026-09-30. Два комментария
+    // работодателя, отправленные одновременно, затирали друг друга:
+    // побеждал последний, первый исчезал без отказа и без строки в логе.
+    // Одновременность реальная — доступ к engagement есть у любого
+    // участника команды работодателя, то есть у двух людей или у одного
+    // в двух вкладках.
+    //
+    // И потолка `comments-per-posting-review` на этом пути не было
+    // вообще: та же колонка с внутренней стороны могла расти без предела.
+    //
+    // Теперь оператор один и общий — обоснование в шапке
+    // `posting-review-comments.ts`.
+    const count = await appendPostingReviewComment(this.prisma, share.id, { text: dto.text, from: 'employer' });
+    if (count === null) {
+      // Потолок один на оба пути: колонка одна. Отказ берётся из реестра
+      // публичной записи, чтобы работодатель и заказчик читали одну и ту
+      // же формулировку предела, а не две разных.
+      await assertUnderPublicWriteLimit('comments-per-posting-review', async () => {
+        const fresh = await this.prisma.postingReviewShare.findUnique({ where: { id: share.id }, select: { comments: true } });
+        return (((fresh?.comments as unknown) as Array<unknown>) ?? []).length;
+      });
+      // Потолок не достигнут, а строки нет — её удалили между запросами.
+      throw new NotFoundException(`PostingReviewShare ${share.id} not found`);
+    }
+    return this.prisma.postingReviewShare.findUniqueOrThrow({ where: { id: share.id } });
   }
 
   /** Текст вакансии агентства, видимый работодателю по engagement (без ComplianceFlag). */

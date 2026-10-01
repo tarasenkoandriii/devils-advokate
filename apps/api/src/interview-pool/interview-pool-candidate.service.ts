@@ -18,6 +18,7 @@ import { AuditLogService } from '../audit-log/audit-log.service';
 import { EmployerDossierService } from '../employer-dossier/employer-dossier.service';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
 import { revokeConsentCascade, CONSENT_REVOKED_MESSAGE } from './consent-revocation';
+import { CANDIDATE_REVOCATION_EFFECTS, revocationAlsoDone, revocationDoesNotUndo } from './revocation-report';
 import { buildStartDeepLink } from '../common/telegram-deep-link';
 
 const SHARE_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // §4.6 ТЗ: "за замовчуванням 72 години"
@@ -106,6 +107,33 @@ export class InterviewPoolCandidateService {
       copiesRevoked: Math.max(0, cascade.profilesRevoked - 1),
       depthExhausted: cascade.depthExhausted,
       message: CONSENT_REVOKED_MESSAGE,
+      // Пункт [the-outcome-reached-one-route-of-three] 2026-10-01.
+      //
+      // НАЙДЕННОЕ. Пункт [the-sentence-did-not-look-at-the-fact]
+      // 2026-09-25 построил фразу ИЗ ИСХОДА («дошли не до конца — сказано
+      // это, и сказано, что делать дальше») — и доехала она до ОДНОГО
+      // маршрута отзыва из трёх. Здесь отдавалась ФИКСИРОВАННАЯ фраза
+      // плюс сырые числа: при исчерпанной глубине продукт говорил
+      // «копии помечены отозванными тоже», не глядя на то, что обход
+      // остановился. Это та самая неправда, которую тот Пункт назвал
+      // самой дорогой из возможных, — она просто осталась на двух
+      // маршрутах.
+      //
+      // Текст строится теми же функциями, что на закрытом маршруте:
+      // разъехаться формулировками значило бы завести ту же беду заново.
+      alsoDone: revocationAlsoDone({
+        sharesRevoked: cascade.sharesRevoked,
+        copiesRevoked: Math.max(0, cascade.profilesRevoked - 1),
+        depthExhausted: cascade.depthExhausted,
+      }),
+      doesNotUndo: revocationDoesNotUndo(
+        {
+          sharesRevoked: cascade.sharesRevoked,
+          copiesRevoked: Math.max(0, cascade.profilesRevoked - 1),
+          depthExhausted: cascade.depthExhausted,
+        },
+        CANDIDATE_REVOCATION_EFFECTS.doesNotUndo,
+      ),
     };
   }
 
@@ -379,18 +407,59 @@ export class InterviewPoolCandidateService {
     if (!share.sourceCandidate) {
       throw new BadRequestException('Это ссылка соискателя — принимается через /candidate-shares/accept');
     }
-    const newProfile = await this.prisma.candidateProfile.create({
-      data: {
-        ownerUserId: userId,
-        displayName: share.sourceCandidate.displayName,
-        contactInfo: share.sourceCandidate.contactInfo,
-        resumeText: share.sourceCandidate.resumeText,
-      },
-    });
-
-    await this.prisma.candidateShare.update({
-      where: { id: shareId },
-      data: { acceptedByUserId: userId, acceptedAt: new Date(), createdCandidateProfileId: newProfile.id },
+    // Пункт [two-profiles-one-consent] 2026-10-01.
+    //
+    // НАЙДЕННОЕ. Проверка `share.acceptedAt` стоит выше, а создание
+    // профиля и отметка ссылки были ДВУМЯ отдельными вызовами без
+    // транзакции и без условной записи. Два POST с одним токеном
+    // (двойное нажатие, повтор клиента) оба видели `acceptedAt === null`,
+    // оба создавали профиль, оба штамповали ссылку — а
+    // `createdCandidateProfileId` сохранял ТОЛЬКО ПОБЕДИТЕЛЯ.
+    //
+    // ПОЧЕМУ ЭТО ХУЖЕ ЛИШНЕЙ СТРОКИ В БАЗЕ. Обход отзыва согласия
+    // (`consent-revocation.ts`) идёт по цепочке ИМЕННО через
+    // `createdCandidateProfileId`. Второй профиль из этой цепочки
+    // выпадал — то есть живая копия персональных данных человека
+    // переживала отзыв согласия, который продукт обещает довести до
+    // всех копий. Самая дорогая порода неправды в этом продукте.
+    //
+    // Соседний путь — самошеринг соискателя — был завёрнут в
+    // транзакцию Сверкой «половины операции» 2026-09-04; этот остался.
+    // «Правило было, просто не везде» в чистом виде.
+    //
+    // ЧТО СДЕЛАНО. Забор ссылки УСЛОВНОЙ записью (`updateMany` с
+    // `acceptedAt: null`) внутри транзакции: Postgres пропускает ровно
+    // один запрос, второй видит ноль обновлённых строк и получает тот же
+    // отказ, что и при последовательном повторе. Профиль создаётся в той
+    // же транзакции, поэтому «ссылка сожжена, а профиля нет» тоже
+    // невозможно.
+    //
+    // ЧЕГО НЕ СДЕЛАНО. Уникального индекса на
+    // `CandidateShare.createdCandidateProfileId` не добавлено: он
+    // защитил бы от этого же на уровне схемы, но потребовал бы миграции
+    // и решения, что делать с уже существующими дублями, если они есть.
+    // Названо здесь, чтобы следующий читатель не считал это закрытым.
+    const newProfile = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.candidateShare.updateMany({
+        where: { id: shareId, acceptedAt: null },
+        data: { acceptedByUserId: userId, acceptedAt: new Date() },
+      });
+      if (claimed.count === 0) {
+        throw new BadRequestException('Эта ссылка уже была принята раньше');
+      }
+      const created = await tx.candidateProfile.create({
+        data: {
+          ownerUserId: userId,
+          displayName: share.sourceCandidate!.displayName,
+          contactInfo: share.sourceCandidate!.contactInfo,
+          resumeText: share.sourceCandidate!.resumeText,
+        },
+      });
+      await tx.candidateShare.update({
+        where: { id: shareId },
+        data: { createdCandidateProfileId: created.id },
+      });
+      return created;
     });
 
     return newProfile;

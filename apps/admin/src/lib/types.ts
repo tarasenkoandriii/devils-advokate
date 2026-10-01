@@ -172,6 +172,20 @@ export interface CalibrationStatus {
 
 // ── Telemetry (devils-advocate-telemetry-tz.md §4) ──
 
+/** По скольким задачам посчитан агрегат телеметрии.
+ *
+ *  Пункт [the-example-stopped-being-an-example] 2026-09-30: чтение под
+ *  сводкой шло без потолка по всей таблице AIJob, которая растёт на
+ *  строку с каждым AI-вызовом. Теперь выборка ограничена и упорядочена
+ *  по свежести — а значит ЭКРАН ОБЯЗАН СКАЗАТЬ, по скольким вызовам
+ *  посчитаны числа: иначе оператор не отличит «столько и было» от
+ *  «посчитано по последним пяти тысячам». */
+export interface TelemetryCoverage {
+  jobsCounted: number;
+  limit: number;
+  truncated: boolean;
+}
+
 export interface TelemetrySummaryRow {
   taskType: string | null;
   totalCalls: number;

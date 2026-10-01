@@ -17,6 +17,7 @@
 // он остаётся с отметкой, и там же видно, почему по нему ничего не
 // генерируется.
 
+import { MAX_COPY_CHAIN_DEPTH } from './revocation-report';
 import { ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -118,7 +119,12 @@ export const CONSENT_REVOKED_ROW_NOTE =
 
 /** Сколько уровней «копия копии» проходится. Десять — заведомо больше
  * любой реальной цепочки передач, и при этом конечно. */
-export const MAX_COPY_CHAIN_DEPTH = 10;
+// Пункт [the-outcome-reached-one-route-of-three] 2026-10-01: сама
+// константа переехала в `revocation-report.ts` — файл текстов о
+// последствиях отзыва обязан быть ЧИСТЫМ (без Prisma), иначе правило
+// формулировки нельзя проверить вызовом. Имя реэкспортируется, чтобы
+// существующие вызывающие не менялись.
+export { MAX_COPY_CHAIN_DEPTH } from './revocation-report';
 
 export interface ConsentRevocationCascade {
   /** Профили, которым проставлен `consentRevokedAt` (включая исходный). */

@@ -12,9 +12,9 @@
 // задачи, созданные до этой правки, читаются как есть — идентификатор
 // без префикса означает AssemblyAI. Миграции не нужно, откат не ломает
 // висящие задачи.
-import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, HttpException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { SecretsService } from '../secrets/secrets.service';
-import { resolveSttWebhookSecret } from '../common/webhook/stt-webhook.guard';
+import { resolveSttWebhookSecret, sttSecretProblem } from '../common/webhook/stt-webhook.guard';
 import type { ParsedTranscript } from '../conversations/transcription.service';
 import { AssemblyAiSttProvider } from './assemblyai-stt.provider';
 import { ElevenLabsSttProvider } from './elevenlabs-stt.provider';
@@ -194,6 +194,32 @@ export class SttService {
         }
         return { audioUrl, provider: name };
       } catch (err) {
+        // Пункт [our-own-refusal-wore-a-provider-costume] 2026-10-01.
+        //
+        // НАЙДЕННОЕ. Предел размера проверяется НА ЧТЕНИИ — это
+        // закрыл Пункт [the-stream-had-no-bottom], и это правильно. Но
+        // `BadRequestException` бросался ВНУТРИ этого же `try`, а здесь
+        // не было возврата исключения наружу: наш собственный,
+        // осознанный отказ попадал в `failures[]` наравне с отказом
+        // провайдера. Дальше цикл шёл к следующему провайдеру, где
+        // `audio.getReader()` звался на уже заблокированном потоке и
+        // добавлял второй, англоязычный `TypeError`. Человек на
+        // загрузку 25 МБ получал 503 «Не удалось передать аудио ни
+        // одному провайдеру распознавания» — то есть ОТКАЗ ПРОВАЙДЕРОВ,
+        // — тогда как провайдеры тут ни при чём и дело в нашем же
+        // названном пределе. Совет «попробуйте позже» в такой ситуации
+        // неверен: позже будет то же самое.
+        //
+        // ЧТО СДЕЛАНО. Наш HTTP-отказ уходит наружу как есть. Это
+        // касается любого `HttpException`, а не только предела
+        // размера: всё, что мы решили сказать человеку сами, сказано
+        // им, а не пересказано как отказ третьей стороны.
+        //
+        // ЧЕГО НЕ СДЕЛАНО. Второй провайдер по-прежнему не получит
+        // байты, если первый уже вычитал поток, — поток одноразовый, и
+        // буфер делается один раз на все попытки. Это не чинится здесь
+        // и названо, чтобы не выглядело закрытым.
+        if (err instanceof HttpException) throw err;
         failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -225,6 +251,19 @@ export class SttService {
       throw new ServiceUnavailableException(
         'Секрет вебхука распознавания не настроен (STT_WEBHOOK_SECRET / ASSEMBLYAI_WEBHOOK_SECRET) — ' +
           'задачу не отправляем: её результат всё равно не прошёл бы проверку и потерялся бы молча',
+      );
+    }
+    // Пункт [the-secret-travelled-as-a-header] 2026-10-01: та же проверка
+    // формата, что на пути AssemblyAI, — здесь путь Soniox, и секрет
+    // уезжает тем же способом (значением HTTP-заголовка), значит ломается
+    // так же. Отказ ДО отправки: иначе расшифровка делается, оплачивается
+    // и отбрасывается на обратном пути, а разговор остаётся в
+    // TRANSCRIBING. Обоснование — в шапке `stt-webhook.guard.ts`.
+    const secretProblem = sttSecretProblem(webhookSecret);
+    if (secretProblem) {
+      throw new ServiceUnavailableException(
+        `Секрет вебхука распознавания не подходит для передачи провайдеру — ${secretProblem} ` +
+          'Задача не отправлена: иначе она была бы выполнена, оплачена и отброшена на обратном пути.',
       );
     }
 

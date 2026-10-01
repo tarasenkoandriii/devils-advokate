@@ -1115,7 +1115,20 @@ export class AIRouterService {
         const outcome =
           err instanceof GeminiApiError && !err.isRetryable
             ? await this.failJob(jobId, failureText('provider-rejected', `запрос отвергнут (HTTP ${err.httpStatus}): ${err.body.slice(0, 1500)}`), 'provider-rejected')
-            : await this.failOrRequeue(jobId, payload, `постановка задачи провайдеру не удалась: ${err}`);
+            // Пункт [the-provider-spoke-english-to-the-person] 2026-10-01:
+            // здесь была строка, а не пара. `failJob` при
+            // `operator === person` НЕ пишет в лог и кладёт тот же текст
+            // в `partialResult` — то есть сырое `${err}` (вместе с телом
+            // ответа провайдера) уезжало ЧЕЛОВЕКУ на экран, а оператор не
+            // получал ничего. Все соседние ветки этого же разбора давно
+            // зовут `failureText`; расхождение внутри одного switch и
+            // было подсказкой.
+            : await this.failOrRequeue(
+                jobId,
+                payload,
+                failureText('provider-unreachable', `постановка задачи провайдеру не удалась: ${err}`),
+                'provider-unreachable',
+              );
         await this.notifyCompletion(job.taskType, outcome);
       }
     }
@@ -1270,10 +1283,17 @@ export class AIRouterService {
           }
           case 'failed':
           case 'cancelled': {
+            // Пункт [the-provider-spoke-english-to-the-person] 2026-10-01:
+            // `result.error` — англоязычный `error.message` провайдера.
+            // Он уходил человеку в `partialResult`, который читают экраны
+            // (`autoAnalysisError`, `paralinguisticsError`), и при этом
+            // НЕ попадал в лог оператора. Теперь наоборот: человеку —
+            // наш текст, оператору — подробность провайдера.
             const outcome = await this.failOrRequeue(
               jobId,
               payload,
-              `провайдер завершил задачу со статусом ${result.status}: ${result.error ?? 'без деталей'}`,
+              failureText('provider-failed', `провайдер завершил задачу со статусом ${result.status}: ${result.error ?? 'без деталей'}`),
+              'provider-failed',
             );
             if (outcome.kind === 'failed') failed++;
             await this.notifyCompletion(job.taskType, outcome);

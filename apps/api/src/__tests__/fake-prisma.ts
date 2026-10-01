@@ -129,11 +129,31 @@ export class FakePrisma {
       sql.includes('UPDATE posting_review_shares') &&
       sql.includes('jsonb_array_length') &&
       sql.includes("|| ");
-    if (!isCommentAppend) {
+    // Пункт [the-answer-was-typed-and-lost] 2026-10-01: второй известный
+    // фейку оператор — атомарное добавление ответа квиза. Учтён ЯВНО, по
+    // тому же правилу, что и первый: фейк, отвечающий на всё, проверяет
+    // ничего.
+    const isAnswerAppend =
+      sql.includes('UPDATE intake_sessions') &&
+      sql.includes('jsonb_array_length') &&
+      sql.includes("|| ");
+    if (!isCommentAppend && !isAnswerAppend) {
       throw new Error(
-        `FakePrisma.$queryRaw: этот фейк знает только атомарное добавление комментария к posting_review_shares. ` +
+        `FakePrisma.$queryRaw: этот фейк знает два оператора — атомарное добавление комментария к posting_review_shares ` +
+          `и атомарное добавление ответа к intake_sessions. ` +
           `Получен другой запрос — научите фейк ЯВНО, а не рассчитывайте на молчаливый пустой ответ:\n${sql}`,
       );
+    }
+    if (isAnswerAppend) {
+      const [entryJson, id] = values as [string, string];
+      const row = this.rows('intakeSession').find((r: any) => r.id === id) as any;
+      // Условие `status = 'IN_PROGRESS'` живёт в самом операторе —
+      // фейк обязан его воспроизводить, иначе спека на «сессия
+      // завершена» зеленела бы на действии, которого в бою не будет.
+      if (!row || row.status !== 'IN_PROGRESS') return [];
+      const existingAnswers = Array.isArray(row.answers) ? row.answers : [];
+      row.answers = [...existingAnswers, ...JSON.parse(entryJson)];
+      return [{ count: row.answers.length }];
     }
     const [entryJson, id, limit] = values as [string, string, number];
     const row = this.rows('postingReviewShare').find((r: any) => r.id === id) as any;

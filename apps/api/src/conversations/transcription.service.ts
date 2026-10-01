@@ -1,7 +1,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { SecretsService } from '../secrets/secrets.service';
-import { STT_WEBHOOK_HEADER, STT_WEBHOOK_SECRET_REF, resolveSttWebhookSecret } from '../common/webhook/stt-webhook.guard';
+import { STT_WEBHOOK_HEADER, STT_WEBHOOK_SECRET_REF, resolveSttWebhookSecret, sttSecretProblem } from '../common/webhook/stt-webhook.guard';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
 
 export interface AssemblyAiSubmitParams {
@@ -88,6 +88,19 @@ export class TranscriptionService {
     const secret = await resolveSttWebhookSecret(this.secrets);
     if (!secret) {
       throw new TranscriptionProviderError(`${STT_WEBHOOK_SECRET_REF} не настроен — транскрипция через вебхук невозможна`);
+    }
+    // Пункт [the-secret-travelled-as-a-header] 2026-10-01: формат
+    // проверяется ЗДЕСЬ, до отправки задачи, то есть до того, как
+    // провайдер посчитает и выставит счёт. Прежде испорченное значение
+    // уходило молча, расшифровка делалась и оплачивалась, а обратно не
+    // проходила guard — и разговор оставался в TRANSCRIBING навсегда.
+    // Обоснование целиком — в шапке `stt-webhook.guard.ts`.
+    const problem = sttSecretProblem(secret);
+    if (problem) {
+      throw new TranscriptionProviderError(
+        `${STT_WEBHOOK_SECRET_REF} не подходит для передачи провайдеру — ${problem} ` +
+          'Задача на расшифровку НЕ отправлена: иначе она была бы выполнена, оплачена и отброшена на обратном пути.',
+      );
     }
     return secret;
   }

@@ -25,7 +25,8 @@ import { BadGatewayException, BadRequestException, Injectable, NotFoundException
 import { EvidenceKind, ProjectMode, RecruitingTeamType, TermsClauseKind, TermsSide } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertUnderPublicWriteLimit, publicWriteLimit } from '../common/public-write-limits';
+import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
+import { appendPostingReviewComment } from './posting-review-comments';
 import { assertCounterpartyProjectNotFrozen } from '../project-freeze/assert-not-frozen';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
@@ -373,18 +374,13 @@ export class VacancyPostingService {
     // расходов. В условии SQL это пришлось бы читать как «меньше нуля»,
     // то есть запретить всё, поэтому ноль превращается в предел int4:
     // условие остаётся одним и тем же оператором, а смысл сохраняется.
-    const configured = publicWriteLimit('comments-per-posting-review').value;
-    const limit = configured === 0 ? 2_147_483_647 : configured;
-    const entry = JSON.stringify([{ at: new Date().toISOString(), text: text.trim().slice(0, 2000) }]);
-    const updated = await this.prisma.$queryRaw<Array<{ count: number }>>`
-      UPDATE posting_review_shares
-         SET comments = COALESCE(comments, '[]'::jsonb) || ${entry}::jsonb
-       WHERE id = ${share.id}
-         AND jsonb_array_length(COALESCE(comments, '[]'::jsonb)) < ${limit}
-      RETURNING jsonb_array_length(comments)::int AS count
-    `;
-    if (updated.length === 0) {
-      // Ноль строк = условие потолка не выполнилось. Отказ берётся из
+    // Пункт [the-atomic-fix-stayed-on-one-path] 2026-10-01: сам оператор
+    // переехал в `posting-review-comments.ts` — ту же колонку пишет
+    // второй путь (работодатель через engagement), и атомарным из двух
+    // был один. Обоснование атомарности целиком — в шапке того файла.
+    const count = await appendPostingReviewComment(this.prisma, share.id, { text });
+    if (count === null) {
+      // Потолок не дал добавить (или строки больше нет). Отказ берётся из
       // реестра, чтобы текст был один и тот же с остальными потолками
       // публичной записи; счёт читается заново, а не берётся из
       // прочитанного выше (он уже мог измениться).
@@ -399,7 +395,7 @@ export class VacancyPostingService {
       // есть строка исчезла между двумя запросами. Ссылка недействительна.
       throw new NotFoundException('Ссылка недействительна или просрочена');
     }
-    return { ok: true, comments: updated[0].count };
+    return { ok: true, comments: count };
   }
 
   // ── Внутреннее ──

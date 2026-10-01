@@ -32,10 +32,15 @@ export const LEGACY_ASSEMBLYAI_WEBHOOK_SECRET_REF = 'ASSEMBLYAI_WEBHOOK_SECRET';
 
 /** Секрет вебхуков распознавания: новое имя, при его отсутствии —
  *  историческое. Один источник для guard и для постановки задач. */
+export { STT_SECRET_ALLOWED, STT_SECRET_MIN, sttSecretProblem } from './stt-secret-format';
+
 export async function resolveSttWebhookSecret(secrets: SecretsService): Promise<string | null> {
-  const preferred = await secrets.resolve(STT_WEBHOOK_SECRET_REF).catch(() => null);
+  // trim: см. шапку выше. Пустая строка после обрезки — это «не
+  // настроено», а не «настроено пустым».
+  const preferred = (await secrets.resolve(STT_WEBHOOK_SECRET_REF).catch(() => null))?.trim();
   if (preferred) return preferred;
-  return secrets.resolve(LEGACY_ASSEMBLYAI_WEBHOOK_SECRET_REF).catch(() => null);
+  const legacy = (await secrets.resolve(LEGACY_ASSEMBLYAI_WEBHOOK_SECRET_REF).catch(() => null))?.trim();
+  return legacy || null;
 }
 
 @Injectable()

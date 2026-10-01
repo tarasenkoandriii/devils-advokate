@@ -86,7 +86,7 @@ describe('TelemetryService', () => {
 
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const to = new Date(now.getTime() + 1000).toISOString();
-    const rows = await service.getSummary('op1', from, to);
+    const { rows } = await service.getSummary('op1', from, to);
 
     const row = rows.find((r) => r.taskType === 'material-chat');
     expect(row).toBeDefined();
@@ -101,7 +101,7 @@ describe('TelemetryService', () => {
     prisma._seedJob({ taskType: 'material-chat', status: 'COMPLETED', completedAt: new Date() });
     const service = makeService(prisma);
 
-    const rows = await service.getSummary('op1');
+    const { rows } = await service.getSummary('op1');
 
     const nullRow = rows.find((r) => r.taskType === null);
     expect(nullRow).toBeDefined();
@@ -118,7 +118,7 @@ describe('TelemetryService', () => {
     prisma._seedJob({ taskType: 'x', retryCount: 0, status: 'COMPLETED', completedAt: new Date() });
     const service = makeService(prisma);
 
-    const rows = await service.getSummary('op1');
+    const { rows } = await service.getSummary('op1');
     const row = rows.find((r) => r.taskType === 'x');
 
     expect(row!.retryRate).toBeCloseTo(1 / 4, 5);
@@ -131,7 +131,7 @@ describe('TelemetryService', () => {
     prisma._seedJob({ taskType: 'y', status: 'RUNNING', completedAt: null });
     const service = makeService(prisma);
 
-    const rows = await service.getSummary('op1');
+    const { rows } = await service.getSummary('op1');
     const row = rows.find((r) => r.taskType === 'y');
 
     expect(row!.totalCalls).toBe(2);
@@ -177,7 +177,7 @@ describe('TelemetryService', () => {
     prisma._seedJob({ taskType: 'z', status: 'RUNNING', createdAt: new Date(base), completedAt: null });
     const service = makeService(prisma);
 
-    const rows = await service.getSummary('op1');
+    const { rows } = await service.getSummary('op1');
     const row = rows.find((r) => r.taskType === 'z');
 
     expect(row!.avgDurationMs).toBeCloseTo(2000, 5);
@@ -193,7 +193,7 @@ describe('TelemetryService', () => {
     prisma._seedJob({ modelVersionId: 'mv-claude', status: 'COMPLETED', completedAt: new Date() });
     const service = makeService(prisma);
 
-    const rows = await service.getByModel('op1');
+    const { rows } = await service.getByModel('op1');
 
     const gptRow = rows.find((r) => r.modelVersion === 'gpt-4.1');
     const claudeRow = rows.find((r) => r.modelVersion === 'claude-sonnet-5');
@@ -210,7 +210,7 @@ describe('TelemetryService', () => {
     prisma._seedJob({ taskType: 'w', inputScanStatus: 'PASSED', status: 'COMPLETED', completedAt: new Date() });
     const service = makeService(prisma);
 
-    const rows = await service.getSummary('op1');
+    const { rows } = await service.getSummary('op1');
     const row = rows.find((r) => r.taskType === 'w');
 
     expect(row!.inputBlockedCount).toBe(1);

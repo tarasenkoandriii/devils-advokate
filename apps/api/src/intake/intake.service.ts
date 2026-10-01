@@ -218,9 +218,55 @@ export class IntakeService {
     const pending = this.present(session).nextQuestion;
     answers.push({ question: pending, text: text.trim(), at: new Date().toISOString() });
     const cls = await this.classify(userId, answers, session.source);
+    // Пункт [the-answer-was-typed-and-lost] 2026-10-01.
+    //
+    // НАЙДЕННОЕ. Массив ответов читался выше, дополнялся в памяти и
+    // записывался ЦЕЛИКОМ — а между чтением и записью стои́т
+    // `await this.classify(...)`, то есть полный круг к AI-провайдеру,
+    // секунды. Два ответа, отправленных в этом окне (двойное нажатие,
+    // повтор на плохой связи, две вкладки — ровно тот список, которым
+    // этот же квиз описан в TODO.md), читали один и тот же массив и
+    // записывали его поверх друг друга: ОТВЕТ, КОТОРЫЙ ЧЕЛОВЕК НАПЕЧАТАЛ,
+    // исчезал без следа. Следом врал и счёт: `followUpsAsked` считается
+    // из `answers.length`.
+    //
+    // Это тот же класс, что [two-comments-one-survived] у JSON-колонки
+    // комментариев, и окно здесь ШИРЕ всех: не миллисекунды, а время
+    // ответа модели.
+    //
+    // ЧТО СДЕЛАНО. Добавление элемента — одним SQL-оператором с
+    // `jsonb ||`, под блокировкой строки. Условие `status` в том же
+    // операторе: сессия, завершённая соседним запросом, нового ответа не
+    // принимает (прежняя проверка `status` выше остаётся — она даёт
+    // человеку внятный отказ до вызова модели).
+    //
+    // ЧЕГО НЕ СДЕЛАНО. Разбор (`suggestedScenario`, `confidence`,
+    // `followUpQuestion`, `extracted`) по-прежнему пишется поверх:
+    // это НЕ накопление, а последнее мнение модели обо всей сессии, и
+    // «последний победил» здесь — правильный исход, а не потеря. Но он
+    // посчитан по массиву БЕЗ одновременного ответа, и такой разбор
+    // окажется на один ответ позади. Следующий ответ это исправит;
+    // довести до «пересчитать после атомарной записи» — отдельная
+    // работа, здесь она не сделана.
+    const entry = JSON.stringify([answers[answers.length - 1]]);
+    const appended = await this.prisma.$queryRaw<Array<{ count: number }>>`
+      UPDATE intake_sessions
+         SET answers = COALESCE(answers, '[]'::jsonb) || ${entry}::jsonb
+       WHERE id = ${session.id}
+         AND status = 'IN_PROGRESS'::"IntakeStatus"
+      RETURNING jsonb_array_length(answers)::int AS count
+    `;
+    if (appended.length === 0) {
+      // Ноль строк: сессию завершил соседний запрос между проверкой выше
+      // и этой записью. Отказ тот же, что и при проверке, — человеку
+      // разницы нет.
+      throw new BadRequestException('Сессия уже завершена');
+    }
+    // Разбор пишется отдельным, обычным обновлением: это не накопление,
+    // а последнее мнение модели обо всей сессии (см. объяснение выше).
     const updated = await this.prisma.intakeSession.update({
       where: { id: session.id },
-      data: { answers: answers as any, suggestedScenario: cls.scenario, confidence: cls.confidence, followUpQuestion: cls.followUpQuestion, extracted: cls.extracted as any },
+      data: { suggestedScenario: cls.scenario, confidence: cls.confidence, followUpQuestion: cls.followUpQuestion, extracted: cls.extracted as any },
     });
     return this.present(updated);
   }

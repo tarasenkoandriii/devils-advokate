@@ -28,7 +28,19 @@ import { CandidateRevocation, revokePreQuestionnaireConsent } from '../lib/publi
  * в проверке с готовым исходом. Тот же урок [render-guards], что и у
  * самого этого экрана: то, что нельзя нарисовать, проверяется чтением
  * исходника — то есть не проверяется. */
-export function CandidateRevocationOutcome({ result, revokedAt }: { result: CandidateRevocation | null; revokedAt: string | null }) {
+/** Пункт [the-outcome-reached-one-route-of-three] 2026-10-01: тип пропа
+ *  сужен до ТОГО, ЧТО КОМПОНЕНТ РИСУЕТ. Раньше требовался весь
+ *  `CandidateRevocation`, и из-за этого исход ДРУГИХ маршрутов отзыва
+ *  (у них свои поля) этим компонентом нарисовать было нельзя — а текст о
+ *  последствиях у всех трёх обязан быть один и тот же. `CandidateRevocation`
+ *  этому типу соответствует, так что прежние вызывающие не меняются. */
+export interface RevocationOutcomeView {
+  alsoDone: string;
+  doesNotUndo: string;
+  depthExhausted: boolean;
+}
+
+export function CandidateRevocationOutcome({ result, revokedAt }: { result: RevocationOutcomeView | null; revokedAt: string | null }) {
   return (
     <section className="domain-panel">
       {/* Пункт [the-sentence-did-not-look-at-the-fact] 2026-09-25: у

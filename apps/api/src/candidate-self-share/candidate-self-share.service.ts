@@ -23,6 +23,7 @@ import { shareIsUsable, termIsCurrent, TERM_OVER_MESSAGE } from '../common/term-
 import { CandidateConsentSource, ConsentType, ProjectMode, TermsSheetKind } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { CANDIDATE_REVOCATION_EFFECTS, revocationAlsoDone, revocationDoesNotUndo } from '../interview-pool/revocation-report';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { TermsSheetService } from '../terms-sheet/terms-sheet.service';
 import { assertInterviewPoolProjectAccess, TEAM_MODES } from '../interview-pool/interview-pool-access';
@@ -123,7 +124,26 @@ export class CandidateSelfShareService {
       cascade = await revokeConsentCascade(this.prisma, share.createdCandidateProfileId, now);
     }
     await this.audit.record({ actorId: userId, action: 'candidate_self_share.revoked', resource: 'CandidateShare', resourceId: share.id, after: { copiesRevoked: cascade.profilesRevoked, depthExhausted: cascade.depthExhausted } });
-    return { shareId: share.id, revokedAt: now, copiesRevoked: cascade.profilesRevoked, depthExhausted: cascade.depthExhausted };
+    // Пункт [the-outcome-reached-one-route-of-three] 2026-10-01: здесь
+    // отдавались ТОЛЬКО числа и НИ ОДНОГО слова человеку. Экран их
+    // выбрасывал (`run(() => selfShareApi.revoke(...), reload)`), и
+    // единственной обратной связью оставалось слово «отозвано» в строке
+    // списка. То есть на маршруте, где человек распоряжается СВОИМИ
+    // данными, продукт молча показывал «готово» в том числе тогда, когда
+    // цепочка передач оказалась длиннее, чем он проходит за раз.
+    const outcome = {
+      sharesRevoked: cascade.sharesRevoked,
+      copiesRevoked: cascade.profilesRevoked,
+      depthExhausted: cascade.depthExhausted,
+    };
+    return {
+      shareId: share.id,
+      revokedAt: now,
+      copiesRevoked: cascade.profilesRevoked,
+      depthExhausted: cascade.depthExhausted,
+      alsoDone: revocationAlsoDone(outcome),
+      doesNotUndo: revocationDoesNotUndo(outcome, CANDIDATE_REVOCATION_EFFECTS.doesNotUndo),
+    };
   }
 
   /** Публичное превью по токену — только то, что явно передано. */

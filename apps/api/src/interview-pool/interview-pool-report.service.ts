@@ -8,6 +8,7 @@ import { ClientReportType, CandidateStage } from '@prisma/client';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
 import { assertConsentActive, consentRevoked } from './consent-revocation';
 import { daysAgo } from '../common/server-time';
+import { hasPersonVerdict } from '../common/no-person-verdict';
 
 const CONCLUSION_TASK_TYPE = 'interview-pool-client-report-conclusion';
 
@@ -18,6 +19,11 @@ interface RawConclusion {
 function isValidConclusion(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
+    // Пункт [the-second-line-skipped-the-hiring-side] 2026-10-01: здесь
+    // проверялась только непустота строки, а строка эта — СВОБОДНЫЙ
+    // ВЫВОД ПО НАЗВАННОМУ ЧЕЛОВЕКУ, который читает решающий. Вторая
+    // линия та же, что у остальных разборов уровня человека.
+    if (hasPersonVerdict(text)) return false;
     return typeof parsed?.conclusion === 'string' && parsed.conclusion.trim().length > 0;
   } catch {
     return false;

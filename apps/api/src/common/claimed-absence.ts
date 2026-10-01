@@ -115,6 +115,22 @@ export function absenceCounts(doc: ClaimedAbsence['doc'], text: string): Map<str
 export const CLAIMED_ABSENCES: readonly ClaimedAbsence[] = [
   {
     doc: 'TODO.md',
+    anchor: 'the-example-stopped-being-an-example',
+    phrases: 1,
+    about: 'печать флага неполноты на экране: реестр растущих чтений проверяет её только у телеметрии, у остальных семи — нет',
+    state: 'держится',
+    probe: 'реестр растущих чтений проверяет печать флага только у телеметрии',
+  },
+  {
+    doc: 'README.md',
+    anchor: 'the-example-stopped-being-an-example',
+    phrases: 1,
+    about: 'то же самое, пересказанное читателю README',
+    state: 'держится',
+    probe: 'реестр растущих чтений проверяет печать флага только у телеметрии',
+  },
+  {
+    doc: 'TODO.md',
     anchor: 'voiceprint-promised-what-it-could-not-do',
     phrases: 1,
     about: 'присваивание состояния в обработчике TMA: свой раннер рисует разметку и клика не делает',

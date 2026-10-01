@@ -8,7 +8,7 @@
 // (К-10), письмо-отклик и пакет (К-14/К-19). Везде: «CV — только из ваших
 // слов», «правильных ответов нет», «рыночной зарплаты здесь нет».
 import { useEffect, useState } from 'react';
-import { Sheet, intakeApi, selfShareApi, sheetsApi } from '../../../lib/hiring/api';
+import { Sheet, SelfShareRevocation, intakeApi, selfShareApi, sheetsApi } from '../../../lib/hiring/api';
 import { domainApi } from '../../../lib/domains/api';
 import { AiErrorNotice } from '../AiErrorNotice';
 import { EntityForm } from '../EntityForm';
@@ -19,6 +19,7 @@ import { ShareLinkView } from '../InterviewPoolWorkspace';
 import { VoiceTextInput } from '../VoiceTextInput';
 import { haptic } from '../../../lib/telegram';
 import { TranslationCheckNote } from '../../TranslationCheckNote';
+import { CandidateRevocationOutcome } from '../../CandidateConsentControls';
 
 function useAction() {
   const [busy, setBusy] = useState(false);
@@ -143,6 +144,7 @@ function SelfShareTool({ sheet }: { sheet: Sheet }) {
   const [shares, setShares] = useState<any[] | null>(null);
   const [agreed, setAgreed] = useState(false);
   const [link, setLink] = useState<{ link: string; expiresAt: string } | null>(null);
+  const [revocation, setRevocation] = useState<SelfShareRevocation | null>(null);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [edge, setEdge] = useState<'to_agency' | 'to_employer'>('to_employer');
   const [variantId, setVariantId] = useState<string>(sheet.cvVariants.find((v) => v.reviewedAt)?.id ?? '');
@@ -186,6 +188,14 @@ function SelfShareTool({ sheet }: { sheet: Sheet }) {
           <button type="button" className="primary" disabled={busy || !agreed || !variantId} onClick={() => run(() => selfShareApi.create(sheet.id, { cvVariantId: variantId, visibleClauseIds: Object.keys(visible).filter((k) => visible[k]), edge, consentVersion: consent?.version ?? null }), (r) => { setLink({ link: r.deepLink, expiresAt: r.expiresAt }); reload(); })}>Создать ссылку для передачи</button>
         </>
       )}
+      {/* Пункт [the-outcome-reached-one-route-of-three] 2026-10-01: исход
+          отзыва РИСУЕТСЯ. Раньше результат запроса выбрасывался
+          (`run(..., reload)`), и единственной обратной связью было слово
+          «отозвано» в строке списка — то есть при исчерпанной глубине
+          человек читал «готово» там, где самые дальние копии остались
+          непомеченными. Компонент тот же, что у отзыва кандидатом: два
+          текста и отдельная строка про недойденную цепочку. */}
+      {revocation && <CandidateRevocationOutcome result={revocation} revokedAt={revocation.revokedAt} />}
       {shares && shares.length > 0 && (
         <>
           <h4>Мои передачи</h4>
@@ -193,7 +203,7 @@ function SelfShareTool({ sheet }: { sheet: Sheet }) {
             {shares.map((s: any) => (
               <li key={s.id}>
                 {s.edge === 'to_agency' || s.acceptedIntoMode === 'INTERVIEW_POOL' ? 'агентству' : 'работодателю'} · {new Date(s.createdAt).toLocaleDateString('ru-RU')} · {s.revokedAt ? 'отозвано' : s.acceptedAt ? 'принято' : 'ожидает'}
-                {!s.revokedAt && <> · <button type="button" className="dtp-link" disabled={busy} onClick={() => run(() => selfShareApi.revoke(s.id), reload)}>отозвать согласие</button></>}
+                {!s.revokedAt && <> · <button type="button" className="dtp-link" disabled={busy} onClick={() => run(() => selfShareApi.revoke(s.id), (r) => { setRevocation(r); reload(); })}>отозвать согласие</button></>}
               </li>
             ))}
           </ul>

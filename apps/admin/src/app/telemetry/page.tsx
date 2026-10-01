@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { getTelemetrySummary, getTelemetryByModel } from '../../lib/endpoints';
 import { TelemetryChart } from '../../components/TelemetryChart';
-import type { TelemetrySummaryRow, TelemetryByModelRow } from '../../lib/types';
+import type { TelemetryCoverage, TelemetrySummaryRow, TelemetryByModelRow } from '../../lib/types';
 
 function last24hIso() {
   return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -22,6 +22,12 @@ export default function TelemetryPage() {
   const [summary, setSummary] = useState<TelemetrySummaryRow[] | null>(null);
   const [byModel, setByModel] = useState<TelemetryByModelRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Пункт [the-example-stopped-being-an-example] 2026-09-30: числа
+  // приходят вместе с покрытием, и покрытие печатается. Итог по срезу
+  // под подписью итога по всему — дефект, который проект уже разбирал
+  // ([ceiling-hid-inside-a-total]); молча принять срез значило бы
+  // повторить его на том же экране.
+  const [coverage, setCoverage] = useState<TelemetryCoverage | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -29,8 +35,9 @@ export default function TelemetryPage() {
         getTelemetrySummary(applied.from, applied.to),
         getTelemetryByModel(applied.from, applied.to),
       ]);
-      setSummary(s);
-      setByModel(m);
+      setSummary(s.rows);
+      setByModel(m.rows);
+      setCoverage(s.coverage);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить телеметрию');
     }
@@ -76,6 +83,15 @@ export default function TelemetryPage() {
 
       <section style={{ marginBottom: 40 }}>
         <h2 style={{ fontSize: 15, marginBottom: 12 }}>По фиче (taskType)</h2>
+        {coverage && coverage.truncated && (
+          <p className="muted">
+            Посчитано по последним {coverage.jobsCounted} вызовам за выбранный период — за его пределами есть ещё.
+            Потолок выборки {coverage.limit}: сводка читает не всю таблицу задач, иначе она росла бы вместе с ней без конца.
+          </p>
+        )}
+        {coverage && !coverage.truncated && (
+          <p className="muted">Посчитано по всем {coverage.jobsCounted} вызовам за выбранный период.</p>
+        )}
         {!summary && <p className="muted">Загрузка…</p>}
         {summary && summary.length === 0 && <p className="muted">Нет вызовов за выбранный период.</p>}
         {summary && summary.length > 0 && (

@@ -48,7 +48,7 @@ import { BRIEF_COMPLIANCE_PROMPT } from '../client-brief/client-brief.service';
 import { buildStartDeepLink } from '../common/telegram-deep-link';
 import { takeSource, promptIntakeNote, AI_PROMPT_CHARS, type SourceIntake } from '../common/source-intake';
 import { dossierForProject, manyCompaniesMessage } from '../employer-dossier/single-dossier';
-import { revocationAlsoDone, revocationDoesNotUndo } from '../interview-pool/revocation-report';
+import { CANDIDATE_REVOCATION_EFFECTS, revocationAlsoDone, revocationDoesNotUndo } from '../interview-pool/revocation-report';
 
 export const SALARY_SCENARIOS_TASK_TYPE = 'terms-salary-scenarios';
 export const SHEET_LIVE_HINT_TASK_TYPE = 'terms-live-hint';
@@ -71,18 +71,12 @@ export const MERGE_DROPPED_SAMPLE = 5;
  * мог подтвердить как позиции по пунктам — это его рабочие записи, а не
  * наша запись о кандидате. Обещать обратное было бы неправдой, а
  * неправда в тексте о правах хуже отсутствия текста. */
-export const CANDIDATE_REVOCATION_EFFECTS = {
-  // Пункт [copy-outlived-consent] 2026-09-24: прежний текст обещал
-  // ровно то, что маршрут делал, — профиль и ссылки. А про КОПИИ, уже
-  // принятые другой стороной, не говорил ничего, и они действительно
-  // оставались в работе. Теперь копии гасятся, и текст это называет:
-  // для человека «ссылку закрыли» и «у того, кто её открыл, данные
-  // больше не в работе» — разные новости, и вторая ему важнее.
-  alsoDone:
-    'Ваш профиль у получателя помечен как отозванный, ссылки, которыми он мог передать его дальше, закрыты, и копии, которые уже успели принять по этим ссылкам, помечены отозванными тоже — по ним тоже ничего не формируется.',
-  doesNotUndo:
-    'Ответы, которые вы уже отправили, у получателя останутся: их прочитал человек, и часть могла попасть в его рабочие записи. Отзыв запрещает дальнейшую обработку, но не стирает прочитанное. Полное удаление — по запросу тому, кто прислал ссылку.',
-} as const;
+// Пункт [the-outcome-reached-one-route-of-three] 2026-10-01: сам реестр
+// текстов переехал к функциям, которые его достраивают исходом
+// (`interview-pool/revocation-report.ts`) — там он доступен всем трём
+// маршрутам отзыва, а не только этому. Имя реэкспортируется, чтобы
+// существующие вызывающие не менялись.
+export { CANDIDATE_REVOCATION_EFFECTS } from '../interview-pool/revocation-report';
 export const AI_NOTICE_VERSION = 'v1-2026-09-02';
 export const TEST_ASSIGNMENT_CATEGORY = 'тестовое задание';
 

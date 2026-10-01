@@ -4,6 +4,7 @@
 
 import { BadRequestException, Injectable, NotFoundException, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { hasPersonVerdict } from '../common/no-person-verdict';
 import { isMissingColumnError, warnMigrationLagOnce, migrationLagAt } from '../common/enum-migration-lag';
 import { numberedTranscript, resolveSegmentRef } from '../common/transcript-prompt';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
@@ -41,6 +42,16 @@ export function isValidAssessment(text: string): boolean {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.criteriaBreakdown)) return false;
+    // Пункт [the-second-line-skipped-the-hiring-side] 2026-10-01: ВТОРАЯ
+    // ЛИНИЯ запрета выводов о личности. В промпте выше запрет есть
+    // («НЕ вердикт "цей кандидат поганий"») — это первая линия, и до
+    // этого Пункта она была единственной у самого прямого разбора
+    // уровня человека в продукте: `attentionPoints` рисуются рекрутеру
+    // рядом с именем кандидата, в момент решения о нём. Проверяется
+    // ВЕСЬ текст ответа, а не отдельные поля: вывод о личности может
+    // оказаться и в `note` у критерия. Попадание — провал валидации,
+    // то есть повтор запроса, а не запись утверждения о человеке.
+    if (hasPersonVerdict(text)) return false;
     // Пункт [finding-without-substance-2] 2026-09-26: элементы этих двух
     // массивов не проверялись НИЧЕМ, кроме того что массив — массив.
     // Между тем followUpRequests становятся записями
