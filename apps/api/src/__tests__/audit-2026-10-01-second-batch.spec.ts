@@ -89,6 +89,17 @@ describe('[the-identifier-reshaped-the-url] чужой идентификато�
     expect(safeProviderId('21m00Tcm4TlvDq8ikWAM', VOICE_ID_ALLOWED, 'голос')).toBe('21m00Tcm4TlvDq8ikWAM');
   });
 
+  it('РЕГРЕССИЯ (прогон 19): дефис и подчёркивание в идентификаторе голоса ПРОХОДЯТ — алфавит провайдера, а не мой', () => {
+    // Первая редакция `VOICE_ID_ALLOWED` разрешала только буквы и цифры
+    // и тем самым отказывалась вызывать провайдера для голоса вида
+    // `voice-A`. Поймал это не этот файл, а существующий тест кэша
+    // голосов, упавший «ElevenLabs недоступен». Проверка стои́т здесь,
+    // рядом с правилом, чтобы следующее сужение алфавита падало в
+    // пункте, который его завёл.
+    expect(safeProviderId('voice-A', VOICE_ID_ALLOWED, 'голос')).toBe('voice-A');
+    expect(safeProviderId('my_voice_2', VOICE_ID_ALLOWED, 'голос')).toBe('my_voice_2');
+  });
+
   it('значение, переписывающее строку запроса, отвергается', () => {
     expect(() => safeProviderId('ChIJabc&key=stolen', PLACE_ID_ALLOWED, 'место')).toThrow(ProviderIdFormatError);
   });
