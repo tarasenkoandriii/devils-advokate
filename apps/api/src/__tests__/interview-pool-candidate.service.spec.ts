@@ -8,8 +8,6 @@ import { InterviewPoolCandidateService } from '../interview-pool/interview-pool-
 process.env.TELEGRAM_BOT_USERNAME = 'da_test_bot';
 
 function createFakePrisma() {
-  // `fake` объявлен заранее: `$transaction` передаёт обработчику сам фейк.
-  let fake: any;
   const candidates = new Map<string, any>();
   const statuses: any[] = [];
   const shares: any[] = [];
@@ -19,7 +17,10 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  fake = {
+  // `const`, а не `let`: присваивание здесь одно, а ссылка на `fake`
+  // внутри `$transaction` исполняется позже объявления — замыкание это
+  // переживает. ESLint (prefer-const) поймал первую редакцию.
+  const fake: any = {
     _seedCandidate(c: any) {
       const candidate = { id: nextId(), ...c };
       candidates.set(candidate.id, candidate);

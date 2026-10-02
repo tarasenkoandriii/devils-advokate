@@ -164,9 +164,17 @@ export class ParalinguisticsService implements OnModuleInit {
     // принимает, и человек получал «с вашими материалами всё в порядке»
     // — неправду, уводящую от работающего действия. Обоснование и
     // границы решения — в шапке `ai-router/provider-media-types.ts`.
-    const typeProblem = geminiMediaTypeProblem(conversation.audioBlobContentType);
-    if (typeProblem) {
-      throw new BadRequestException(typeProblem);
+    const mediaMimeType = conversation.audioBlobContentType?.trim();
+    const typeProblem = geminiMediaTypeProblem(mediaMimeType);
+    // Второе условие — для ТАЙПЧЕКА, а не для поведения: пустое значение
+    // `geminiMediaTypeProblem` отвергает само (проверено вызовом в спеке),
+    // но TypeScript этого вывести не может, а каст `as string` здесь был
+    // бы утверждением вместо проверки. Найдено первым живым прогоном CI:
+    // прежняя правка ставила `?? undefined` в медиа-блок и валила
+    // `tsc` на TS2322 — а вместе с ним шесть спек, которые этот файл
+    // импортируют.
+    if (typeProblem || !mediaMimeType) {
+      throw new BadRequestException(typeProblem ?? 'У записи не указан тип файла.');
     }
 
     const { jobId } = await this.aiRouter.enqueue({
@@ -183,8 +191,9 @@ export class ParalinguisticsService implements OnModuleInit {
             pathname: conversation.audioBlobPathname,
             // Умолчания здесь больше нет: тип проверен выше, и
             // придуманный нами `application/octet-stream` был ровно тем,
-            // что провайдер отвергал.
-            mimeType: conversation.audioBlobContentType ?? undefined,
+            // что провайдер отвергал. Значение берётся из проверенной
+            // переменной — тайпчек видит `string`, а не `string | null`.
+            mimeType: mediaMimeType,
           },
         },
         {
