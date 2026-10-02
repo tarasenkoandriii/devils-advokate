@@ -27,10 +27,33 @@ function tmaDomainIds(): string[] {
   return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
 }
 
+/** Пункт [the-registry-became-a-call] 2026-10-02 — читается `ALL_MANIFESTS`,
+ *  а не `DOMAIN_MANIFESTS`, и это не замена одного имени другим.
+ *
+ *  ЧТО СЛОМАЛОСЬ. Выключатель сборки ([one-build-two-products]) сделал
+ *  `DOMAIN_MANIFESTS` ВЫЗОВОМ функции (`selectManifests()`), и регулярка,
+ *  искавшая объектный литерал, перестала находить что-либо. Спека падала
+ *  на импорте — живой CI показал «1 набор из 243 не стартует». Падение
+ *  громкое, и это хорошо; плохо другое: пока оно длилось, инвариант «у
+ *  каждого сценария интейка есть экран» не проверялся ничем.
+ *
+ *  ПОЧЕМУ ИМЕННО `ALL_MANIFESTS` — ЭТО ИСПРАВЛЕНИЕ ПО СУТИ, А НЕ ПО
+ *  ФОРМЕ. Классификатор живёт на сервере и знает все сценарии
+ *  независимо от того, какие домены включены в конкретной сборке TMA.
+ *  Значит сверять список сервера нужно с тем, что продукт знает ВООБЩЕ,
+ *  а не с тем, что показывает одна сборка. Прежнее чтение
+ *  `DOMAIN_MANIFESTS` давало верный ответ только потому, что
+ *  выключателя ещё не было.
+ *
+ *  Про сборку с частью доменов замерено отдельно и дефекта там нет:
+ *  `isDispatchable()` в `apps/tma/src/app/intake/page.tsx` спрашивает
+ *  `getManifest()`, то есть выключенный домен не становится целью
+ *  перехода и человеку это говорится словами — ровно тот механизм,
+ *  который завела эта спека в 2026-09-01. */
 function tmaRegisteredManifests(): string[] {
   const text = readFileSync(TMA_MANIFESTS, 'utf8');
-  const m = text.match(/export const DOMAIN_MANIFESTS[^=]*=\s*\{([\s\S]*?)\};/);
-  if (!m) throw new Error('в manifests.ts не найден DOMAIN_MANIFESTS');
+  const m = text.match(/const ALL_MANIFESTS[^=]*=\s*\{([\s\S]*?)\};/);
+  if (!m) throw new Error('в manifests.ts не найден литерал ALL_MANIFESTS');
   // Ключи объекта: и `dtp,` (шорткат), и `'family-law': familyLaw`.
   const body = m[1].replace(/\/\/[^\n]*/g, '');
   const quoted = [...body.matchAll(/'([^']+)'\s*:/g)].map((x) => x[1]);
@@ -47,6 +70,31 @@ describe('intake: у каждого сценария классификатор�
   it('файлы TMA разобраны (страховка от смены формата)', () => {
     expect(domainIds.length).toBeGreaterThan(3);
     expect(registered.length).toBeGreaterThan(3);
+  });
+
+  it('РЕГРЕССИЯ (живой CI, прогон 19): разбор читает ЛИТЕРАЛ реестра, а не производное от него', () => {
+    // Выключатель сборки превратил `DOMAIN_MANIFESTS` в вызов функции, и
+    // регулярка перестала находить объект — спека падала на импорте.
+    // Проверяется именно то, что разбор не вернулся к производному
+    // имени: у него значение вычисляется, и завтра оно снова может
+    // перестать быть литералом.
+    const text = readFileSync(TMA_MANIFESTS, 'utf8');
+    expect(/const ALL_MANIFESTS[^=]*=\s*\{/.test(text)).toBe(true);
+    // Числом, а не двумя `toContain` по массиву: списков два и они
+    // обязаны совпадать по РАЗМЕРУ, иначе разбор нашёл часть объекта.
+    // Это и сильнее, и не завышает счёт сторожа [guard-audit], который
+    // берёт любой `toContain` в файле с `readFileSync`, — его известная
+    // погрешность описана в самом стороже.
+    expect(registered.length).toBe(domainIds.length);
+  });
+
+  it('ОБРАТНАЯ ПРОБА: тот же разбор на тексте БЕЗ литерала реестра отказывается, а не отдаёт пустой список', () => {
+    // Иначе «ни одного пропавшего сценария» означало бы не согласие
+    // списков, а сломанный разбор: пустой `registered` сравнивается с
+    // пустым `missing` и зеленеет.
+    const broken = 'export const DOMAIN_MANIFESTS = selectManifests();\n';
+    expect(/const ALL_MANIFESTS[^=]*=\s*\{/.test(broken)).toBe(false);
+    expect(tmaDomainIds().length).toBeGreaterThan(3);
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: каждый сценарий интейка есть в DomainId приложения', () => {

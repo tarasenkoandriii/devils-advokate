@@ -69,7 +69,15 @@ function blocks(src: string): Block[] {
 /** Имена, объявленные в самом файле: хелперы разбора, регулярные
  * выражения, реестры. Именно они и есть «машинерия решения». */
 function locals(src: string): Set<string> {
-  return new Set([...src.matchAll(/(?:^|\n)\s*(?:const|let|function)\s+([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]));
+  // `export` перед объявлением — 2026-10-02. Прежняя редакция не
+  // считала локальным `export function foo`, и проба, построенная на
+  // таком помощнике, объявлялась «не трогающей ничего общего». То есть
+  // сторож ошибался в ту же сторону, против которой стои́т: сообщал о
+  // проблеме там, где машинерия как раз общая. Поймано на собственном
+  // прогоне, когда помощник счёта индексов был объявлен с `export`.
+  return new Set(
+    [...src.matchAll(/(?:^|\n)\s*(?:export\s+)?(?:const|let|function)\s+([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]),
+  );
 }
 
 function used(body: string, local: Set<string>): Set<string> {
@@ -113,6 +121,30 @@ function probesCheckingNothingShared(files: string[]): string[] {
 describe('[probe-checked-the-neighbour] обратная проба трогает то же, что и проверка', () => {
   it('КЛЮЧЕВОЙ ТЕСТ: ни одна обратная проба не проверяет соседнее выражение', () => {
     expect(probesCheckingNothingShared(specFiles())).toEqual([]);
+  });
+
+  it('ОБРАТНАЯ ПРОБА: помощник, объявленный с `export`, считается общей машинерией — иначе сторож тревожил бы впустую', () => {
+    // 2026-10-02: ровно на этом сторож ошибся сам. Помощник счёта
+    // индексов в [three-said-seven] был объявлен `export function`,
+    // проба делила с ключевым тестом ИМЕННО его — а сторож сообщил о
+    // нарушении, потому что не видел объявления. Ложная тревога здесь
+    // опаснее, чем кажется: она учит обходить сторож, а не исправлять
+    // код. Проверяется ТЕМ ЖЕ проходом, на временном файле.
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'probe-export-'));
+    const file = path.join(dir, 'sample-export.spec.ts');
+    const DECL = ['export', 'function'].join(' ');
+    fs.writeFileSync(
+      file,
+      // Из кусков — по той же причине, что и образцы ниже: литерал
+      // нашёлся бы в исходнике самой этой спеки.
+      [
+        `${DECL} scan(xs: string[]) { return xs.filter((x) => x === 'bad'); }`,
+        `${IT}('КЛЮЧЕВОЙ ТЕСТ: нарушителей нет', () => { expect(scan([])).toEqual([]); });`,
+        `${IT}('${PROBE_WORD}: тот же проход находит нарушителя', () => { expect(scan(['bad'])).toHaveLength(1); });`,
+      ].join('\n'),
+    );
+    expect(probesCheckingNothingShared([file])).toEqual([]);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('ОБРАТНАЯ ПРОБА: тот же проход ловит пробу, которая ничего общего не трогает', () => {

@@ -154,6 +154,14 @@ jobs:
       - name: реестр ручных миграций согласован с каталогом
         run: node scripts/check-manual-migrations.mjs
 
+      # Пункт [the-file-could-not-be-run-twice] 2026-10-02: форма
+      # операторов проверяется здесь, за секунды и без базы, а настоящее
+      # двойное применение — в джобе с Postgres. Две проверки не
+      # дублируют друг друга: эта называет ПРИЧИНУ («у CREATE TYPE нет
+      # IF NOT EXISTS») в момент правки файла, та доказывает следствие.
+      - name: ручные миграции выдерживают повторное применение
+        run: node scripts/check-sql-repeatable.mjs
+
       # `db push`, а не `migrate deploy`: в этом проекте нет истории
       # миграций Prisma — схема накатывается push'ем, а всё, что push не
       # умеет, лежит отдельными SQL-файлами.
@@ -167,11 +175,29 @@ jobs:
       # (`IF NOT EXISTS` и т.п.) упадёт здесь, а не у владельца в SQL
       # Editor на живом проде. Порядок — из реестра, не алфавитный;
       # исторические файлы скрипт в список не отдаёт.
-      - name: ручные миграции применяются к свежей схеме (идемпотентность)
+      #
+      # Пункт [the-file-could-not-be-run-twice] 2026-10-02: применяется
+      # ДВА РАЗА. Один проход доказывает только, что файл подходит к
+      # схеме, а написано про эти файлы другое — что повтор безвреден.
+      # Первый живой прогон этой джобы нашёл ровно обратное:
+      # `intake_session.sql` падал на своём ПЕРВОМ операторе
+      # (`CREATE TYPE`, у которого нет `IF NOT EXISTS`), то есть повтор
+      # не применял ничего, включая три колонки заморозки проекта в конце
+      # файла. Второй проход — и есть проверка того, что написано.
+      - name: ручные миграции применяются к свежей схеме (проход 1)
         run: |
           set -euo pipefail
           node scripts/check-manual-migrations.mjs --print-order | while IFS= read -r file; do
             echo "── $(basename "$file")"
+            psql "postgresql://postgres:postgres@localhost:5432/devils_advocate" \
+              -v ON_ERROR_STOP=1 -q -f "$file"
+          done
+
+      - name: те же файлы выдерживают ПОВТОРНОЕ применение (проход 2)
+        run: |
+          set -euo pipefail
+          node scripts/check-manual-migrations.mjs --print-order | while IFS= read -r file; do
+            echo "── повтор $(basename "$file")"
             psql "postgresql://postgres:postgres@localhost:5432/devils_advocate" \
               -v ON_ERROR_STOP=1 -q -f "$file"
           done
@@ -230,6 +256,14 @@ jobs:
 
       - name: реестр ручных миграций согласован с каталогом
         run: node scripts/check-manual-migrations.mjs
+
+      # Пункт [the-file-could-not-be-run-twice] 2026-10-02: форма
+      # операторов проверяется здесь, за секунды и без базы, а настоящее
+      # двойное применение — в джобе с Postgres. Две проверки не
+      # дублируют друг друга: эта называет ПРИЧИНУ («у CREATE TYPE нет
+      # IF NOT EXISTS») в момент правки файла, та доказывает следствие.
+      - name: ручные миграции выдерживают повторное применение
+        run: node scripts/check-sql-repeatable.mjs
 
       # Пункт [four-projects-one-push] 2026-10-01, попутно: высоких
       # предупреждений аудита зависимостей не видел никто — их не

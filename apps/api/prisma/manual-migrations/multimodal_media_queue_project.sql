@@ -36,6 +36,14 @@ WHERE q."projectId" IS NULL;
 
 ALTER TABLE media_review_queues ALTER COLUMN "projectId" SET NOT NULL;
 
+-- Пункт [the-file-could-not-be-run-twice] 2026-10-02: у ограничений нет
+-- `IF NOT EXISTS`, и на втором применении файл падал здесь. Остальные
+-- операторы файла повтор переживали: `ADD COLUMN IF NOT EXISTS`,
+-- `CREATE INDEX IF NOT EXISTS`, а `INSERT … SELECT … WHERE "projectId"
+-- IS NULL` на второй раз просто ничего не выбирает. Весь файл в
+-- транзакции, поэтому падение откатывалось целиком — но ошибку
+-- оператор видел, а в документации написано, что повтор безвреден.
+ALTER TABLE media_review_queues DROP CONSTRAINT IF EXISTS "media_review_queues_projectId_fkey";
 ALTER TABLE media_review_queues
   ADD CONSTRAINT "media_review_queues_projectId_fkey"
   FOREIGN KEY ("projectId") REFERENCES projects(id) ON DELETE CASCADE ON UPDATE CASCADE;

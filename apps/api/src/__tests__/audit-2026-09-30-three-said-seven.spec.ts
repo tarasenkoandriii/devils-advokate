@@ -47,6 +47,18 @@ function cronFiles(): string[] {
   return readdirSync(MIGRATIONS).filter((f) => f.startsWith('pg_cron_') && f.endsWith('.sql'));
 }
 
+/** Настоящие `CREATE INDEX` — без комментариев и строковых литералов.
+ *
+ *  Снятие ровно такое же, как в `scripts/check-sql-repeatable.mjs`: сперва
+ *  блочные комментарии, потом строчные, потом литералы. */
+function createIndexCount(sqlSource: string): number {
+  const clean = sqlSource
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/'(?:[^']|'')*'/g, " 'LITERAL' ");
+  return (clean.match(/create\s+(?:unique\s+)?index/gi) ?? []).length;
+}
+
 /** Задания в файлах — по ВЫЗОВАМ, а не по упоминаниям.
  *
  * И это третий раз за сессию, когда разбор читает комментарий как код,
@@ -114,9 +126,18 @@ describe('[three-said-seven] числа в документах деплоя с�
     const schema = readFileSync(join(__dirname, '..', '..', 'prisma', 'schema.prisma'), 'utf8');
     const indexes = (schema.match(/@@index/g) ?? []).length;
     const sqlFiles = readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql'));
+    // Пункт [the-file-could-not-be-run-twice] 2026-10-02 — ЭТОТ СЧЁТ
+    // СЧИТАЛ КОММЕНТАРИИ. Одиннадцатый случай той же ловушки в проекте,
+    // и поймал его я сам, написав в `multimodal_media_queue_project.sql`
+    // объяснение, которое ЦИТИРУЕТ `CREATE INDEX IF NOT EXISTS`: счёт
+    // стал 131 против 130 в `VERCEL.md`, и красным оказался документ, а
+    // не код. Документ был прав: настоящих `CREATE INDEX` действительно
+    // 130. Иначе говоря, сверщик чисел и сам ловился на ровно той
+    // ошибке, ради которой он написан, — и обнаружилось это не раньше,
+    // чем кто-то процитировал оператор в прозе.
     let creates = 0;
     for (const f of sqlFiles) {
-      creates += (readFileSync(join(MIGRATIONS, f), 'utf8').match(/create\s+(unique\s+)?index/gi) ?? []).length;
+      creates += createIndexCount(readFileSync(join(MIGRATIONS, f), 'utf8'));
     }
     const vercel = doc('VERCEL.md');
     expect(vercel.includes(`в схеме ${indexes} \`@@index\``)).toBe(true);
@@ -125,6 +146,17 @@ describe('[three-said-seven] числа в документах деплоя с�
     const docker = doc('DOCKER.md');
     expect(sqlFiles.length).toBe(24);
     expect(docker.includes('**24: пять `pg_cron_*.sql` и девятнадцать прочих**')).toBe(true);
+  });
+
+  it('ОБРАТНАЯ ПРОБА: счёт индексов видит настоящий оператор и НЕ видит его же в комментарии и в строке', () => {
+    // Без этой пробы зелёное число означало бы не согласие документа с
+    // кодом, а то, что в комментариях пока никто не процитировал
+    // оператор. Именно так и было до 2026-10-02.
+    expect(createIndexCount('CREATE INDEX "a" ON "t"(x);')).toBe(1);
+    expect(createIndexCount('CREATE UNIQUE INDEX "a" ON "t"(x);')).toBe(1);
+    expect(createIndexCount('-- повтор переживает CREATE INDEX IF NOT EXISTS\n')).toBe(0);
+    expect(createIndexCount('/* было: CREATE INDEX "a" ON "t"(x); */\n')).toBe(0);
+    expect(createIndexCount("INSERT INTO notes (t) VALUES ('CREATE INDEX \"a\" ON \"t\"(x)');")).toBe(0);
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: чеклист песочницы и число операторских согласий', () => {
