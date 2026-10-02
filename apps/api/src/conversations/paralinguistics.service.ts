@@ -18,8 +18,9 @@
 // продукт уже провёл эту линию трижды (Пункт 40, health §2.1,
 // userConfirmedIntentionalFalsehood — только пользователем).
 
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { hasPersonVerdict } from '../common/no-person-verdict';
+import { geminiMediaTypeProblem } from '../ai-router/provider-media-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AsyncJobOutcome } from '../ai-router/ai-router.service';
 import { ConversationSignalType } from '@prisma/client';
@@ -157,6 +158,17 @@ export class ParalinguisticsService implements OnModuleInit {
       )
       .join('\n');
 
+    // Пункт [the-type-we-invented-ourselves] 2026-10-01: тип файла
+    // проверяется ДО постановки задачи. Прежде здесь уезжало НАШЕ
+    // умолчание `application/octet-stream`, которого провайдер не
+    // принимает, и человек получал «с вашими материалами всё в порядке»
+    // — неправду, уводящую от работающего действия. Обоснование и
+    // границы решения — в шапке `ai-router/provider-media-types.ts`.
+    const typeProblem = geminiMediaTypeProblem(conversation.audioBlobContentType);
+    if (typeProblem) {
+      throw new BadRequestException(typeProblem);
+    }
+
     const { jobId } = await this.aiRouter.enqueue({
       userId: conversation.project.ownerId,
       projectId: conversation.project.id,
@@ -169,7 +181,10 @@ export class ParalinguisticsService implements OnModuleInit {
           ref: {
             source: 'blob',
             pathname: conversation.audioBlobPathname,
-            mimeType: conversation.audioBlobContentType ?? 'application/octet-stream',
+            // Умолчания здесь больше нет: тип проверен выше, и
+            // придуманный нами `application/octet-stream` был ровно тем,
+            // что провайдер отвергал.
+            mimeType: conversation.audioBlobContentType ?? undefined,
           },
         },
         {

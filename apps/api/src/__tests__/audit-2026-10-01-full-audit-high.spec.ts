@@ -53,7 +53,7 @@ import {
   PERSON_VERDICT_NOT_GUARDED,
   hasPersonVerdict,
 } from '../common/no-person-verdict';
-import { sttSecretProblem, STT_SECRET_MIN } from '../common/webhook/stt-secret-format';
+import { sttSecretProblem } from '../common/webhook/stt-secret-format';
 import { revocationAlsoDone, revocationDoesNotUndo, CANDIDATE_REVOCATION_EFFECTS } from '../interview-pool/revocation-report';
 import { failureText } from '../ai-router/failure-reason';
 
@@ -351,10 +351,18 @@ describe('[the-secret-travelled-as-a-header] формат секрета веб�
     expect(sttSecretProblem('a'.repeat(64))).toBeNull();
   });
 
-  it('пустое и слишком короткое отвергаются по отдельным причинам', () => {
+  it('пустое отвергается своей причиной', () => {
     expect(sttSecretProblem('')).toBe('значение пустое');
-    const short = sttSecretProblem('abc') ?? '';
-    expect(short.includes(String(STT_SECRET_MIN))).toBe(true);
+  });
+
+  // Правка после первого живого прогона CI: минимума длины здесь БОЛЬШЕ
+  // НЕТ. Он уронил `stt-routing.spec.ts` на трёхсимвольной фикстуре — и
+  // падение было правильным: провайдер короткий секрет принимает, а
+  // значит отказ от него не был «правилом чужой стороны», ради которого
+  // этот пункт и заводился. Обоснование целиком — в шапке
+  // `stt-secret-format.ts`.
+  it('короткий, но корректный секрет НЕ отвергается — это не правило провайдера', () => {
+    expect(sttSecretProblem('sec')).toBeNull();
   });
 
   it('символы, которые рвут заголовок, названы по одному разу', () => {

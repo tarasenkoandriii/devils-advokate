@@ -34,6 +34,33 @@ function createFakePrisma() {
         return { count };
       },
     },
+    // Пункт [the-answer-was-typed-and-lost] 2026-10-01: добавление
+    // ответа стало ОДНИМ оператором (`jsonb ||` под блокировкой строки),
+    // потому что между чтением массива и записью стои́т вызов AI, и два
+    // ответа в этом окне затирали друг друга. Фейк обязан воспроизводить
+    // этот оператор, а не отвечать на всё: иначе спека зеленела бы на
+    // действии, которого в бою не будет.
+    //
+    // Условие `status = 'IN_PROGRESS'` живёт В САМОМ операторе — значит и
+    // здесь: завершённая сессия нового ответа не принимает.
+    $queryRaw: async (strings: TemplateStringsArray | string[], ...values: any[]) => {
+      const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
+      const isAnswerAppend =
+        sql.includes('UPDATE intake_sessions') && sql.includes('jsonb_array_length') && sql.includes('|| ');
+      if (!isAnswerAppend) {
+        throw new Error(
+          `createFakePrisma.$queryRaw: этот фейк знает только атомарное добавление ответа к intake_sessions. ` +
+            `Получен другой запрос — научите фейк ЯВНО:\n${sql}`,
+        );
+      }
+      const [entryJson, id] = values as [string, string];
+      const session = sessions.get(id);
+      if (!session || session.status !== 'IN_PROGRESS') return [];
+      const existing = Array.isArray(session.answers) ? session.answers : [];
+      session.answers = [...existing, ...JSON.parse(entryJson)];
+      session.updatedAt = new Date();
+      return [{ count: session.answers.length }];
+    },
   };
   return fake;
 }

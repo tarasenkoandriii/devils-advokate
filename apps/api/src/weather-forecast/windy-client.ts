@@ -102,11 +102,22 @@ export async function getWindyForecast(
     throw new WindyError(`Windy Point Forecast API недоступен — сетевая ошибка: ${err instanceof Error ? err.message : 'неизвестная'}`);
   }
 
+  // Пункт [the-branch-that-could-not-be-reached] 2026-10-01: 204
+  // проверяется ОТДЕЛЬНО и ПЕРЕД `!response.ok`. Прежде рассуждение про
+  // 204 стояло внутри `if (!response.ok)` — а `Response.ok` истинно для
+  // всего диапазона 200–299, то есть ветка про 204 была НЕДОСТИЖИМА.
+  // Реально 204 уходил ниже, в `response.json()` на пустом теле, и давал
+  // голый англоязычный `SyntaxError`, который выше ловился пустым
+  // `catch` и превращался в молчаливый фоллбек. Комментарий обещал
+  // «явная ошибка, не тихий пустой результат» — и именно тихий пустой
+  // результат и получался.
+  if (response.status === 204) {
+    throw new WindyError(
+      'Windy Point Forecast API ответил 204 — выбранная модель не отдаёт ни одного из запрошенных параметров. ' +
+        'Это рассогласование нашего запроса с моделью, а не отсутствие погоды.',
+    );
+  }
   if (!response.ok) {
-    // 204 — "the selected model does not feature any of the requested
-    // parameters" (документация) — с моделью icon для набора выше не
-    // должно происходить, но не молчим, если xAI/Windy это когда-нибудь
-    // изменит: явная ошибка, не тихий пустой результат.
     const body = await response.text().catch(() => '<unreadable>');
     throw new WindyError(`Windy Point Forecast API вернул ошибку (${response.status}): ${body.slice(0, 300)}`);
   }

@@ -267,12 +267,81 @@ const employerHiring: DomainManifest = {
   extras: [],
 };
 
-export const DOMAIN_MANIFESTS: Record<DomainId, DomainManifest> = {
+const ALL_MANIFESTS: Record<DomainId, DomainManifest> = {
   dtp, 'family-law': familyLaw, health, investment, 'major-purchase': majorPurchase, 'interview-pool': interviewPool,
   'job-search': jobSearch, 'employer-hiring': employerHiring,
 };
 
+// Пункт [one-build-two-products] 2026-10-01 — ОДИН ВЫКЛЮЧАТЕЛЬ, а не
+// форк дерева.
+//
+// ПОВОД — вопрос владельца: можно ли запустить модуль найма как
+// самостоятельный продукт на своём домене. Срез показал, что связность
+// job-экранов с остальным TMA практически нулевая, то есть дешёвый путь
+// существует: второй домен, тот же API, сборка TMA только с доменами
+// найма. Единственное, чего для этого не было, — способа СОБРАТЬ часть:
+// механизма признаков (`features`) в этом приложении нет вовсе, и без
+// него «job-only TMA» означало бы вторую ветку дерева, которую придётся
+// держать в синхроне руками. Вторая ветка — это способ развести два
+// продукта молча.
+//
+// КАК РАБОТАЕТ. `NEXT_PUBLIC_TMA_DOMAINS` — список идентификаторов
+// доменов через запятую. Пусто или переменной нет ⇒ ВСЕ домены, то есть
+// поведение ровно прежнее и ничего не нужно выставлять в существующих
+// проектах. `NEXT_PUBLIC_TMA_DOMAINS=job-search,interview-pool,employer-hiring`
+// даёт сборку для домена найма.
+//
+// Читается ЛИТЕРАЛЬНЫМ `process.env.NEXT_PUBLIC_TMA_DOMAINS` — иначе
+// webpack не подставит значение в бандл. Это не стиль: ровно на этом
+// продукт уже попадался (Пункт [the-bundler-does-not-read-variables]:
+// чтение через параметр давало `undefined` в браузере при зелёной
+// сборке).
+//
+// ЧЕГО ЭТОТ ВЫКЛЮЧАТЕЛЬ НЕ ДЕЛАЕТ, и это важнее того, что делает:
+//  • он НЕ защита. Сервер отдаёт все маршруты всем; выключенный домен
+//    просто не показан в этой сборке. Кто знает адрес API, дойдёт до
+//    него напрямую — права проверяет сервер, и только он;
+//  • он не делит пользователей и проекты: `User` и `Project` общие, один
+//    человек — один аккаунт в обоих продуктах. Это может быть и
+//    особенностью, и неожиданностью для владельца — названо здесь, чтобы
+//    решение было осознанным;
+//  • неизвестный идентификатор в списке молча НЕ игнорируется — иначе
+//    опечатка в переменной окружения дала бы продукт без половины
+//    экранов и без единого слова об этом.
+const ENABLED_RAW = (process.env.NEXT_PUBLIC_TMA_DOMAINS ?? '').trim();
+
+function selectManifests(): Record<DomainId, DomainManifest> {
+  if (!ENABLED_RAW) return ALL_MANIFESTS;
+  const wanted = ENABLED_RAW.split(',').map((s) => s.trim()).filter(Boolean);
+  const known = Object.keys(ALL_MANIFESTS);
+  const unknown = wanted.filter((w) => !known.includes(w));
+  if (unknown.length > 0) {
+    throw new Error(
+      `NEXT_PUBLIC_TMA_DOMAINS содержит неизвестные домены: ${unknown.join(', ')}. ` +
+        `Известные: ${known.join(', ')}. Сборка остановлена намеренно: опечатка здесь дала бы ` +
+        'продукт без части экранов и ничего бы об этом не сказала.',
+    );
+  }
+  const picked: Partial<Record<DomainId, DomainManifest>> = {};
+  for (const id of known) {
+    if (wanted.includes(id)) picked[id as DomainId] = ALL_MANIFESTS[id as DomainId];
+  }
+  return picked as Record<DomainId, DomainManifest>;
+}
+
+export const DOMAIN_MANIFESTS: Record<DomainId, DomainManifest> = selectManifests();
+
+/** Все домены, которые продукт знает, независимо от сборки. Нужен там,
+ *  где вопрос «а такой домен вообще существует» отличается от «показан
+ *  ли он здесь»: например при разборе `start_param` со ссылки. */
+export const ALL_DOMAIN_IDS: string[] = Object.keys(ALL_MANIFESTS);
+
 export const DOMAIN_LIST: DomainManifest[] = Object.values(DOMAIN_MANIFESTS);
+
+/** Включён ли домен в ЭТОЙ сборке. */
+export function domainEnabled(id: string): boolean {
+  return Object.prototype.hasOwnProperty.call(DOMAIN_MANIFESTS, id);
+}
 
 export function getManifest(id: string): DomainManifest | null {
   return (DOMAIN_MANIFESTS as Record<string, DomainManifest>)[id] ?? null;

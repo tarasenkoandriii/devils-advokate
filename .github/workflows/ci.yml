@@ -13,6 +13,21 @@
 #   prisma    — prisma validate: синтаксис и связность schema.prisma.
 #               Конвенции схемы (индексы под FK и т.п.) проверяет
 #               отдельный тест schema-conventions.spec.ts в джобе test.
+#   db        — Пункт [the-sql-nobody-ran] 2026-10-01. НАСТОЯЩИЙ Postgres
+#               16: `db push` на чистую базу, затем все 19 ручных
+#               SQL-файлов, которые владелец применяет руками в Supabase.
+#               До этой джобы НИЧТО не проверяло, что они вообще валидный
+#               SQL и что их безопасно применить повторно — ошибка в них
+#               обнаруживалась в тот момент, когда прод уже не работает.
+#   repo      — Пункт [four-projects-one-push] 2026-10-01: пропуск сборок
+#               Vercel по проектам (самопроверка скрипта) и согласованность
+#               реестра ручных миграций с каталогом.
+#
+# ЧЕГО ЭТОТ CI НЕ ДЕЛАЕТ. Он не деплоит: деплоем занимается Git-интеграция
+# Vercel, и зелёный CI её НЕ СТОРОЖИТ сам по себе — чтобы красный CI
+# останавливал выкат, в GitHub нужно включить защиту ветки и назвать эти
+# джобы обязательными. Пока это не включено, CI говорит правду и ничего не
+# запрещает; так и написано, чтобы зелёная галочка не выглядела замком.
 #
 # Джобы намеренно раздельные: красный CI должен сразу говорить, ЧТО
 # сломано, а не «что-то в пайплайне». Общий шаг установки вынесен в
@@ -38,6 +53,18 @@ env:
   # Prisma генерирует клиент на каждом шаге установки; ключи и реальная
   # БД для этого не нужны — URL-заглушка валидного формата.
   DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+  # Пункт [validate-asked-for-the-second-url] 2026-10-01: заглушки было
+  # ОДНОЙ, а `schema.prisma` объявляет две — `url` и `directUrl`. Джоба
+  # `Prisma schema` падала на каждом из семнадцати прогонов:
+  #
+  #   Error code: P1012
+  #   error: Environment variable not found: DIRECT_URL.
+  #
+  # То есть `prisma validate` не проверял схему НИ РАЗУ, а красный CI
+  # никто не читал. `prisma generate` при этом проходил — он `directUrl`
+  # не разрешает, — и потому остальные джобы были зелёными, что и делало
+  # красную галочку похожей на фоновый шум.
+  DIRECT_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
   NEXT_TELEMETRY_DISABLED: '1'
 
 jobs:
@@ -83,3 +110,124 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: npm run prisma:validate --workspace=apps/api
+
+  db:
+    name: База — db push и ручные миграции на чистом Postgres 16
+    runs-on: ubuntu-latest
+
+    services:
+      # Та же мажорная версия, что в docker-compose и в Supabase: SQL
+      # обязан проверяться на том, на чём поедет.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: devils_advocate
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Перебивает заглушку из env всего файла: здесь база настоящая.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/devils_advocate?schema=public
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/devils_advocate?schema=public
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # Реестр и каталог сверяются ДО применения: файл, не попавший в
+      # реестр, иначе был бы молча не проверен — и молча не показан
+      # оператору в диагностике схемы.
+      - name: реестр ручных миграций согласован с каталогом
+        run: node scripts/check-manual-migrations.mjs
+
+      # `db push`, а не `migrate deploy`: в этом проекте нет истории
+      # миграций Prisma — схема накатывается push'ем, а всё, что push не
+      # умеет, лежит отдельными SQL-файлами.
+      - name: prisma db push на чистую базу
+        run: npx prisma db push --skip-generate
+        working-directory: apps/api
+
+      # Главная проверка этой джобы. Файлы применяются руками, в разные
+      # инстансы, поэтому написаны идемпотентно; на свежей схеме каждый
+      # обязан быть безвредным повтором. Файл без защиты (`IF NOT EXISTS`
+      # и т.п.) упадёт здесь, а не у владельца в SQL Editor на живом
+      # проде. Порядок — из реестра, не алфавитный.
+      - name: ручные миграции применяются к свежей схеме (идемпотентность)
+        run: |
+          set -euo pipefail
+          node scripts/check-manual-migrations.mjs --print-order | while IFS= read -r file; do
+            echo "── $(basename "$file")"
+            psql "postgresql://postgres:postgres@localhost:5432/devils_advocate" \
+              -v ON_ERROR_STOP=1 -q -f "$file"
+          done
+
+      # Схема и то, что делают ручные файлы, обязаны совпадать: иначе
+      # кто-то написал SQL и забыл перенести правку в schema.prisma (или
+      # наоборот), и расхождение всплывает на проде как «колонки нет».
+      #
+      # `continue-on-error` — осознанно и временно: эта джоба не прошла
+      # ни одного живого прогона (локально её проверить нечем — выход к
+      # binaries.prisma.sh запрещён политикой egress в обеих средах).
+      # Первый прогон покажет, расходятся схема и SQL на самом деле; если
+      # красного нет — флаг снимается, и шаг становится обязательным.
+      # Красить весь CI проверкой, которую ни разу не видели живой, —
+      # нечестно, а убрать её вовсе значило бы не иметь самой ценной.
+      - name: схема и ручные миграции не разошлись
+        continue-on-error: true
+        run: |
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code
+        working-directory: apps/api
+
+      # Сид создаёт AIProvider/AIModel: без него любой AI-вызов падает.
+      # Проверяется, что он проходит на чистой базе — это предусловие
+      # любого нового инстанса (и отдельной базы, если она когда-нибудь
+      # появится).
+      - name: сид проходит на чистой базе
+        run: npx prisma db seed
+        working-directory: apps/api
+
+  repo:
+    name: Репозиторий — пропуск сборок и реестры
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 2 — самопроверке нужен HEAD^ (она поднимает свой
+      # временный репозиторий, но скрипт обращается к git в принципе).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      # Пункт [ci-built-on-a-different-node] 2026-10-01: версия Node
+      # обязана жить в ОДНОМ месте. Проверяется не равенство с панелью
+      # Vercel — её из репозитория не видно НИЧЕМ, — а то, что номер в
+      # репозитории не продублирован снова: ровно так он и разошёлся
+      # (CI на 20, Vercel на 24). Первая версия этой проверки была
+      # трёхстрочным grep здесь же и сработала на комментарии, который
+      # цитирует прежнее значение, — поэтому она скрипт со снятием
+      # комментариев и с обратной пробой на этот случай.
+      - name: версия Node живёт в одном месте
+        run: node scripts/check-node-version.mjs
+
+      - name: реестр ручных миграций согласован с каталогом
+        run: node scripts/check-manual-migrations.mjs
+
+      # Пункт [four-projects-one-push] 2026-10-01, попутно: высоких
+      # предупреждений аудита зависимостей не видел никто — их не
+      # проверяли ни разу. Шаг намеренно НЕ красит CI: закрываются они
+      # мажорными обновлениями, и красный до того дня означал бы, что
+      # красный перестанут читать. Он виден в логе и станет обязательным
+      # вместе с обновлением зависимостей.
+      - name: npm audit (high)
+        run: npm audit --audit-level=high --omit=dev
+        continue-on-error: true

@@ -12,6 +12,7 @@
 // openingHours/photoReferences для карточки заведения-партнёра.
 
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
+import { PLACE_ID_ALLOWED, safeProviderId } from '../common/provider-id-format';
 
 export interface PlaceCandidate {
   placeId: string;
@@ -144,7 +145,11 @@ export async function searchByText(query: string, apiKey: string, latitude?: num
 
 export async function getPlaceDetails(placeId: string, apiKey: string): Promise<PlaceDetails> {
   const fields = 'name,formatted_address,formatted_phone_number,rating,reviews,opening_hours,photos,geometry';
-  const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=${fields}&key=${apiKey}`;
+  // Пункт [the-identifier-reshaped-the-url] 2026-10-01: единственная
+  // интерполяция в этом файле, которая не кодировалась, — обоснование в
+  // шапке `common/provider-id-format.ts`.
+  const safePlaceId = safeProviderId(placeId, PLACE_ID_ALLOWED, 'Идентификатор места');
+  const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${safePlaceId}&fields=${fields}&key=${apiKey}`;
   let response: Response;
   try {
     response = await fetchWithTimeout(url);

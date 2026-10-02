@@ -18,6 +18,7 @@
 
 import { BadGatewayException, BadRequestException, Injectable, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
+import { VOICE_ID_ALLOWED, safeProviderId } from '../common/provider-id-format';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConsentService } from '../consent/consent.service';
 import { SecretsService } from '../secrets/secrets.service';
@@ -140,7 +141,11 @@ export class TextToSpeechService {
   private async callElevenLabs(text: string, voiceId: string, apiKey: string): Promise<string> {
     let response: Response;
     try {
-      response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      // Пункт [the-identifier-reshaped-the-url] 2026-10-01: значение
+      // уходит в ПУТЬ, то есть `../` меняло бы эндпоинт — с нашим ключом
+      // в заголовке. Обоснование в шапке `common/provider-id-format.ts`.
+      const safeVoiceId = safeProviderId(voiceId, VOICE_ID_ALLOWED, 'Идентификатор голоса');
+      response = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${safeVoiceId}`, {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
         body: JSON.stringify({ text, model_id: DEFAULT_MODEL_ID, output_format: OUTPUT_FORMAT }),

@@ -12,7 +12,7 @@
 // общих поведенческих корреляций... а не жёсткое правило". AI
 // формулирует конкретное обоснование, не абстрактный ярлык.
 
-import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WEATHER_SPEND, spendOutwardCall } from '../common/outward-spend';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -55,6 +55,11 @@ const SYSTEM_PROMPT =
 
 @Injectable()
 export class WeatherForecastService {
+  // Пункт [the-branch-that-could-not-be-reached] 2026-10-01: логгера у
+  // этого сервиса не было ВООБЩЕ — а он единственный, кто видит отказ
+  // платного источника погоды.
+  private readonly logger = new Logger(WeatherForecastService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiRouter: AIRouterService,
@@ -97,8 +102,22 @@ export class WeatherForecastService {
     if (windyKey) {
       try {
         return await getWindyForecast(windyKey, coords, targetDate);
-      } catch {
-        // fall through — Open-Meteo ниже
+      } catch (err) {
+        // Пункт [the-branch-that-could-not-be-reached] 2026-10-01: здесь
+        // был ГОЛЫЙ `catch {}` без единой строки в логе, и у сервиса
+        // вообще не было логгера. Платный первичный источник мог
+        // отказывать НА КАЖДОМ вызове — расход уже списан выше, — и
+        // единственным следом оставалась колонка `source` в строке
+        // результата. Тот же класс, что уже закрывали в
+        // `text-to-speech.service.ts`: «голый catch глотал ЛЮБОЙ отказ…
+        // продукт продолжал бы платить и не сказал бы об этом никому».
+        //
+        // Человеку здесь говорить нечего — прогноз он получит, просто из
+        // запасного источника, и это честно отражено в `source`. А вот
+        // владельцу, который за Windy платит, знать обязательно.
+        this.logger.warn(
+          `Windy отказал, прогноз берётся из Open-Meteo: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
     return getForecast(coords, targetDate);

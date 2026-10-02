@@ -279,20 +279,45 @@ describe('Пункт [the-registry-promised-401-and-gave-500]: два разны
 });
 
 describe('Пункт [two-comments-one-survived]: запись комментария атомарна', () => {
+  // Пункт [the-atomic-fix-stayed-on-one-path] 2026-10-01: сам оператор
+  // ПЕРЕЕХАЛ. Эти два теста смотрели в `vacancy-posting.service.ts` — и
+  // упали в первом живом прогоне CI, потому что ту же колонку пишет
+  // второй путь (работодатель через `engagement`), у которого записи не
+  // было вообще, и добавление стало ОДНОЙ функцией для обоих.
+  //
+  // Правило не ослаблено, а усилено: раньше проверялось, что атомарная
+  // запись есть у одного пути, теперь — что она ОДНА и что к ней ходят
+  // ОБА. Падение сторожа здесь сработало именно так, как должно:
+  // переезд правила обязан быть замечен.
+  const HELPER = 'vacancy-posting/posting-review-comments.ts';
+
   it('КЛЮЧЕВОЙ ТЕСТ: добавление идёт одним UPDATE с условием потолка, а не чтением-склейкой-записью', () => {
-    const src = code('vacancy-posting/vacancy-posting.service.ts');
+    const src = code(HELPER);
     // Один оператор: склейка `||` и условие по длине в том же запросе.
     expect(src.includes("SET comments = COALESCE(comments, '[]'::jsonb) ||")).toBe(true);
     expect(src.includes('jsonb_array_length(COALESCE(comments')).toBe(true);
-    // И прежнего пути нет: массив больше не собирается в памяти перед
-    // записью целиком.
-    expect(src.includes('data: { comments: comments as never }')).toBe(false);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ: оба пути к этой колонке ходят через общий оператор, и ни один не собирает массив в памяти', () => {
+    for (const file of ['vacancy-posting/vacancy-posting.service.ts', 'employer-hiring/engagement.service.ts']) {
+      const src = code(file);
+      // Именно ВЫЗОВ, а не упоминание в импорте.
+      expect(src.includes('appendPostingReviewComment(this.prisma')).toBe(true);
+      expect(src.includes('data: { comments: comments as never }')).toBe(false);
+    }
+  });
+
+  it('оператор существует ровно в одном месте — иначе «один» было бы словом, а не фактом', () => {
+    const inHelper = (code(HELPER).match(/UPDATE posting_review_shares/g) ?? []).length;
+    expect(inHelper).toBe(1);
+    for (const file of ['vacancy-posting/vacancy-posting.service.ts', 'employer-hiring/engagement.service.ts']) {
+      expect((code(file).match(/UPDATE posting_review_shares/g) ?? []).length).toBe(0);
+    }
   });
 
   it('ноль в реестре по-прежнему означает «не ограничивай»', () => {
     // В условии SQL «меньше нуля» запретило бы всё — ровно наоборот
     // тому, что ноль значит в обоих реестрах потолков.
-    const src = code('vacancy-posting/vacancy-posting.service.ts');
-    expect(src.includes('configured === 0 ? 2_147_483_647 : configured')).toBe(true);
+    expect(code(HELPER).includes('configured === 0 ? 2_147_483_647 : configured')).toBe(true);
   });
 });

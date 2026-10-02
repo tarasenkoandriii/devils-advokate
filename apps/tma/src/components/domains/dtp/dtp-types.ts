@@ -24,14 +24,10 @@ export const CROSS_LABEL: Record<CrossConsultationStatus, { text: string; tone: 
   INSUFFICIENT_DATA: { text: 'Мало данных', tone: 'muted' },
 };
 
-export function money(amount: number | null | undefined, currency?: string | null): string {
-  if (amount === null || amount === undefined) return '—';
-  return `${new Intl.NumberFormat('ru-RU').format(amount)} ${currency ?? ''}`.trim();
-}
-export function dateTime(iso: string | null | undefined): string {
-  return iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
-}
-export function dateOnly(iso: string | null | undefined): string {
-  return iso ? new Date(iso).toLocaleDateString('ru-RU', { dateStyle: 'medium' }) : '—';
-}
+// Пункт [the-formatter-lived-in-someone-elses-domain] 2026-10-01: сами
+// функции переехали в `lib/format.ts` — формат денег и дат принадлежит
+// продукту, а не домену ДТП, и импортировали их отсюда семь не-ДТП
+// экранов. Реэкспорт оставлен, чтобы ни один существующий импорт не
+// ломался; доменные подписи ниже остаются здесь, на своём месте.
+export { money, dateTime, dateOnly } from '../../../lib/format';
 export const FAULT_SOURCE_LABEL: Record<string, string> = { POLICE: 'Полиция', INSURANCE_COMPANY: 'Страховая', COURT: 'Суд', MUTUAL_AGREEMENT: 'Взаимное соглашение', UNDETERMINED: 'Не определено' };

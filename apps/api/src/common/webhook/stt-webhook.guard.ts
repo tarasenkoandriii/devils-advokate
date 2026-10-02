@@ -32,7 +32,7 @@ export const LEGACY_ASSEMBLYAI_WEBHOOK_SECRET_REF = 'ASSEMBLYAI_WEBHOOK_SECRET';
 
 /** Секрет вебхуков распознавания: новое имя, при его отсутствии —
  *  историческое. Один источник для guard и для постановки задач. */
-export { STT_SECRET_ALLOWED, STT_SECRET_MIN, sttSecretProblem } from './stt-secret-format';
+export { STT_SECRET_ALLOWED, STT_SECRET_EDGE_SPACE, sttSecretProblem } from './stt-secret-format';
 
 export async function resolveSttWebhookSecret(secrets: SecretsService): Promise<string | null> {
   // trim: см. шапку выше. Пустая строка после обрезки — это «не

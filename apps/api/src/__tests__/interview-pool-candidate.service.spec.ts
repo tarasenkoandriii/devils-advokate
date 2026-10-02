@@ -8,6 +8,8 @@ import { InterviewPoolCandidateService } from '../interview-pool/interview-pool-
 process.env.TELEGRAM_BOT_USERNAME = 'da_test_bot';
 
 function createFakePrisma() {
+  // `fake` объявлен заранее: `$transaction` передаёт обработчику сам фейк.
+  let fake: any;
   const candidates = new Map<string, any>();
   const statuses: any[] = [];
   const shares: any[] = [];
@@ -17,7 +19,7 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  fake = {
     _seedCandidate(c: any) {
       const candidate = { id: nextId(), ...c };
       candidates.set(candidate.id, candidate);
@@ -111,8 +113,31 @@ function createFakePrisma() {
         Object.assign(s, data);
         return s;
       },
+      // Пункт [two-profiles-one-consent] 2026-10-01: ссылка забирается
+      // УСЛОВНОЙ записью — `acceptedAt: null` в `where`. Фейк обязан это
+      // условие воспроизводить: без него спека на «второй POST получает
+      // отказ» зеленела бы на действии, которого в бою не будет, а
+      // именно от этого и защищает правка (две копии профиля из одной
+      // ссылки, причём вторая выпадала из обхода отзыва согласия).
+      updateMany: async ({ where, data }: any) => {
+        const matching = shares.filter(
+          (sh) => sh.id === where.id && (where.acceptedAt !== null || sh.acceptedAt === null),
+        );
+        matching.forEach((sh) => Object.assign(sh, data));
+        return { count: matching.length };
+      },
+    },
+    // Транзакция у фейка последовательная: порядок вызовов она сохраняет,
+    // изоляцию — нет. Так же устроен и общий `fake-prisma.ts`, и там
+    // прямо сказано, что проверять семантику изоляции на этом уровне
+    // было бы враньём. Здесь проверяется ровно то, что проверяемо:
+    // условный забор и то, что профиль создаётся в той же транзакции.
+    $transaction: async (arg: any) => {
+      if (typeof arg !== 'function') return Promise.all(arg);
+      return arg(fake);
     },
   };
+  return fake;
 }
 
 function makeService(prisma: any) {
