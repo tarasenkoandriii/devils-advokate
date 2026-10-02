@@ -71,8 +71,24 @@ describe('Сверка [not-checked-looks-clean]: ноль без проверк
     // слово: любой обработчик рядом с compliance-разбором обязан что-то
     // записать наружу.
     const catches = [...src.matchAll(/catch\s*\([^)]*\)\s*\{([^{}]*)\}/g)].map((m) => m[1].trim());
-    const немые = catches.filter((body) => /instanceof ForbiddenException\) throw err;$/.test(body));
+    // Пункт [the-empty-scan-was-green] 2026-10-02: без этой строки
+    // правило зеленело бы от переписанного `catch` в другом стиле —
+    // разбор не нашёл бы НИ ОДНОГО блока, список немых оказался бы пуст,
+    // и «немых нет» означало бы «я ничего не разобрал».
+    expect(catches.length).toBeGreaterThanOrEqual(2);
+    const НЕМОЙ = /instanceof ForbiddenException\) throw err;$/;
+    const немые = catches.filter((body) => НЕМОЙ.test(body));
     expect(немые).toEqual([]);
+  });
+
+  it('ОБРАТНАЯ ПРОБА: тот же признак немоты ловится на образце', () => {
+    // Иначе пустой список выше означал бы не порядок, а признак,
+    // который не срабатывает ни на чём.
+    const НЕМОЙ = /instanceof ForbiddenException\) throw err;$/;
+    expect(НЕМОЙ.test('if (err instanceof ForbiddenException) throw err;')).toBe(true);
+    // А обработчик, который что-то записывает наружу, немым не считается.
+    expect(НЕМОЙ.test('if (err instanceof ForbiddenException) throw err;\n      this.logger.warn(err);')).toBe(false);
+    expect(code('hiring-extras/hiring-extras.service.ts').length).toBeGreaterThan(0);
   });
 
   it('признак не выдумывается на месте: словарь причин один на весь API', () => {

@@ -80,9 +80,17 @@ function sourceFiles(dir: string): string[] {
 
 describe('Пункт [green-deploy-pointed-at-localhost]: адрес API — одно место на приложение', () => {
   it('КЛЮЧЕВОЕ ПРАВИЛО: прежнего дефолта нет ни в одном файле обоих приложений', () => {
+    // Пункт [the-empty-scan-was-green] 2026-10-02 — обход доказывается
+    // ДО вывода. Правило говорит «ни в одном файле обоих приложений», и
+    // без этой проверки оно зеленело бы от переименованной папки: ноль
+    // прочитанных файлов даёт ноль нарушителей. Порог — на каждое
+    // приложение отдельно, иначе пустой обход одного из двух прятался бы
+    // за непустым обходом другого.
     const offenders: string[] = [];
     for (const app of ['tma', 'admin']) {
-      for (const file of sourceFiles(join(MONOREPO, 'apps', app, 'src'))) {
+      const scanned = sourceFiles(join(MONOREPO, 'apps', app, 'src'));
+      expect([app, scanned.length > 5]).toEqual([app, true]);
+      for (const file of scanned) {
         if (stripComments(readFileSync(file, 'utf8')).includes(INLINE_DEFAULT)) {
           offenders.push(file.slice(MONOREPO.length + 1));
         }
@@ -91,6 +99,19 @@ describe('Пункт [green-deploy-pointed-at-localhost]: адрес API — о�
     // Девятая копия появляется одной строкой и ничего не ломает
     // немедленно — именно так их стало девять.
     expect(offenders).toEqual([]);
+  });
+
+  it('ОБРАТНАЯ ПРОБА: прежний дефолт опознаётся в тексте, а в комментарии — нет', () => {
+    // Иначе пустой список нарушителей означал бы не чистоту дерева, а
+    // признак, который не срабатывает ни на чём. Снятие комментариев
+    // здесь то же самое, что в ключевом правиле.
+    // Образец — НАСТОЯЩИЙ код, а не строка с кодом внутри: снятие
+    // комментариев разбирает строковые литералы, и признак, завёрнутый в
+    // кавычки, оно бы не отдало. Первая редакция этой пробы так и
+    // падала — и это в точности то, ради чего проба нужна.
+    expect(stripComments(`const url = ${INLINE_DEFAULT};`).includes(INLINE_DEFAULT)).toBe(true);
+    expect(stripComments(`// прежде было ${INLINE_DEFAULT}\n`).includes(INLINE_DEFAULT)).toBe(false);
+    expect(sourceFiles(join(MONOREPO, 'apps', 'tma', 'src')).length).toBeGreaterThan(5);
   });
 
   it('обе копии правила проверяют одни и те же признаки платформы', () => {

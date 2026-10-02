@@ -320,6 +320,16 @@ describe('Пункт [the-wildcard-ate-the-webhook]: до обработчика
     expect(classifyRawPath('/healthz')).toEqual(['/healthz']);
     // И запрос внутри подстановки не рвёт путь надвое.
     expect(classifyRawPath('/admin/users${suffix}')![1]).toBe('/admin/users');
+    // Пункт [the-empty-scan-was-green] 2026-10-02: проба обязана трогать
+    // ту же машинерию, что и правило. `clientPaths()` зовёт
+    // `classifyRawPath` внутри, но ПО ИМЕНИ в теле зеркального правила
+    // он не встречается — и сторож [probe-checked-the-neighbour] это
+    // увидел, как только его собственный разбор блоков перестал резать
+    // тела вызовами регулярок. Поэтому проба идёт и через общий путь:
+    // мутация в `classifyRawPath` обязана ронять их оба.
+    const { readable, unreadable, attempted } = clientPaths();
+    expect(readable.length + unreadable.length).toBe(attempted);
+    expect(readable.length).toBeGreaterThan(300);
   });
 
   it('обратная проба: выдуманный путь сверка считает необслуженным', () => {

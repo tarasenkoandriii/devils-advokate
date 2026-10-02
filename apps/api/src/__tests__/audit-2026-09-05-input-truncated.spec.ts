@@ -154,13 +154,33 @@ describe('[input-truncated] сколько текста дошло до разб
     // мутация с числом проходила правило (её убивали поведенческие
     // тесты рядом), мутация с именем константы правило роняла. Дыра
     // была в одном выражении, а не в наборе, — и всё же дыра.
+    // Пункт [the-empty-scan-was-green] 2026-10-02 — СНАЧАЛА доказываем,
+    // что обход вообще что-то видит. Без этой строки правило зеленело бы
+    // от переименованной папки: пустой обход даёт пустой список
+    // нарушителей, и «нарушителей нет» означало бы «я ничего не читал».
+    const scanned = sourceFiles();
+    expect(scanned.length).toBeGreaterThan(400);
+    const RULE = /(\w+)\.slice\(0,\s*(MAX_SOURCE_TEXT_CHARS|MAX_OFFER_CHARS|AI_PROMPT_CHARS|16_000|2[04]_000)\s*\)/g;
     const offenders: string[] = [];
-    for (const file of sourceFiles()) {
+    for (const file of scanned) {
       const src = code(file);
-      for (const m of src.matchAll(/(\w+)\.slice\(0,\s*(MAX_SOURCE_TEXT_CHARS|MAX_OFFER_CHARS|AI_PROMPT_CHARS|16_000|2[04]_000)\s*\)/g)) {
+      for (const m of src.matchAll(RULE)) {
         offenders.push(`${file.slice(API_SRC.length + 1)}: ${m[0]}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('ОБРАТНАЯ ПРОБА: то же правило ловит голый slice по имени константы и по числу', () => {
+    // Иначе пустой список выше означал бы не порядок, а правило,
+    // которое не срабатывает ни на чём. Регулярка берётся ТА ЖЕ —
+    // объявлена в ключевом тесте выше и общая с ним.
+    const RULE = /(\w+)\.slice\(0,\s*(MAX_SOURCE_TEXT_CHARS|MAX_OFFER_CHARS|AI_PROMPT_CHARS|16_000|2[04]_000)\s*\)/g;
+    expect([...'text.slice(0, MAX_SOURCE_TEXT_CHARS)'.matchAll(RULE)]).toHaveLength(1);
+    expect([...'text.slice(0, 16_000)'.matchAll(RULE)]).toHaveLength(1);
+    // И не ловит потолок цитаты — ради этого исключения правило и
+    // перечисляет имена, а не любой slice.
+    expect([...'quote.slice(0, 500)'.matchAll(RULE)]).toHaveLength(0);
+    expect(sourceFiles().length).toBeGreaterThan(400);
   });
 });
