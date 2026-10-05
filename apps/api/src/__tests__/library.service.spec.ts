@@ -12,9 +12,12 @@ function createFakePrisma() {
   const nextId = () => `id-${++idCounter}`;
 
   const fake: any = {
-    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: потолок
-    // рассказов и запись идут одной транзакцией под замком — заглушка
-    // обязана знать ту же форму, что production.
+    // Пункты [the-ceiling-was-counted-then-crossed] и
+    // [the-public-door-counted-then-crossed] 2026-10-05: и счётчик
+    // расходов, и потолок рассказов берут замок сырым запросом внутри
+    // транзакции — заглушка обязана знать ту же форму, что production.
+    // Одного объявления хватает обоим: вторая копия ниже была дублем
+    // свойства и валила strict-разбор.
     $executeRaw: async () => 1,
     $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
@@ -112,9 +115,6 @@ function createFakePrisma() {
         return e;
       },
     },
-    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
-    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
-    $executeRaw: async () => 1,
   };
   return fake;
 }

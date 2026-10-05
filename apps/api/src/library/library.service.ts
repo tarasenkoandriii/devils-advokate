@@ -21,7 +21,7 @@
 
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { assertUnderPublicWriteLimit, insertUnderPublicWriteLimit } from '../common/public-write-limits';
+import { insertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { PrismaService } from '../prisma/prisma.service';
 import { mayBePublished } from '../common/fact-scope';
 import { assertProjectOwnership } from '../common/project-ownership';
