@@ -56,6 +56,9 @@ function createFakePrisma() {
         argumentsStore.filter((a) => a.projectId === where.projectId && a.stance === where.stance).sort((a, b) => b.createdAt - a.createdAt),
     },
     $transaction: async (ops: Promise<any>[]) => Promise.all(ops),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
   };
 }
 

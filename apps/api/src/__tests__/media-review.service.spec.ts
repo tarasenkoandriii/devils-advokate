@@ -130,6 +130,9 @@ function createFakePrisma() {
       return job;
     },
     $transaction: async (ops: any) => (Array.isArray(ops) ? Promise.all(ops) : ops(undefined)),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     transcriptSegment: {
       findMany: async ({ where }: any) => {
         const convIds: string[] = where.transcript.conversationId.in;

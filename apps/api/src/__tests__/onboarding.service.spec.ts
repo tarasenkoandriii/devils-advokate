@@ -38,7 +38,13 @@ function createFakePrisma() {
   const consents: any[] = [];
   let idCounter = 0;
 
-  return {
+  const fake: any = {
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счётчик
+    // расходов работает ОДНОЙ транзакцией под advisory-замком —
+    // интерактивной формой `$transaction`. Заглушка обязана знать ту же
+    // форму, что production: обе, колбэк и массив.
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
+    $executeRaw: async () => 1,
     // Пункт [the-policy-was-obeyed-by-hope] 2026-09-30: обратное
     // геокодирование теперь под суточным потолком — расход считается по
     // журналу, и фейк обязан его уметь.
@@ -84,6 +90,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 const USER_ID = 'user-1';

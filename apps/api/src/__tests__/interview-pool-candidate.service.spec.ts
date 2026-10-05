@@ -133,6 +133,9 @@ function createFakePrisma() {
     // прямо сказано, что проверять семантику изоляции на этом уровне
     // было бы враньём. Здесь проверяется ровно то, что проверяемо:
     // условный забор и то, что профиль создаётся в той же транзакции.
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     $transaction: async (arg: any) => {
       if (typeof arg !== 'function') return Promise.all(arg);
       return arg(fake);

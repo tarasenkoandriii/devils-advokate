@@ -18,6 +18,10 @@ function makeService(opts: {
 }) {
   const spendLog: any[] = [];
   const prisma = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
     conversation: {
       findUnique: jest.fn(async () => ({ id: 'conv-1', projectId: 'p1', project: { ownerId: 'user-1' } })),
     },

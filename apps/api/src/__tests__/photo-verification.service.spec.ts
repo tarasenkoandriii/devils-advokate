@@ -9,7 +9,7 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
     _seedFact(f: any) { facts.set(f.id, f); },
     _seedPerson(p: any) { people.set(p.id, p); },
     _seedVerification(v: any) { verifications.push({ id: v.id ?? nextId(), createdAt: new Date(), ...v }); },
@@ -41,8 +41,15 @@ function createFakePrisma() {
       },
       findMany: async ({ where }: any) => verifications.filter((v) => v.personFactId === where.personFactId).sort((a, b) => b.createdAt - a.createdAt),
     },
-    $transaction: async (ops: Promise<any>[]) => Promise.all(ops),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: форма
+    // `$transaction` бывает ДВУХ видов, и заглушка знала только
+    // массив. Счётчик расходов работает интерактивной формой (замок,
+    // потом счёт, потом запись — одной транзакцией), и на ней
+    // заглушка падала «function is not iterable». Знать нужно обе.
+    $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
+    $executeRaw: async () => 1,
   };
+  return fake;
 }
 
 class FakeSecretsService {

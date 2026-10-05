@@ -18,6 +18,9 @@ function make(opts: { report?: Partial<Report>; user?: any; aiJobs?: any[]; fail
     // нет, и притворяться, что есть, было бы хуже: сам инвариант держит
     // audit-2026-09-04-atomicity.service.spec.ts.
     $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     user: {
       findUnique: async () => opts.user === undefined ? { id: 'u1', telegramId: '123456' } : opts.user,
       delete: async ({ where }: any) => { calls.deleted.push(where.id); return {}; },

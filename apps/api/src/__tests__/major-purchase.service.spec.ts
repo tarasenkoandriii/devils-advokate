@@ -21,7 +21,13 @@ function createFakePrisma() {
     return { ...v, config: { ...config, project: projects.get(config.projectId) } };
   }
 
-  return {
+  const fake: any = {
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счётчик
+    // расходов работает ОДНОЙ транзакцией под advisory-замком —
+    // интерактивной формой `$transaction`. Заглушка обязана знать ту же
+    // форму, что production: обе, колбэк и массив.
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
+    $executeRaw: async () => 1,
     _seedProject(p: any) {
       const project = { id: nextId(), ...p };
       projects.set(project.id, project);
@@ -177,6 +183,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 function makeService(

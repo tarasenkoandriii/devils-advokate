@@ -17,6 +17,9 @@ function createFakePrisma() {
     // притворяться, что есть, было бы хуже отсутствия: тест держит
     // ФАКТ вызова в транзакции (см. atomicity-spec), а не её семантику.
     $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     _seedConversation(c: any) {
       const conv = { id: nextId(), ...c };
       conversations.set(conv.id, conv);

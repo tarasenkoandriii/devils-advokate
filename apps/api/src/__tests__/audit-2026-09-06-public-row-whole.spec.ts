@@ -59,13 +59,20 @@ function createFakePrisma() {
     for (const k of Object.keys(select)) out[k] = row[k];
     return out;
   };
-  return {
+  const fake: any = {
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счётчик
+    // расходов работает ОДНОЙ транзакцией под advisory-замком —
+    // интерактивной формой `$transaction`. Заглушка обязана знать ту же
+    // форму, что production: обе, колбэк и массив.
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
+    $executeRaw: async () => 1,
     _row: row,
     approvedVenue: {
       findMany: async ({ select }: any) => [project(select)],
       findUnique: async ({ where, select }: any) => (where.id === 'venue-1' ? project(select) : null),
     },
   };
+  return fake;
 }
 
 const service = () => new VenueApplicationService(createFakePrisma() as never, {} as never, {} as never);

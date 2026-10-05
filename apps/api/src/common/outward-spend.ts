@@ -43,6 +43,76 @@ export interface OutwardSpend {
   readonly refusalSubject: string;
 }
 
+/** Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05 — отметка
+ *  расхода под замком, иначе потолок не держит НИЧЕГО.
+ *
+ *  НАЙДЕННОЕ, и это измерено на живом Postgres 16, а не выведено.
+ *  Все суточные потолки расходов делали «посчитать, сравнить, вставить»
+ *  тремя отдельными обращениями. Двадцать одновременных попыток при
+ *  потолке пять дают:
+ *
+ *    посчитать-потом-вставить → 20 записей
+ *    под этим замком          → 5 записей
+ *
+ *  То есть потолок не «немного превышался» — он не срабатывал вовсе, и
+ *  перерасход равнялся числу одновременных запросов. Это единственный
+ *  рычаг владельца на реальные деньги (Places, SerpApi, ElevenLabs,
+ *  поминутная расшифровка), и он держался только тем, что запросы редко
+ *  приходили одновременно.
+ *
+ *  ЧЕМ СДЕЛАНО. `pg_advisory_xact_lock` по паре (пользователь,
+ *  действие) внутри одной транзакции: проверка и отметка перестают быть
+ *  двумя событиями. Замок снимается концом транзакции, а она коммитится
+ *  ДО снятия — значит следующий ожидающий видит уже вставленную строку.
+ *
+ *  ПОЧЕМУ НЕ `INSERT … SELECT … WHERE count < предел` одним запросом.
+ *  Такой запрос короче, но под READ COMMITTED он тоже не держит:
+ *  подзапрос со счётом ничего не блокирует, и два параллельных вызова
+ *  оба увидят «предел-1». Проверено тем же прогоном — он держит ровно
+ *  потому, что стои́т под тем же замком, а не сам по себе.
+ *
+ *  ПОЧЕМУ НЕ ТАБЛИЦА-СЧЁТЧИК с уникальным ключом на (пользователь,
+ *  действие, сутки). Она чище и не требует замка, но требует МИГРАЦИИ —
+ *  а ручные миграции здесь применяет владелец своими руками, и это
+ *  отдельное решение, а не правка на ходу. Замок не меняет схему вовсе.
+ *
+ *  ЧЕГО ЭТО НЕ ДЕЛАЕТ:
+ *   • замок — внутри одной базы. Два инстанса продукта на РАЗНЫХ базах
+ *     считались бы порознь и раньше, это свойство счёта по журналу, а
+ *     не этой правки;
+ *   • при очереди длиннее таймаута транзакции вызов упадёт. Таймаут
+ *     задан явно и назван ниже: лучше внятный отказ, чем молчаливый
+ *     перерасход;
+ *   • потолки, считающие НЕ по журналу (публичные потолки обсуждений,
+ *     опыт в библиотеке), этой правкой не затронуты — у них своя
+ *     таблица и свой заход.
+ */
+const SPEND_LOCK_TIMEOUT_MS = 10_000;
+
+/** Проверка потолка и отметка расхода — одним событием.
+ *
+ *  Внутри `body` счёт и запись идут по той же транзакции `tx`, то есть
+ *  под тем же замком. Передавать наружу `prisma` вместо `tx` нельзя: это
+ *  вернуло бы ровно ту гонку, ради которой замок и ставится, — поэтому
+ *  сверка пункта проверяет, что ни один счётчик не обращается внутри к
+ *  чему-то, кроме `tx`. */
+export async function withSpendLock<T>(
+  prisma: PrismaService,
+  userId: string,
+  action: string,
+  body: (tx: PrismaService) => Promise<T>,
+): Promise<T> {
+  return prisma.$transaction(
+    async (tx) => {
+      // Ключ — пара «кто» и «за что»: разные расходы одного человека
+      // друг друга не ждут, один расход одного человека — ждёт.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${userId}|${action}`}, 0))`;
+      return body(tx as unknown as PrismaService);
+    },
+    { timeout: SPEND_LOCK_TIMEOUT_MS },
+  );
+}
+
 /** Сколько уже потрачено за сутки. */
 export async function spentToday(prisma: PrismaService, userId: string, action: string): Promise<number> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -70,15 +140,20 @@ export async function spendOutwardCall(
 ): Promise<void> {
   const limit = spendLimitByKey(spend.limitKey);
   if (limit === 0) return; // явное «не ограничивай»
-  if ((await spentToday(prisma, userId, spend.action)) >= limit) {
-    // 429, как у остальных потолков: предел временный, не правовой.
-    throw new HttpException(
-      `Достигнут суточный лимит: ${spend.refusalSubject} (${limit}/сутки). Попробуйте позже.`,
-      HttpStatus.TOO_MANY_REQUESTS,
-    );
-  }
-  await prisma.auditLogEntry.create({
-    data: { actorId: userId, action: spend.action, resource: spend.resource, resourceId: what },
+  // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счёт и
+  // отметка — под замком и по ОДНОЙ транзакции. Снаружи этого блока
+  // проверка потолка значения не имеет: см. шапку withSpendLock.
+  await withSpendLock(prisma, userId, spend.action, async (tx) => {
+    if ((await spentToday(tx, userId, spend.action)) >= limit) {
+      // 429, как у остальных потолков: предел временный, не правовой.
+      throw new HttpException(
+        `Достигнут суточный лимит: ${spend.refusalSubject} (${limit}/сутки). Попробуйте позже.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    await tx.auditLogEntry.create({
+      data: { actorId: userId, action: spend.action, resource: spend.resource, resourceId: what },
+    });
   });
 }
 

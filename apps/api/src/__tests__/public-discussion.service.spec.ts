@@ -21,6 +21,9 @@ function createFakePrisma() {
     // аргумент и меняет её статус одной транзакцией. Фейк выполняет
     // колбэк на себе — отката у него нет (см. audit-2026-09-04-atomicity).
     $transaction: async (arg: any) => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedArgument(a: any) { argumentsStore.push(a); },
     _seedProtocol(p: any) { protocols.push({ id: nextId(), createdAt: new Date(), ...p }); },

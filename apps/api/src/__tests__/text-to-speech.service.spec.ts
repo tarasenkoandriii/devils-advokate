@@ -6,7 +6,15 @@ import { BadGatewayException, BadRequestException, ForbiddenException, HttpExcep
 
 function createFakePrisma() {
   const cache: any[] = [];
-  return {
+  const fake: any = {
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счётчики
+    // расходов работают ОДНОЙ транзакцией под advisory-замком, и
+    // заглушка обязана знать ту же форму, что production. Прежняя не
+    // знала `$transaction` вовсе — то есть описывала базу, которой не
+    // бывает. Тело выполняется немедленно на том же объекте: порядок и
+    // атомарность проверяет спека пункта, здесь нужна только форма.
+    $transaction: async (body: any) => (typeof body === 'function' ? body(fake) : Promise.all(body)),
+    $executeRaw: async () => 1,
     _getCache() { return cache; },
     _seedCache(c: any) { cache.push(c); },
     auditLogEntry: {
@@ -26,6 +34,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 function createFakeConsentService(options: { hasConsent: boolean } = { hasConsent: true }) {

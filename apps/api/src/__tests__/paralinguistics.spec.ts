@@ -88,6 +88,9 @@ function makeDeps(segments: Array<{ id: string; participantId: string | null }>)
     aIInference: { findUniqueOrThrow: async () => ({ id: 'inf-1', output: prisma._output }) },
     promptVersion: { findFirst: async () => null },
     $transaction: async (fn: (tx: unknown) => Promise<void>) => fn(prisma),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
   };
   const aiRouter: any = {
     handlers: new Map<string, (o: unknown) => Promise<void>>(),

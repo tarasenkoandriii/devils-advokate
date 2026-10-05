@@ -37,6 +37,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     // прочитанного» её пережила.
     let reads = 0;
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
       libraryEntry: {
         // Первое чтение — пред-проверка: записи ещё нет.
@@ -61,6 +65,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     // Иначе тест выше проходил бы и в мире, где текст один на все случаи,
     // то есть где отказ снова перестал называть настоящее состояние.
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
       libraryEntry: {
         findFirst: async () => ({ id: 'e1', status: 'ACCEPTED' }),
@@ -79,6 +87,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     // человека туда, где лист есть.
     let created = false;
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       jobVacancy: {
         findUnique: async () => ({
           id: 'v1', duplicateOfId: null, title: 'Вакансия', siteHost: null,
@@ -108,6 +120,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
 
   it('обратная проба: чужого листа не видно — пробрасывается исходный отказ, а не выдуманный id', async () => {
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       jobVacancy: {
         findUnique: async () => ({
           id: 'v1', duplicateOfId: null, title: 'Вакансия', siteHost: null,
@@ -133,6 +149,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     const saved: Array<{ versionNumber: number; critique: string }> = [];
     let firstTry = true;
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', question: 'вопрос', goal: 'цель' }) },
       workingMaterial: { findFirst: async () => ({ id: 'm1', projectId: 'p1' }) },
       materialVersion: {
@@ -166,6 +186,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
   it('обратная проба: без гонки номер не сдвигается и в лог ничего не идёт', async () => {
     const saved: number[] = [];
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', question: 'вопрос', goal: null }) },
       workingMaterial: { findFirst: async () => ({ id: 'm1', projectId: 'p1' }) },
       materialVersion: {
@@ -196,6 +220,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     const saved: number[] = [];
     let attempts = 0;
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', question: 'вопрос', goal: null }) },
       workingMaterial: { findFirst: async () => ({ id: 'm1', projectId: 'p1' }) },
       materialVersion: {
@@ -228,6 +256,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     // хуже: человек не узнает даже того, что не получилось.
     let attempts = 0;
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', question: 'вопрос', goal: null }) },
       workingMaterial: { findFirst: async () => ({ id: 'm1', projectId: 'p1' }) },
       materialVersion: {
@@ -258,14 +290,22 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
   it('КЛЮЧЕВОЙ ТЕСТ: сбой записи в кэш TTS больше не выглядит промахом кэша', async () => {
     // Голый `catch {}` глотал ЛЮБОЙ отказ: перестань кэш писаться вовсе,
     // продукт платил бы за каждый повтор синтеза и не сказал бы никому.
-    const base = (createFails: () => never) => ({
-      prisma: {
+    const base = (createFails: () => never) => {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: потолок
+      // озвучки считается и отмечается ОДНОЙ транзакцией под замком, и
+      // заглушка обязана знать интерактивную форму `$transaction`.
+      const prisma: any = {
         ttsCache: { findUnique: async () => null, create: async () => createFails() },
         auditLogEntry: { create: async () => ({ id: 'a' }), count: async () => 0 },
-      },
+        $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+        $executeRaw: async () => 1,
+      };
+      return {
+      prisma,
       consent: { requireConsent: async () => undefined },
       secrets: { resolve: async () => 'key' },
-    });
+      };
+    };
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     try {
       // Гонка — молча: аудио у человека уже есть.
@@ -322,6 +362,10 @@ describe('Пункт [check-then-create-2] 2026-09-27: что получит ч�
     // значит `include` обязан быть запрошен в единственной ветке.
     let seen: { include?: unknown } = {};
     const prisma: any = {
+      // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05:
+      // счётчик расходов работает интерактивной формой `$transaction`.
+      $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+      $executeRaw: async () => 1,
       project: { findUnique: async () => ({ id: 'p1', ownerId: 'u1', mode: 'EMPLOYER_HIRING', recruitingTeamId: null }) },
       interviewPoolConfig: {
         upsert: async (args: any) => {

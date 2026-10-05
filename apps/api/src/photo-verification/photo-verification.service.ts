@@ -27,6 +27,7 @@ import { putPublicBlob, deleteBlob, VercelBlobError } from '../common/vercel-blo
 import { reverseImageSearch, SerpApiError } from '../common/serpapi-client';
 import { ConsentType, PhotoVerificationStatus } from '@prisma/client';
 import { resolveBlobToken } from '../common/blob-token';
+import { withSpendLock } from '../common/outward-spend';
 import { spendLimitByKey } from '../common/spend-limits';
 import { mayBePublished, NEVER_PUBLISHED_REFUSAL } from '../common/fact-scope';
 
@@ -61,14 +62,15 @@ export class PhotoVerificationService {
     // что уже применяется к EXTERNAL_AI в AIRouterService.
     await this.consent.requireConsent(userId, ConsentType.PUBLIC_IMAGE_SEARCH, fact.projectId ?? undefined);
 
-    await this.assertUnderRateLimit(userId);
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: проверка
+    // и отметка — ОДНО событие под замком. Раньше между ними стоял
+    // приём байтов, и два одновременных запроса оба проходили проверку
+    // по одному и тому же счёту. Отметка ДО первого платного шага:
+    // неудачная попытка тоже считается, недосчитать дороже, чем
+    // пересчитать — провайдер мог быть уже задет.
+    await this.spendAttempt(userId, personFactId);
 
     const imageBuffer = await this.bufferStreamWithLimit(imageStream);
-
-    // Отметка ДО первого платного шага: неудачная попытка тоже
-    // считается. Недосчитать здесь дороже, чем пересчитать —
-    // провайдер мог быть уже задет.
-    await this.recordAttempt(userId, personFactId);
 
     const [blobToken, serpApiKey] = await Promise.all([
       resolveBlobToken(this.secrets),
@@ -205,18 +207,21 @@ export class PhotoVerificationService {
    *
    * Считаем ПОПЫТКИ: отметка пишется до первого платного шага, по той
    * же схеме, что у транскрибации и поиска YouTube. */
-  private async assertUnderRateLimit(userId: string) {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.auditLogEntry.count({
-      where: { actorId: userId, action: PHOTO_VERIFICATION_USAGE_ACTION, createdAt: { gte: since } },
+  private async spendAttempt(userId: string, personFactId: string) {
+    await withSpendLock(this.prisma, userId, PHOTO_VERIFICATION_USAGE_ACTION, async (tx) => {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const count = await tx.auditLogEntry.count({
+        where: { actorId: userId, action: PHOTO_VERIFICATION_USAGE_ACTION, createdAt: { gte: since } },
+      });
+      if (count >= DAILY_LIMIT_PER_USER) {
+        throw new ForbiddenException(`Достигнут дневной лимит проверок фото (${DAILY_LIMIT_PER_USER}/день) — попробуйте завтра`);
+      }
+      await this.recordAttempt(tx, userId, personFactId);
     });
-    if (count >= DAILY_LIMIT_PER_USER) {
-      throw new ForbiddenException(`Достигнут дневной лимит проверок фото (${DAILY_LIMIT_PER_USER}/день) — попробуйте завтра`);
-    }
   }
 
-  private async recordAttempt(userId: string, personFactId: string) {
-    await this.prisma.auditLogEntry.create({
+  private async recordAttempt(tx: PrismaService, userId: string, personFactId: string) {
+    await tx.auditLogEntry.create({
       data: {
         actorId: userId,
         action: PHOTO_VERIFICATION_USAGE_ACTION,

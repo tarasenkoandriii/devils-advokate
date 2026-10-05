@@ -149,6 +149,9 @@ function makeFakePrisma() {
     },
     promptVersion: { findFirst: async () => null },
     $transaction: async (fn: (tx: unknown) => Promise<void>) => fn(prisma),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
   };
   return prisma;
 }

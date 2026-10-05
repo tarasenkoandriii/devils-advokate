@@ -22,7 +22,12 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счётчики
+    // расходов работают ОДНОЙ транзакцией под advisory-замком, и
+    // заглушка обязана знать ту же форму, что production.
+    $transaction: async (body: any) => (typeof body === 'function' ? body(fake) : Promise.all(body)),
+    $executeRaw: async () => 1,
     // Пункты [the-key-was-free-to-mint] / [the-policy-was-obeyed-by-hope]
     // 2026-09-30: расход платных/квотируемых вызовов считается по
     // журналу — фейк обязан уметь его читать и писать, иначе потолок
@@ -70,6 +75,7 @@ function createFakePrisma() {
       findMany: async ({ where }: any) => events.filter((e) => e.projectId === where.projectId).sort((a, b) => b.createdAt - a.createdAt),
     },
   };
+  return fake;
 }
 
 /** Язык пользователя для фейка prisma — вынесен наружу, чтобы тест мог

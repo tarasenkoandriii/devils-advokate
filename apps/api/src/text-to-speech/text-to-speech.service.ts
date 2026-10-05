@@ -25,6 +25,7 @@ import { SecretsService } from '../secrets/secrets.service';
 import { ConsentType } from '@prisma/client';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
 import { spendLimit } from '../common/spend-limits';
+import { withSpendLock } from '../common/outward-spend';
 import { isUniqueViolation } from '../common/unique-violation';
 
 const ELEVENLABS_API_KEY_REF = 'ELEVENLABS_API_KEY';
@@ -63,21 +64,29 @@ export class TextToSpeechService {
     private readonly secrets: SecretsService,
   ) {}
 
-  private async assertUnderDailyTtsLimit(userId: string): Promise<void> {
-    // Пункт [ceilings-nobody-was-told-about] 2026-09-24 — см. реестр.
+  /** Проверка потолка И отметка расхода — одним событием под замком.
+   *  См. шапку `withSpendLock`: без него двадцать одновременных попыток
+   *  при потолке пять давали двадцать записей. */
+  private async spendTtsCall(userId: string, textHash: string): Promise<void> {
     const limit = spendLimit('TTS_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return;
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.auditLogEntry.count({
-      where: { actorId: userId, action: TTS_USAGE_ACTION, createdAt: { gte: since } },
+    await withSpendLock(this.prisma, userId, TTS_USAGE_ACTION, async (tx) => {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const count = await tx.auditLogEntry.count({
+        where: { actorId: userId, action: TTS_USAGE_ACTION, createdAt: { gte: since } },
+      });
+      if (count >= limit) {
+        throw new HttpException(
+          `Достигнут суточный лимит озвучки (${limit}/сутки). Попробуйте позже.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      await tx.auditLogEntry.create({
+        data: { actorId: userId, action: TTS_USAGE_ACTION, resource: 'TtsCache', resourceId: textHash },
+      });
     });
-    if (count >= limit) {
-      throw new HttpException(
-        `Достигнут суточный лимит озвучки (${limit}/сутки). Попробуйте позже.`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
   }
+
 
   async synthesize(userId: string, text: string, voiceId?: string): Promise<SynthesizeResult> {
     if (!text.trim()) {
@@ -102,13 +111,19 @@ export class TextToSpeechService {
     // AuditLogEntry (actorId + action + createdAt), новая таблица ради
     // счётчика не заводится (тот же принцип, что у Vision OCR — счёт
     // по уже существующим записям).
-    await this.assertUnderDailyTtsLimit(userId);
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05, и здесь
+    // находка двойная. Первое: проверка и отметка были двумя событиями,
+    // и одновременные запросы проходили по одному счёту. Второе, хуже:
+    // отметка стояла ПОСЛЕ `callElevenLabs`, то есть считались
+    // УСПЕХИ — единственный счётчик продукта, который так делал.
+    // Деньги у провайдера списываются и за неудачную попытку, и
+    // остальные пять счётчиков прямо пишут в своих шапках, что
+    // считают попытки. Теперь и этот: проверка и отметка — одно
+    // событие под замком, ДО платного вызова.
+    await this.spendTtsCall(userId, textHash);
 
     const apiKey = await this.secrets.resolve(ELEVENLABS_API_KEY_REF);
     const audioBase64 = await this.callElevenLabs(text.trim(), resolvedVoiceId, apiKey);
-    await this.prisma.auditLogEntry.create({
-      data: { actorId: userId, action: TTS_USAGE_ACTION, resource: 'TtsCache', resourceId: textHash },
-    });
 
     // Гонка: если два одновременных запроса с одинаковым текстом
     // проскочили проверку кэша раньше, чем оба успели создать запись,

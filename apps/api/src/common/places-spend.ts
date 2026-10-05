@@ -34,6 +34,7 @@
 
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { spendLimit } from './spend-limits';
+import { withSpendLock } from './outward-spend';
 import type { PrismaService } from '../prisma/prisma.service';
 
 /** Действие в журнале, по которому считается суточный расход. Имя одно
@@ -61,9 +62,15 @@ async function spentToday(prisma: PrismaService, userId: string): Promise<number
 export async function spendPlacesRequest(prisma: PrismaService, userId: string, what: string): Promise<void> {
   const limit = spendLimit('PLACES_REQUESTS_PER_USER_PER_DAY');
   if (limit === 0) return; // явное «не ограничивай» — как у остальных потолков
-  if ((await spentToday(prisma, userId)) >= limit) throw tooMany(limit);
-  await prisma.auditLogEntry.create({
-    data: { actorId: userId, action: PLACES_USAGE_ACTION, resource: 'GooglePlaces', resourceId: what },
+  // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счёт и
+  // отметка — одно событие под замком. См. шапку `withSpendLock`: без
+  // него двадцать одновременных попыток при потолке пять давали
+  // двадцать записей, то есть потолок не держал ничего.
+  await withSpendLock(prisma, userId, PLACES_USAGE_ACTION, async (tx) => {
+    if ((await spentToday(tx, userId)) >= limit) throw tooMany(limit);
+    await tx.auditLogEntry.create({
+      data: { actorId: userId, action: PLACES_USAGE_ACTION, resource: 'GooglePlaces', resourceId: what },
+    });
   });
 }
 

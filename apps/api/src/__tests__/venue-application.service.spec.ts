@@ -13,7 +13,15 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счётчики
+    // расходов работают ОДНОЙ транзакцией под advisory-замком, и
+    // заглушка обязана знать ту же форму, что production. Прежняя не
+    // знала `$transaction` вовсе — то есть описывала базу, которой не
+    // бывает. Тело выполняется немедленно на том же объекте: порядок и
+    // атомарность проверяет спека пункта, здесь нужна только форма.
+    $transaction: async (body: any) => (typeof body === 'function' ? body(fake) : Promise.all(body)),
+    $executeRaw: async () => 1,
     _seedUser(u: any) { users.set(u.id, { isVenueModerator: false, ...u }); },
     _seedApplication(a: any) { applications.push({ id: a.id ?? nextId(), status: 'PENDING', createdAt: new Date(), openingHours: [], photoReferences: [], ...a }); },
     _seedApprovedVenue(v: any) { approvedVenues.push({ id: v.id ?? nextId(), createdAt: new Date(), referralFeeAmount: null, isPriorityPartner: false, ...v }); },
@@ -89,6 +97,7 @@ function createFakePrisma() {
         ) ?? null,
     },
   };
+  return fake;
 }
 
 function createFakeSecrets(apiKey = 'fake-places-key') {

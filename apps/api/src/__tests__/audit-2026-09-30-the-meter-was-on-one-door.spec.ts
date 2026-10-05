@@ -76,19 +76,23 @@ function sourceFiles(): string[] {
 function fakeLog(initial = 0) {
   const rows: Array<{ action: string; after?: unknown }> = [];
   for (let i = 0; i < initial; i++) rows.push({ action: 'заполнение' });
-  return {
-    rows,
-    prisma: {
-      auditLogEntry: {
-        count: async ({ where }: any) => rows.filter((r) => r.action === where.action).length,
-        findMany: async ({ where }: any) => rows.filter((r) => r.action === where.action),
-        create: async ({ data }: any) => {
-          rows.push(data);
-          return data;
-        },
+  // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счёт и
+  // отметка идут ОДНОЙ транзакцией под advisory-замком, и заглушка
+  // обязана знать ту же форму, что production — иначе этот тест прошёл
+  // бы и на коде БЕЗ замка, то есть проверял бы не то, что проверяет.
+  const prisma: any = {
+    auditLogEntry: {
+      count: async ({ where }: any) => rows.filter((r) => r.action === where.action).length,
+      findMany: async ({ where }: any) => rows.filter((r) => r.action === where.action),
+      create: async ({ data }: any) => {
+        rows.push(data);
+        return data;
       },
-    } as any,
+    },
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
   };
+  return { rows, prisma: prisma as any };
 }
 
 describe('[the-meter-was-on-one-door] потолки стоят у каждой платной двери', () => {

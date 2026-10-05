@@ -37,6 +37,9 @@ function createFakePrisma() {
       findFirst: async () => null,
     },
     $transaction: async (ops: Promise<any>[]) => Promise.all(ops),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     argument: {
       create: async ({ data }: any) => {
         const a = { id: nextId(), createdAt: new Date(), ...data };

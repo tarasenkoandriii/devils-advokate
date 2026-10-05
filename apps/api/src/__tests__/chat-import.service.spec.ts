@@ -64,6 +64,9 @@ function createFakePrisma() {
     // $transaction(callback) — вызываем callback с тем же объектом,
     // реальной транзакционности не требуется для теста сервисного слоя.
     $transaction: async (callback: any) => callback(prismaCore),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     _seedProject(p: any) { projects.set(p.id, p); },
     _getConversations() { return conversations; },
     _getParticipants() { return participants; },

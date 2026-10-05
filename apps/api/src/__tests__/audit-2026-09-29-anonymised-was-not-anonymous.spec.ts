@@ -52,6 +52,9 @@ function job(id: string, userId: string): Record<string, unknown> {
 function make(jobs: Array<Record<string, unknown>>) {
   const prisma: any = {
     $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
     user: {
       findUnique: async () => ({ id: 'u1', telegramId: '123456' }),
       delete: async () => ({}),

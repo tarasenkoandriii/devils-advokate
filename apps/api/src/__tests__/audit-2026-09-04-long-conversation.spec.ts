@@ -87,6 +87,9 @@ function turningPointsFake(segments: ReturnType<typeof speech>) {
     },
     conversationSignalEvidence: { create: async ({ data }: any) => data },
     $transaction: async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
+    // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
+    // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
+    $executeRaw: async () => 1,
   };
   const aiRouter: any = {
     execute: async (req: any) => {

@@ -82,18 +82,26 @@ function sourceFiles(): string[] {
 /** Журнал расхода: считает и пишет, как настоящий. */
 function fakeLog() {
   const rows: Array<{ action: string }> = [];
-  return {
-    rows,
-    prisma: {
-      auditLogEntry: {
-        count: async ({ where }: any) => rows.filter((r) => r.action === where.action).length,
-        create: async ({ data }: any) => {
-          rows.push(data);
-          return data;
-        },
+  // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: счёт и
+  // отметка идут ОДНОЙ транзакцией под advisory-замком, и заглушка
+  // обязана знать ту же форму, что production. Прежняя не знала
+  // `$transaction` вовсе — то есть описывала базу, которой не бывает, и
+  // этот тест проходил бы и на коде БЕЗ замка. Тело исполняется на том
+  // же объекте: атомарность здесь не изображается, её проверяет спека
+  // пункта, а доказательство на живом Postgres записано числами в
+  // `TODO.md`.
+  const prisma: any = {
+    auditLogEntry: {
+      count: async ({ where }: any) => rows.filter((r) => r.action === where.action).length,
+      create: async ({ data }: any) => {
+        rows.push(data);
+        return data;
       },
-    } as any,
+    },
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
   };
+  return { rows, prisma: prisma as any };
 }
 
 describe('[the-policy-was-obeyed-by-hope] остаток выходов наружу под потолком', () => {
