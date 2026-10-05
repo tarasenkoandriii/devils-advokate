@@ -93,10 +93,16 @@ export function cacheTarget(binaryTarget, version, home = homedir()) {
   return join(home, '.cache', 'prisma', 'master', version, binaryTarget, name);
 }
 
-/** Платформа Prisma для текущей машины — из уже сгенерированного
- *  клиента, если он есть, иначе по процессу. Точное имя важно: кэш
- *  ищется по нему. */
-export function currentBinaryTarget(repo = REPO) {
+/** Платформа Prisma для текущей машины. Точное имя важно: кэш ищется по
+ *  нему.
+ *
+ *  Параметра здесь нет намеренно, и за это стоит записать отдельно: в
+ *  первой редакции стоял `repo = REPO`, который не использовался, и
+ *  ESLint в живом CI уронил прогон 24 на `'repo' is assigned a value but
+ *  never used`. ESLint — единственная проверка, которой на машине
+ *  разработки нет (неполный `npm install`), и именно она меня и поймала.
+ *  Это и есть ответ на вопрос, что закрывать следующим. */
+export function currentBinaryTarget() {
   if (process.platform === 'darwin') return process.arch === 'arm64' ? 'darwin-arm64' : 'darwin';
   return process.arch === 'arm64' ? 'linux-arm64-openssl-3.0.x' : 'debian-openssl-3.0.x';
 }
