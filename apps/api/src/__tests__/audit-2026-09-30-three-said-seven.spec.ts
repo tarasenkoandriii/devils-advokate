@@ -144,8 +144,8 @@ describe('[three-said-seven] числа в документах деплоя с�
     expect(vercel.includes(`— ${creates} \`CREATE INDEX\``)).toBe(true);
 
     const docker = doc('DOCKER.md');
-    expect(sqlFiles.length).toBe(24);
-    expect(docker.includes('**24: пять `pg_cron_*.sql` и девятнадцать прочих**')).toBe(true);
+    expect(sqlFiles.length).toBe(25);
+    expect(docker.includes('**25: пять `pg_cron_*.sql` и двадцать прочих**')).toBe(true);
   });
 
   it('ОБРАТНАЯ ПРОБА: счёт индексов видит настоящий оператор и НЕ видит его же в комментарии и в строке', () => {

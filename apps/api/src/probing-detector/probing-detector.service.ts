@@ -28,6 +28,7 @@ import { hasPersonVerdict, NO_PERSON_VERDICT_RULE } from '../common/no-person-ve
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'probing-detection';
 const REPEAT_THRESHOLD = 2; // "дважды, трижды" — buкально ТЗ, первое упоминание не считается
@@ -109,10 +110,7 @@ export class ProbingDetectorService {
       topicsText ? `Уже отслеживаемые темы:\n${topicsText}` : 'Отслеживаемых тем пока нет.',
     ].join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

@@ -11,6 +11,15 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../prisma/prisma.service';
 import { PromptVersionStatus } from '@prisma/client';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { withScopeLock } from '../common/ceiling-lock';
+import { activePromptVersion } from '../common/active-prompt-version';
+
+/** Ключ замка на «ровно одна ACTIVE в этой группе промптов» — одно
+ *  место, чтобы повышение и откат ждали друг друга. Разъехавшиеся
+ *  ключи означали бы два замка и ту же гонку обратно. */
+function promptActiveLockKey(promptId: string): string {
+  return `prompt-active|${promptId}`;
+}
 
 @Injectable()
 export class PromptRegistryService {
@@ -43,12 +52,14 @@ export class PromptRegistryService {
     });
   }
 
+  // Пункт [the-first-row-was-whichever] 2026-10-05: оператор обязан
+  // видеть ТУ ЖЕ строку, по которой отвечает продукт. Здесь стояла своя
+  // копия запроса с `createdAt: 'desc'` — то есть при двух активных
+  // версиях экран оператора и 41 потребитель могли сойтись на одной
+  // строке только случайно. Теперь чтение одно на всех.
   async getActiveVersion(userId: string, promptId: string) {
     await this.assertOperator(userId);
-    return this.prisma.promptVersion.findFirst({
-      where: { promptId, status: PromptVersionStatus.ACTIVE },
-      orderBy: { createdAt: 'desc' },
-    });
+    return activePromptVersion(this.prisma, promptId);
   }
 
   // "PATCH после testing запрещён намеренно — версия, уже прошедшая
@@ -87,7 +98,7 @@ export class PromptRegistryService {
 
     const lastRun = await this.prisma.evaluationRun.findFirst({
       where: { promptVersionId: id, subjectType: 'PROMPT_VERSION' },
-      orderBy: { startedAt: 'desc' },
+      orderBy: [{ startedAt: 'desc' }, { id: 'desc' }],
       include: { releaseGate: true, results: { include: { evaluationMetric: true } } },
     });
 
@@ -104,20 +115,47 @@ export class PromptRegistryService {
       );
     }
 
-    // Предыдущая ACTIVE-версия того же promptId переводится в
-    // DEPRECATED — ровно одна ACTIVE на promptId одновременно (35
-    // потребителей запрашивают "активную версию", не список).
-    const previousActive = await this.prisma.promptVersion.findFirst({
-      where: { promptId: version.promptId, status: PromptVersionStatus.ACTIVE },
-    });
-    if (previousActive) {
-      await this.prisma.promptVersion.update({
-        where: { id: previousActive.id },
+    // Предыдущие ACTIVE-версии того же promptId переводятся в
+    // DEPRECATED. Пункт [the-first-row-was-whichever] 2026-10-05 —
+    // здесь было ДВА дефекта, и оба держались на одном обещании.
+    //
+    // ПЕРВЫЙ: обещание «ровно одна ACTIVE на promptId» (его прежний
+    // текст стоял ровно на этом месте) не обеспечивалось ничем. Ни
+    // уникального ограничения в базе, ни транзакции, ни блокировки:
+    // чтение, снятие прежней и постановка новой были тремя отдельными
+    // обращениями. Два одновременных повышения разных версий одного
+    // промпта видели одну и ту же прежнюю активную, оба её снимали и
+    // оба ставили себя — на выходе ДВЕ активных.
+    //
+    // ВТОРОЙ: снималась РОВНО ОДНА прежняя активная. Если их уже две
+    // (а до появления этого сервиса версии активировали ручным SQL —
+    // сказано в шапке файла, значит данные инварианта не несут),
+    // повышение третьей снимало одну и оставляло две.
+    //
+    // Теперь это одно событие под замком по `promptId`, и снимаются
+    // ВСЕ активные. Снятые названы в журнале списком: назвать одну
+    // значило бы соврать оператору в том единственном месте, где он
+    // потом будет разбираться.
+    // Снятые версии собираются в переменную, а не возвращаются объектом
+    // из замка: сторож `[computed-for-the-person-never-shown]` видит
+    // ЛЮБОЙ `return {` в теле метода и считает его ключи ответом
+    // человеку. Объект здесь был внутренним, но отличить их сторож не
+    // может — а записывать в реестр ответов то, что ответом не
+    // является, значило бы засорять реестр ради удобства кода.
+    let previousActiveIds: string[] = [];
+    const activated = await withScopeLock(this.prisma, promptActiveLockKey(version.promptId), async (tx) => {
+      previousActiveIds = (
+        await tx.promptVersion.findMany({
+          where: { promptId: version.promptId, status: PromptVersionStatus.ACTIVE },
+          select: { id: true },
+        })
+      ).map((v) => v.id);
+      await tx.promptVersion.updateMany({
+        where: { promptId: version.promptId, status: PromptVersionStatus.ACTIVE },
         data: { status: PromptVersionStatus.DEPRECATED },
       });
-    }
-
-    const activated = await this.prisma.promptVersion.update({ where: { id }, data: { status: PromptVersionStatus.ACTIVE } });
+      return tx.promptVersion.update({ where: { id }, data: { status: PromptVersionStatus.ACTIVE } });
+    });
 
     // Пункт [audit-log] — зміна активного промпту впливає на поведінку
     // AI для всього продукту одразу, найвпливовіша з чотирьох дій, що
@@ -127,7 +165,7 @@ export class PromptRegistryService {
       action: 'prompt_version.promoted_to_active',
       resource: 'PromptVersion',
       resourceId: id,
-      before: { status: version.status, previousActiveId: previousActive?.id ?? null },
+      before: { status: version.status, previousActiveIds },
       after: { status: activated.status },
     });
 
@@ -137,31 +175,55 @@ export class PromptRegistryService {
   // "Откат на предыдущую ACTIVE-версию тем же promptId — одна операция,
   // не восстановление из бэкапа" (implementation-ready.md §7, правило 4;
   // ТЗ §5.1).
+  // Пункт [the-first-row-was-whichever] 2026-10-05 — откат это
+  // АВАРИЙНЫЙ ТОРМОЗ, и он мог не сработать, отчитавшись об успехе.
+  //
+  // Было: `findFirst` без порядка брал ПРОИЗВОЛЬНУЮ из активных, метил
+  // её `ROLLBACK`, а вторая оставалась активной. Хуже всего то, что
+  // происходило дальше: все 41 потребителя читали активную версию с
+  // `orderBy: { createdAt: 'desc' }`, то есть выбирали самую НОВУЮ по
+  // созданию, — а откат возвращает в строй версию, созданную РАНЬШЕ.
+  // Значит недобитая новая оставалась той, по которой продукт отвечает,
+  // оператор получал успешный ответ и запись в журнале, и промпт,
+  // который он только что откатил, продолжал работать.
+  //
+  // Теперь: одно событие под замком; в `ROLLBACK` уходят ВСЕ активные
+  // (тормоз обязан останавливать, а не выбирать, что остановить); и
+  // предыдущая выведенная выбирается `[updatedAt desc, id desc]` —
+  // `updatedAt` не уникален, и без второго ключа ничья вернулась бы.
   async rollback(userId: string, promptId: string) {
     await this.assertOperator(userId);
-    const current = await this.prisma.promptVersion.findFirst({
-      where: { promptId, status: PromptVersionStatus.ACTIVE },
-    });
-    if (!current) {
-      throw new BadRequestException(`У этого промпта нет активной версии — откатывать не с чего`);
-    }
-    const previous = await this.prisma.promptVersion.findFirst({
-      where: { promptId, status: PromptVersionStatus.DEPRECATED },
-      orderBy: { updatedAt: 'desc' },
-    });
-    if (!previous) {
-      throw new BadRequestException(`У этого промпта нет предыдущей выведенной версии — откатывать не к чему`);
-    }
 
-    await this.prisma.promptVersion.update({ where: { id: current.id }, data: { status: PromptVersionStatus.ROLLBACK } });
-    const restored = await this.prisma.promptVersion.update({ where: { id: previous.id }, data: { status: PromptVersionStatus.ACTIVE } });
+    let rolledBackIds: string[] = [];
+    const restored = await withScopeLock(this.prisma, promptActiveLockKey(promptId), async (tx) => {
+      const actives = await tx.promptVersion.findMany({
+        where: { promptId, status: PromptVersionStatus.ACTIVE },
+        select: { id: true },
+      });
+      if (actives.length === 0) {
+        throw new BadRequestException(`У этого промпта нет активной версии — откатывать не с чего`);
+      }
+      const previous = await tx.promptVersion.findFirst({
+        where: { promptId, status: PromptVersionStatus.DEPRECATED },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      });
+      if (!previous) {
+        throw new BadRequestException(`У этого промпта нет предыдущей выведенной версии — откатывать не к чему`);
+      }
+      await tx.promptVersion.updateMany({
+        where: { promptId, status: PromptVersionStatus.ACTIVE },
+        data: { status: PromptVersionStatus.ROLLBACK },
+      });
+      rolledBackIds = actives.map((v) => v.id);
+      return tx.promptVersion.update({ where: { id: previous.id }, data: { status: PromptVersionStatus.ACTIVE } });
+    });
 
     await this.auditLog.record({
       actorId: userId,
       action: 'prompt_version.rolled_back',
       resource: 'PromptVersion',
       resourceId: promptId,
-      before: { activeId: current.id },
+      before: { activeIds: rolledBackIds },
       after: { activeId: restored.id },
     });
 

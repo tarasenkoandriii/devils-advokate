@@ -14,6 +14,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ConversationScriptType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'conversation-script';
 
@@ -56,10 +57,7 @@ export class ConversationScriptService {
 
     const userPrompt = this.buildPrompt(project, objective, boundaries, type, personLabel);
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {
@@ -108,11 +106,11 @@ export class ConversationScriptService {
     const [opening, closing] = await Promise.all([
       this.prisma.conversationScript.findFirst({
         where: { projectId, type: ConversationScriptType.OPENING },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
       this.prisma.conversationScript.findFirst({
         where: { projectId, type: ConversationScriptType.CLOSING },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
     ]);
 

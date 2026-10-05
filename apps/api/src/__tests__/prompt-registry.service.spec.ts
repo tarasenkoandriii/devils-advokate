@@ -8,10 +8,50 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  // Пункт [the-first-row-was-whichever] 2026-10-05: фейк обязан знать
+  // ту же форму, что production, иначе он проверяет себя. Здесь было
+  // ТРИ расхождения, и каждое прятало проверяемое поведение:
+  //  • `findMany` игнорировал `where.status` — повышение версии под
+  //    замком сняло бы ВСЕ версии промпта, а не активные, и тест бы
+  //    этого не заметил;
+  //  • `findFirst` всегда сортировал по `createdAt: 'desc'`, что бы ни
+  //    просили, — то есть новый порядок `[updatedAt desc, id desc]`
+  //    проверить было нечем;
+  //  • `update` не двигал `updatedAt`, а именно по нему теперь
+  //    выбирается «последняя переведённая в ACTIVE».
+  const matchWhere = (v: any, where: any = {}) => {
+    if (where.promptId !== undefined && v.promptId !== where.promptId) return false;
+    if (where.status !== undefined && v.status !== where.status) return false;
+    if (where.id !== undefined && v.id !== where.id) return false;
+    return true;
+  };
+  /** Порядок берётся из запроса, а не придумывается заглушкой. */
+  const applyOrder = (rows: any[], orderBy: any) => {
+    const keys = (Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : []).flatMap((o: any) =>
+      Object.entries(o).map(([field, dir]) => ({ field, dir })),
+    );
+    if (keys.length === 0) return rows;
+    return [...rows].sort((a, b) => {
+      for (const { field, dir } of keys as Array<{ field: string; dir: string }>) {
+        const av = a[field];
+        const bv = b[field];
+        if (av === bv) continue;
+        const cmp = av > bv ? 1 : -1;
+        return dir === 'desc' ? -cmp : cmp;
+      }
+      return 0;
+    });
+  };
+
+  const fake: any = {
     _seedUser(u: any) { users.set(u.id, { isOperator: false, ...u }); },
     _seedRun(r: any) { runs.push(r); },
     _getVersions() { return versions; },
+
+    // Замок берётся сырым запросом внутри интерактивной транзакции —
+    // заглушка обязана знать и то, и другое.
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
 
     user: {
       findUnique: async ({ where }: any) => users.get(where.id) ?? null,
@@ -22,21 +62,24 @@ function createFakePrisma() {
         versions.push(v);
         return v;
       },
-      findMany: async ({ where }: any) =>
-        versions.filter((v) => v.promptId === where.promptId).sort((a, b) => b.createdAt - a.createdAt),
-      findFirst: async ({ where }: any) => {
-        const matches = versions.filter((v) => {
-          if (where.promptId && v.promptId !== where.promptId) return false;
-          if (where.status && v.status !== where.status) return false;
-          return true;
-        });
-        return matches.sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
-      },
+      findMany: async ({ where, orderBy }: any = {}) =>
+        applyOrder(versions.filter((v) => matchWhere(v, where)), orderBy ?? { createdAt: 'desc' }),
+      findFirst: async ({ where, orderBy }: any = {}) =>
+        applyOrder(versions.filter((v) => matchWhere(v, where)), orderBy ?? { createdAt: 'desc' })[0] ?? null,
       findUnique: async ({ where }: any) => versions.find((v) => v.id === where.id) ?? null,
       update: async ({ where, data }: any) => {
         const idx = versions.findIndex((v) => v.id === where.id);
-        versions[idx] = { ...versions[idx], ...data };
+        versions[idx] = { ...versions[idx], ...data, updatedAt: new Date() };
         return versions[idx];
+      },
+      updateMany: async ({ where, data }: any) => {
+        let count = 0;
+        versions.forEach((v, i) => {
+          if (!matchWhere(v, where)) return;
+          versions[i] = { ...v, ...data, updatedAt: new Date() };
+          count += 1;
+        });
+        return { count };
       },
     },
     evaluationRun: {
@@ -46,6 +89,7 @@ function createFakePrisma() {
       },
     },
   };
+  return fake;
 }
 
 function makeService(prisma: any) {

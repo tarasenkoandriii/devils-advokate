@@ -16,7 +16,7 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
     _seedProject(p: any) {
       const project = { id: nextId(), ...p };
       projects.set(project.id, project);
@@ -158,7 +158,14 @@ function createFakePrisma() {
         return rows;
       },
     },
+    // Пункт [the-first-row-was-whichever] 2026-10-05: единственность
+    // SELF держится замком, то есть интерактивной транзакцией с сырым
+    // запросом внутри — заглушка обязана знать обе формы, и отдавать в
+    // транзакцию ТУ ЖЕ поверхность, что снаружи.
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
   };
+  return fake;
 }
 
 function makeService(prisma: any, comparison: any = { compare: async () => ({ status: 'NO_DISCREPANCY_FOUND', statements: [] }) }) {

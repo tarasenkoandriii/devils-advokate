@@ -172,7 +172,7 @@ export class ConversationsService implements OnModuleInit {
     // который уже чинили в AIRouter.resolveModelVersion.
     const modelVersion = await this.prisma.aIModelVersion.findFirst({
       where: { model: { providerId: provider.id } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     if (!modelVersion) {
       throw new ServiceUnavailableException(
@@ -207,7 +207,7 @@ export class ConversationsService implements OnModuleInit {
         ? modelVersion
         : (await this.prisma.aIModelVersion.findFirst({
             where: { model: { provider: { name: usedProvider } } },
-            orderBy: { createdAt: 'asc' },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           })) ?? modelVersion;
 
     // Пункт [multimodal] §7.2 — счётчик потребителей файла. AssemblyAI
@@ -261,9 +261,46 @@ export class ConversationsService implements OnModuleInit {
     // Ищем по обоим написаниям: задачи до Пункта [stt-multi] лежат без
     // префикса провайдера, новые — с ним. Иначе результат уже
     // оплаченной задачи, поставленной до выката, потерялся бы.
-    const conversation = await this.prisma.conversation.findFirst({
+    //
+    // Пункт [the-first-row-was-whichever] 2026-10-05: здесь был
+    // `findFirst` БЕЗ порядка, а условие — `in` по ПЯТИ написаниям
+    // (голый id и по префиксу на каждого из трёх провайдеров).
+    // `externalTranscriptionJobId` не уникален в схеме (только
+    // `@@index`), значит под одно тело вебхука могли подойти ДВА разных
+    // разговора — например `soniox:abc` и легаси-строка `abc`, — и
+    // выбор делал планировщик базы. Цена названа прямо в соседнем файле
+    // (`transcription.service.ts`): чужая расшифровка целиком ложится в
+    // разговор человека, и дальше по этому тексту строятся аргументы,
+    // обязательства и «что не стоило говорить».
+    //
+    // ПОЧЕМУ НЕ СУЖЕНИЕ ПОИСКА ДО ОДНОГО НАПИСАНИЯ. `providerHint`
+    // выводится из формы тела (`transcript_id` → assemblyai, `id` →
+    // soniox) и ElevenLabs не различает вовсе. Сузить поиск значило бы
+    // вернуть ровно ту регрессию, которую блокер ревью 2026-09-02
+    // описал в `sttJobIdVariants`: вебхук провайдера не находит
+    // разговор НИКОГДА, расшифровка уже оплачена, разговор навсегда
+    // в TRANSCRIBING. Сортировка тоже не лечит — выбрать «новейший из
+    // двух» значит с тем же шансом отдать расшифровку не тому.
+    //
+    // Поэтому берём ДВА и при неоднозначности не привязываем НИЧЕГО:
+    // отсутствие расшифровки человек заметит и переспросит, подложенную
+    // чужую — нет. Запись провайдера при этом НЕ удаляется: результат
+    // принадлежит одному из найденных, и уборка отняла бы возможность
+    // разобраться.
+    const matches = await this.prisma.conversation.findMany({
       where: { externalTranscriptionJobId: { in: sttJobIdVariants(payload.externalJobId) } },
+      orderBy: [{ id: 'asc' }],
+      take: 2,
     });
+    if (matches.length > 1) {
+      this.logger.error(
+        `Вебхук расшифровки подошёл СРАЗУ К ДВУМ разговорам (${matches
+          .map((c) => `${c.id}=${c.externalTranscriptionJobId}`)
+          .join(', ')}) — ничего не привязано: подложить чужую расшифровку хуже, чем не привязать ничего. Запись у провайдера оставлена.`,
+      );
+      return { acknowledged: true, matched: false, ambiguous: true };
+    }
+    const conversation = matches[0] ?? null;
     if (!conversation) {
       // Не бросаем 404 наружу как есть — AssemblyAI не обязан знать
       // внутреннюю структуру наших ошибок, просто логируем и отвечаем

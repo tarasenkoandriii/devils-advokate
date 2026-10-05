@@ -108,7 +108,7 @@ export class JobSearchOnboardingService {
     const participant = await this.prisma.conversationParticipant.findFirst({ where: { conversationId, isSelf: true } });
     const lastSegment = await this.prisma.transcriptSegment.findFirst({
       where: { transcriptId: transcript.id },
-      orderBy: { endMs: 'desc' },
+      orderBy: [{ endMs: 'desc' }, { id: 'desc' }],
     });
     const startMs = (lastSegment?.endMs ?? 0) + 1;
 

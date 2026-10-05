@@ -241,6 +241,17 @@ export class TermsSheetService {
       return await this.prisma.termsSheet.create({ data });
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
+      // Пункт [the-first-row-was-whichever] 2026-10-05 — открытая
+      // ловушка, а не дефект нынешних вызовов. Оба поля `key`
+      // необязательны по типу, и `{}` типы не запрещают; Prisma
+      // трактует `where: {}` как «условия нет» и вернула бы ПЕРВУЮ
+      // строку таблицы — то есть `sheetAlreadyOpen()` отдал бы человеку
+      // идентификатор чужого листа условий, а экран по нему этот лист
+      // открыл бы. Ровно то, что шапка этого метода называет
+      // неприемлемым. Сегодня оба вызывающих места передают ровно одно
+      // уникальное поле (`configId @unique` либо `vacancyId @unique`),
+      // но третий вызов не обязан.
+      if (!key.configId && !key.vacancyId) throw err;
       const winner = await this.prisma.termsSheet.findFirst({ where: key });
       // Если чужого листа не видно (успели удалить) — пробрасываем
       // исходный отказ: выдумывать идентификатор, которого не видели,
@@ -667,7 +678,7 @@ export class TermsSheetService {
   async addClause(userId: string, sheetId: string, dto: { side: TermsSide; kind: TermsClauseKind; text: string; category?: string | null; isRequired?: boolean }) {
     await this.assertSheetAccess(userId, sheetId);
     if (!dto.text?.trim()) throw new BadRequestException('text не может быть пустым');
-    const last = await this.prisma.termsClause.findFirst({ where: { sheetId }, orderBy: { orderIndex: 'desc' }, select: { orderIndex: true } });
+    const last = await this.prisma.termsClause.findFirst({ where: { sheetId }, orderBy: [{ orderIndex: 'desc' }, { id: 'desc' }], select: { orderIndex: true } });
     const clause = await this.prisma.termsClause.create({
       data: {
         sheetId,
@@ -722,7 +733,7 @@ export class TermsSheetService {
           (x) => x.sourceClauseId,
         ),
       );
-      const last = await this.prisma.termsClause.findFirst({ where: { sheetId: is.id }, orderBy: { orderIndex: 'desc' }, select: { orderIndex: true } });
+      const last = await this.prisma.termsClause.findFirst({ where: { sheetId: is.id }, orderBy: [{ orderIndex: 'desc' }, { id: 'desc' }], select: { orderIndex: true } });
       let orderIndex = (last?.orderIndex ?? -1) + 1;
       for (const c of clauses) {
         if (already.has(c.id)) continue;
@@ -857,7 +868,7 @@ export class TermsSheetService {
     for (const d of drafts) {
       const prev = await this.prisma.clausePosition.findFirst({
         where: { clauseId: d.clauseId, bySide: d.bySide, confirmedAt: { not: null }, rejectedAt: null },
-        orderBy: { confirmedAt: 'desc' },
+        orderBy: [{ confirmedAt: 'desc' }, { id: 'desc' }],
         select: { id: true },
       });
       await this.prisma.clausePosition.update({

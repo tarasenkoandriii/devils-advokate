@@ -48,6 +48,15 @@ function createFakePrisma() {
         ).length,
     },
     projectPerson: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: решающих может
+      // быть двое, и прогноз брал произвольного. Теперь берутся ДВА и,
+      // если их два, продукт говорит это вслух вместо выбора за
+      // человека — заглушка обязана знать `findMany`.
+      findMany: async ({ where, include, take }: any) => {
+        const rows = projectPeople.filter((x) => x.projectId === where.projectId && x.stakeholderRole === where.stakeholderRole);
+        const limited = typeof take === 'number' ? rows.slice(0, take) : rows;
+        return include?.person ? limited.map((pp) => ({ ...pp, person: people.get(pp.personId) })) : limited;
+      },
       findFirst: async ({ where, include }: any) => {
         const pp = projectPeople.find((x) => x.projectId === where.projectId && x.stakeholderRole === where.stakeholderRole);
         if (!pp) return null;
@@ -137,6 +146,32 @@ async function run() {
 
     await svc.generateScenarios(USER_ID, PROJECT_ID);
     assertEqual(fakeRouter.lastRequest.userPrompt.includes('ещё не определён'), true, 'честное указание отсутствия решающего в промпте');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [the-first-row-was-whichever]: двое решающих — прогноз остаётся общим и говорит почему', async () => {
+    // Было: `findFirst` без порядка брал одного из двоих, и человек
+    // получал прогноз «как себя поведёт ключевой человек», построенный
+    // на профиле и прецедентах ДРУГОГО — с его именем в тексте. Два
+    // запроса подряд могли дать прогнозы про разных людей, не сообщив
+    // об этом. Сортировка сделала бы произвольный выбор
+    // воспроизводимым, а не правильным; продукт обязан сказать вслух.
+    const prisma = createFakePrisma();
+    prisma._seedProject({ id: PROJECT_ID, ownerId: USER_ID, question: 'x', goal: null });
+    prisma._seedPerson({ id: PERSON_ID, displayName: 'Начальник Иван' });
+    prisma._seedPerson({ id: 'person-2', displayName: 'Директор Пётр' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: PERSON_ID, stakeholderRole: 'DECISION_MAKER' });
+    prisma._seedProjectPerson({ projectId: PROJECT_ID, personId: 'person-2', stakeholderRole: 'DECISION_MAKER' });
+    prisma._seedTrait({ personId: PERSON_ID, traitType: 'RESPONDS_TO_DATA', value: 'Просит конкретные цифры' });
+    const fakeRouter = new FakeAIRouterService();
+    const svc = new OutcomeForecastingService(prisma as any, fakeRouter as any);
+
+    await svc.generateScenarios(USER_ID, PROJECT_ID);
+    const prompt = fakeRouter.lastRequest.userPrompt;
+
+    assertEqual(prompt.includes('решающими отмечены несколько человек'), true, 'неоднозначность названа в промпте');
+    assertEqual(prompt.includes('Начальник Иван') && prompt.includes('Директор Пётр'), true, 'названы ОБА — человеку нужно знать, из чего выбирать');
+    assertEqual(prompt.includes('Просит конкретные цифры'), false, 'персональная опора НЕ подмешана: она была бы про одного из двух, а подавалась бы как про решающего');
+    assertEqual(prompt.includes('Ключевой решающий человек:'), false, 'и прогноз не называет решающего, потому что продукт его не выбрал');
   });
 
   test('generateScenarios() подмешивает профиль/связи/прецеденты решающего человека, если роль подтверждена', async () => {

@@ -21,6 +21,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentLifecycleStatus, ArgumentStance, LiveHintType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { subsetOf } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'live-hint';
 const INTERVIEW_TASK_TYPE = 'live-hint-interview';
@@ -126,10 +127,7 @@ export class LiveHintsService {
       candidatesText ? `Непрозвучавшие подготовленные аргументы:\n${candidatesText}` : 'Непрозвучавших подготовленных аргументов нет.',
     ].join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

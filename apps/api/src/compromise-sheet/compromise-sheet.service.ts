@@ -33,6 +33,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { TextToSpeechService } from '../text-to-speech/text-to-speech.service';
 import { ArgumentStance, CompromiseSheetAudioSource, CompromiseSheetPhase } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'compromise-sheet';
 
@@ -107,10 +108,7 @@ export class CompromiseSheetService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

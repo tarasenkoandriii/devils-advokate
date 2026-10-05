@@ -310,6 +310,15 @@ describe('Методы, которые были без единого теста
       configurable: true,
       value: {
         ...делегат,
+        // Пункт [the-first-row-was-whichever] 2026-10-05: чтение своей
+        // копии стало ТОЧНЫМ — `findUnique` по `projectId_registryCode`
+        // вместо «одного из» по ИЛИ (код реестра ИЛИ домен). Подмена
+        // переехала туда же: оставь её на `findFirst`, и тест молча
+        // перестал бы проверять гонку — создание не вызывалось бы вовсе.
+        findUnique: async (args: any) =>
+          args?.where?.projectId_registryCode?.projectId === candidateProject.id
+            ? null
+            : делегат.findUnique?.(args) ?? null,
         findFirst: async (args: any) => (args?.where?.projectId === candidateProject.id ? null : делегат.findFirst(args)),
         create: async (args: any) => {
           if (args?.data?.projectId !== candidateProject.id) return делегат.create(args);

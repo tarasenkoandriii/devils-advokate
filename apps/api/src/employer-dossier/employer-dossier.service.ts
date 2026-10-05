@@ -139,7 +139,7 @@ export class EmployerDossierService {
     // Различие функций не в эндпоинте, а в том, ЧЬЯ это компания, — вот на
     // этом месте оно и проверяется.
     if (project.mode === ProjectMode.EMPLOYER_HIRING) {
-      const own = await this.prisma.employerDossier.findFirst({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+      const own = await this.prisma.employerDossier.findFirst({ where: { projectId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
       const sameCompany =
         !own ||
         (!!registryCode && own.registryCode === registryCode) ||
@@ -489,7 +489,7 @@ export class EmployerDossierService {
     if (target.briefId) document = (await this.prisma.clientBrief.findFirst({ where: { id: target.briefId, projectId: dossier.projectId } }))?.rawText ?? null;
     else if (target.vacancyId) document = (await this.prisma.jobVacancy.findFirst({ where: { id: target.vacancyId, config: { projectId: dossier.projectId } } }))?.rawText ?? null;
     else if (target.postingId) {
-      const rev = await this.prisma.vacancyPostingRevision.findFirst({ where: { posting: { id: target.postingId, projectId: dossier.projectId } }, orderBy: { createdAt: 'desc' } });
+      const rev = await this.prisma.vacancyPostingRevision.findFirst({ where: { posting: { id: target.postingId, projectId: dossier.projectId } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
       document = rev?.text ?? null;
     }
     if (!document) throw new NotFoundException('Документ для сверки не найден в этом проекте');
@@ -603,7 +603,7 @@ export class EmployerDossierService {
   async shipmentChecklist(userId: string, projectId: string) {
     const project = await assertHiringProjectAccess(this.prisma, userId, projectId);
     assertRoleApplicable(project.mode, AGENCY_ONLY, 'А-27');
-    const dossier = await this.prisma.employerDossier.findFirst({ where: { projectId }, orderBy: { createdAt: 'asc' }, include: { facts: true, representatives: true } });
+    const dossier = await this.prisma.employerDossier.findFirst({ where: { projectId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], include: { facts: true, representatives: true } });
     const now = Date.now();
     const items = [
       { key: 'companyIdentified', label: 'Компания идентифицирована кодом реестра или подтверждённым доменом', ok: !!dossier && (!!dossier.registryCode || (!!dossier.domain && !!dossier.confirmedAt)) },

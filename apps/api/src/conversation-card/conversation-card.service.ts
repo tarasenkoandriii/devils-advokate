@@ -85,11 +85,11 @@ export class ConversationCardService {
       this.prisma.argument.count({ where: { projectId } }),
       this.prisma.conversationScript.findFirst({
         where: { projectId, type: ConversationScriptType.OPENING },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
       this.prisma.conversationScript.findFirst({
         where: { projectId, type: ConversationScriptType.CLOSING },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
       this.doNotSay.listForProject(userId, projectId),
       this.staleFact.listForProject(userId, projectId),

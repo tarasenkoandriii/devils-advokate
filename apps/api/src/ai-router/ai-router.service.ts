@@ -1653,7 +1653,7 @@ export class AIRouterService {
         status: AIJobStatus.COMPLETED,
         createdAt: { gte: since },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { inferences: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     const inference = done?.inferences?.[0];

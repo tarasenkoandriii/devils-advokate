@@ -14,6 +14,7 @@ import { budgetByCurrency, moneyWithCurrency, normalizeCurrency } from '../commo
 import { CriteriaComparisonService, CrossConsultationCheckResult, NOT_DISCUSSED_PLACEHOLDER } from '../criteria-comparison/criteria-comparison.service';
 import { DtpParticipantRole, DtpEvidenceAccessAction, DtpFaultSource, DtpBudgetCategory, DtpBudgetDirection } from '@prisma/client';
 import { assertOwnedDtpProject } from './dtp-access';
+import { withScopeLock } from '../common/ceiling-lock';
 
 const CROSS_CHECK_TASK_TYPE = 'dtp-cross-consultation-check';
 
@@ -26,30 +27,58 @@ export class DtpV2Service {
 
   // ── Учасники (§3.1 ТЗ) ──
 
-  /** §3.1 ТЗ — не більше одного SELF на конфіг. Сервісна перевірка +
-   * частковий унікальний індекс бази даних як останній рубіж проти
-   * стану гонитви (§0 ТЗ, оптимізація). */
+  /** §3.1 ТЗ — не більше одного SELF на конфіг.
+   *
+   * Пункт [the-first-row-was-whichever] 2026-10-05 — ЗАЩИТЫ, НАЗВАННОЙ
+   * ЗДЕСЬ, В БАЗЕ НЕ СУЩЕСТВОВАЛО. Шапка обещала «сервісна перевірка +
+   * частковий унікальний індекс бази даних як останній рубіж», и ТЗ
+   * (§3.1) предписывает ровно такой индекс. В репозитории его не было
+   * ни в одной миграции: `CREATE UNIQUE INDEX` встречался дважды и оба
+   * раза про другие таблицы, а `WHERE role` не встречался ни разу.
+   * Значит `catch` ниже ловил `P2002`, которого никто не бросит, —
+   * мёртвый код, который читается как защита. Это худший вид пробела:
+   * следующий читатель решает, что место закрыто.
+   *
+   * Теперь защиты две и обе настоящие: проверка и запись — одно событие
+   * под замком по `configId`, а частичный уникальный индекс заведён
+   * файлом `prisma/manual-migrations/one_active_row_2026_10_05.sql`
+   * (применяет владелец; он может не создаться, если дубли SELF в базе
+   * уже есть). Замок держит единственность у тех, кто его берёт;
+   * строку, заведённую мимо — ручным SQL, сидом, будущим новым
+   * путём, — остановит только индекс. Поэтому нужны оба, и `catch`
+   * ниже перестанет быть мёртвым ровно после применения файла.
+   *
+   * Цена дубля названа, а не предположена: `getSettlementProtocolDraft`
+   * печатает участников перебором, то есть в черновике протокола,
+   * который человек несёт юристу, он сам был бы указан дважды, а
+   * расходы по `DtpBudgetLineItem.participantId` разложились бы по двум
+   * «мне». */
   async createParticipant(userId: string, configId: string, role: DtpParticipantRole, displayName?: string, hasFledScene?: boolean) {
     await this.assertOwnedConfig(userId, configId);
 
     if (!Object.values(DtpParticipantRole).includes(role)) {
       throw new BadRequestException(`Неизвестная роль участника: ${role}`);
     }
-    if (role === DtpParticipantRole.SELF) {
-      const existing = await this.prisma.dtpParticipant.findFirst({ where: { configId, role: DtpParticipantRole.SELF } });
-      if (existing) {
-        throw new BadRequestException('У этого конфига уже есть участник с role=SELF');
-      }
-    }
 
     try {
+      if (role === DtpParticipantRole.SELF) {
+        return await withScopeLock(this.prisma, `dtp-self|${configId}`, async (tx) => {
+          const existing = await tx.dtpParticipant.findFirst({ where: { configId, role: DtpParticipantRole.SELF } });
+          if (existing) {
+            throw new BadRequestException('У этого конфига уже есть участник с role=SELF');
+          }
+          return tx.dtpParticipant.create({
+            data: { configId, role, displayName, hasFledScene: hasFledScene ?? false },
+          });
+        });
+      }
       return await this.prisma.dtpParticipant.create({
         data: { configId, role, displayName, hasFledScene: hasFledScene ?? false },
       });
     } catch (err: any) {
-      // Частковий унікальний індекс бази даних (§3.1 ТЗ) — останній
-      // рубіж на випадок паралельних запитів, що обидва пройшли
-      // сервісну перевірку вище до створення запису.
+      if (err instanceof BadRequestException) throw err;
+      // Частичный уникальный индекс базы — второй рубеж, на случай
+      // строки, заведённой мимо замка.
       if (err?.code === 'P2010' || err?.code === 'P2002') {
         throw new BadRequestException('У этого конфига уже есть участник с role=SELF');
       }

@@ -26,6 +26,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { buildUserPrompt } from '../arguments/argument-generation.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allStringsFilled } from '../common/claim-substance';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'missing-information-detection';
 
@@ -57,10 +58,7 @@ export class MissingInformationService {
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
     const objective = await this.prisma.decisionObjective.findUnique({ where: { projectId } });
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
 
     let result;
@@ -103,7 +101,7 @@ export class MissingInformationService {
     await assertProjectOwnership(this.prisma, userId, projectId);
     return this.prisma.missingInformationCheck.findFirst({
       where: { projectId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   }
 }

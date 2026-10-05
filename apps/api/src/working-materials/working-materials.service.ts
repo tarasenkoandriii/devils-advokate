@@ -23,6 +23,7 @@ import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
  * превратилась в зависший запрос. */
 const VERSION_INSERT_ATTEMPTS = 3;
 import { isUniqueViolation } from '../common/unique-violation';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'working-material-critique';
 
@@ -76,7 +77,7 @@ export class WorkingMaterialsService {
         if (!isUniqueViolation(err) || attempt >= VERSION_INSERT_ATTEMPTS) throw err;
         const last = await this.prisma.materialVersion.findFirst({
           where: { workingMaterialId },
-          orderBy: { versionNumber: 'desc' },
+          orderBy: [{ versionNumber: 'desc' }, { id: 'desc' }],
         });
         const next = (last?.versionNumber ?? 0) + 1;
         // Номер обязан вырасти: иначе следующая попытка повторит ту же
@@ -121,7 +122,7 @@ export class WorkingMaterialsService {
       }
       const lastVersion = await this.prisma.materialVersion.findFirst({
         where: { workingMaterialId: material.id },
-        orderBy: { versionNumber: 'desc' },
+        orderBy: [{ versionNumber: 'desc' }, { id: 'desc' }],
       });
       nextVersionNumber = (lastVersion?.versionNumber ?? 0) + 1;
     } else {
@@ -138,10 +139,7 @@ export class WorkingMaterialsService {
       `Текст материала (версия ${nextVersionNumber}):\n${extractedText.trim()}`,
     ].join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {
@@ -193,7 +191,7 @@ export class WorkingMaterialsService {
     await assertProjectOwnership(this.prisma, userId, projectId);
     const material = await this.prisma.workingMaterial.findFirst({
       where: { id: materialId, projectId },
-      include: { versions: { orderBy: { versionNumber: 'asc' } } },
+      include: { versions: { orderBy: [{ versionNumber: 'asc' }, { id: 'asc' }] } },
     });
     if (!material) {
       throw new NotFoundException(`WorkingMaterial ${materialId} not found in project ${projectId}`);

@@ -34,6 +34,7 @@ import { ConversationProcessingStatus, ConversationSignal, ConversationSignalTyp
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
 import { subsetOf } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'turning-point-detection';
 
@@ -108,10 +109,7 @@ export class TurningPointsService {
       data: { status: ConversationProcessingStatus.ANALYZING },
     });
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
     const renderLine = (s: (typeof segments)[number]) =>
       `[${s.id}] ${s.participant?.diarizationLabel ?? 'speaker'}: ${s.text}`;

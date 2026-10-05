@@ -27,6 +27,7 @@ import { assertReligiousContentAllowed } from '../consent/religious-content';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const QUOTE_TASK_TYPE = 'situational-quote';
 const ANECDOTE_TASK_TYPE = 'situational-anecdote';
@@ -84,10 +85,7 @@ export class SituationalContentService {
 
     const userPrompt = [`Ситуация: ${project.question}`, project.goal ? `Цель: ${project.goal}` : ''].filter(Boolean).join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: QUOTE_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, QUOTE_TASK_TYPE);
 
     let result;
     try {
@@ -122,10 +120,7 @@ export class SituationalContentService {
 
     const userPrompt = [`Ситуация: ${project.question}`, project.goal ? `Цель: ${project.goal}` : ''].filter(Boolean).join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: ANECDOTE_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, ANECDOTE_TASK_TYPE);
 
     let result;
     try {

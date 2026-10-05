@@ -26,6 +26,7 @@ import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { LOCATION_PURPOSES } from '../consent/location-purposes';
 import { instantUtc } from '../common/server-time';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'weather-recommendation';
 const WINDY_API_KEY_REF = 'WINDY_API_KEY';
@@ -242,10 +243,7 @@ export class WeatherForecastService {
     // названа словами.
     const userPrompt = [`Дата и время разговора: ${instantUtc(targetDate)}`, weatherLine].join('\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

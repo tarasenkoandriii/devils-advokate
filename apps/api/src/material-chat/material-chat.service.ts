@@ -35,6 +35,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { MaterialChatMessageRole, SparringSessionStatus, SparringVoiceReplyStatus } from '@prisma/client';
 import { publicApiBaseUrl } from '../common/public-base-url';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'material-chat';
 const MAX_MESSAGES_PER_SESSION = 40; // тот же потолок, что у спарринга (Пункт 55) — та же цена растущей истории в каждом вызове
@@ -217,10 +218,7 @@ export class MaterialChatService {
     userPrompt: string,
     engineId?: string,
   ): Promise<{ text: string; updatedEditPrompt: string | null; aiInferenceId?: string }> {
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

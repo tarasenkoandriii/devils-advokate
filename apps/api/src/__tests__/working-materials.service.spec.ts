@@ -49,7 +49,14 @@ function createFakePrisma() {
       findFirst: async ({ where, orderBy }: any) => {
         const list = versions.filter((v) => v.workingMaterialId === where.workingMaterialId);
         if (list.length === 0) return null;
-        return [...list].sort((a, b) => (orderBy.versionNumber === 'desc' ? b.versionNumber - a.versionNumber : a.versionNumber - b.versionNumber))[0];
+        // Пункт [the-first-row-was-whichever] 2026-10-05: `orderBy` стал
+        // МАССИВОМ — `versionNumber` в схеме не уникален, второй ключ
+        // `id` разрывает ничью. Заглушка читала `orderBy.versionNumber`
+        // напрямую и после правки сортировала ВОЗРАСТАЮЩЕ, то есть
+        // «следующий номер версии» считался от самой старой.
+        const keys = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+        const desc = keys.some((k: any) => k?.versionNumber === 'desc');
+        return [...list].sort((a, b) => (desc ? b.versionNumber - a.versionNumber : a.versionNumber - b.versionNumber))[0];
       },
       create: async ({ data }: any) => {
         const v = { id: nextId(), createdAt: new Date(), ...data };

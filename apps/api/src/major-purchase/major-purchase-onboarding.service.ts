@@ -212,7 +212,7 @@ export class MajorPurchaseOnboardingService {
 
     const lastSegment = await this.prisma.transcriptSegment.findFirst({
       where: { transcriptId: transcript.id },
-      orderBy: { endMs: 'desc' },
+      orderBy: [{ endMs: 'desc' }, { id: 'desc' }],
     });
     const startMs = (lastSegment?.endMs ?? 0) + 1;
 

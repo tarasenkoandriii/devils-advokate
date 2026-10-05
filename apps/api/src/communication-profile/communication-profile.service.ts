@@ -28,6 +28,7 @@ import { factsBlockWithInstruction } from '../common/fact-provenance';
 import { orderLabel } from '../common/server-time';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'communication-profile';
 
@@ -150,10 +151,7 @@ export class CommunicationProfileService {
 
     const userPrompt = `Факты о человеке, каждый с указанием происхождения:\n${factsSummary}\n\nЕго реплики из прошлых разговоров:\n${conversationsSummary || '(реплик пока нет)'}`;
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
 
     let result;

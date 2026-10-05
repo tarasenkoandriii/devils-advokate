@@ -23,6 +23,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentLifecycleStatus } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'closing-message';
 
@@ -106,10 +107,7 @@ export class ClosingMessageService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     const systemPrompt = activePrompt?.template ?? (user.religion ? SYSTEM_PROMPT_WITH_QUOTE : SYSTEM_PROMPT_NO_QUOTE);
 

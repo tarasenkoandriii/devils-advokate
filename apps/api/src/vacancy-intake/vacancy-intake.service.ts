@@ -364,7 +364,7 @@ export class VacancyIntakeService {
         intakeSource: VacancyIntakeSource.TELEGRAM_FORWARD,
         createdAt: { gt: new Date(Date.now() - FORWARD_RETRY_WINDOW_MS) },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     if (recent) return recent;
 

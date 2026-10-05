@@ -19,6 +19,7 @@ import { JobSearchOnboardingService } from '../job-search/job-search-onboarding.
 import { EmployerHiringService } from '../employer-hiring/employer-hiring.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 export const INTAKE_TASK_TYPE = 'intake-classify';
 /** Порог уверенности, ниже которого — UNIVERSAL (ТЗ §2.2 п.4; тест на границу). */
@@ -128,10 +129,7 @@ export class IntakeService {
     // (promptId = taskType) переопределяет константу; promptVersionId уходит в
     // телеметрию, чтобы матрица «предложил × выбрал» в /admin/intake была
     // сопоставима с конкретной версией промпта.
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: INTAKE_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, INTAKE_TASK_TYPE);
     let result;
     try {
       result = await this.aiRouter.execute({

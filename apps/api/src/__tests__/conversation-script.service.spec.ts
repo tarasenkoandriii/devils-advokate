@@ -92,6 +92,14 @@ function createFakePrisma() {
     },
     aIInference: { create: async ({ data }: any) => ({ id: nextId(), ...data }) },
     consentRecord: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: согласие теперь
+      // считается по ВСЕМ действующим записям — применение, разрешённое
+      // второй записью, раньше читалось как неразрешённое. Заглушка
+      // обязана знать `findMany`, иначе проверяет себя.
+      findMany: async ({ where }: any) =>
+        consentRecords.filter(
+          (c: any) => c.userId === where.userId && c.consentType === where.consentType && c.granted === true && c.revokedAt === null,
+        ),
       findFirst: async ({ where }: any) =>
         consentRecords.find((c) => c.userId === where.userId && c.consentType === where.consentType && c.granted === true && c.revokedAt === null) ?? null,
     },

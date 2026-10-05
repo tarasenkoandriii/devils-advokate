@@ -67,7 +67,7 @@ export class InterviewPoolReportService {
 
     const latestSnapshot = await this.prisma.poolRelevanceSnapshot.findFirst({
       where: { projectId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { entries: { where: { candidateProfileId } } },
     });
     const relevanceEntry = latestSnapshot?.entries[0];
@@ -131,7 +131,7 @@ export class InterviewPoolReportService {
 
     const latestSnapshot = await this.prisma.poolRelevanceSnapshot.findFirst({
       where: { projectId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { entries: true },
     });
     const config = await this.prisma.interviewPoolConfig.findUnique({

@@ -51,6 +51,30 @@ export async function withCeilingLock<T>(
   scopeKey: string,
   body: (tx: PrismaService) => Promise<T>,
 ): Promise<T> {
+  return withScopeLock(prisma, scopeKey, body);
+}
+
+/** Тот же замок под нейтральным именем — для инвариантов, которые
+ *  потолками не являются.
+ *
+ *  Пункт [the-first-row-was-whichever] 2026-10-05: «ровно одна ACTIVE
+ *  версия промпта», «ровно один участник SELF» — это не потолки, а
+ *  единственность строки, и держались они проверкой перед записью,
+ *  то есть ничем. Назвать их `withCeilingLock` значило бы соврать в
+ *  имени; завести второй `pg_advisory_xact_lock` — развести два
+ *  таймаута и два способа считать ключ. Поэтому одно место и два
+ *  имени, и сырой запрос по-прежнему встречается ровно здесь (это
+ *  проверяется сторожем пункта
+ *  [the-public-door-counted-then-crossed]).
+ *
+ *  ЧЕГО НЕ ДЕЛАЕТ: замок держит единственность только у тех, кто его
+ *  берёт. Строка, заведённая мимо — ручным SQL, сидом, будущим новым
+ *  путём, — ему не подчиняется; это умеет только ограничение базы. */
+export async function withScopeLock<T>(
+  prisma: PrismaService,
+  scopeKey: string,
+  body: (tx: PrismaService) => Promise<T>,
+): Promise<T> {
   return prisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scopeKey}, 0))`;

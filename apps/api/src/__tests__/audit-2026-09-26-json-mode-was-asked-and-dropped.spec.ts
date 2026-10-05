@@ -353,7 +353,12 @@ function buildPrisma(providerName: string, credentialRef: string) {
       findMany: async () => [{ modelVersionId: 'mv-1', availability: 'active', modelVersion }],
     },
     aIInference: { create: async ({ data }: any) => ({ id: id(), ...data }) },
-    consentRecord: { findFirst: async () => ({ id: 'c-1', granted: true, revokedAt: null }) },
+    consentRecord: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: согласие считается
+      // по ВСЕМ действующим записям — заглушка обязана знать `findMany`.
+      findFirst: async () => ({ id: 'c-1', granted: true, revokedAt: null }),
+      findMany: async () => [{ id: 'c-1', granted: true, revokedAt: null }],
+    },
     contentScanResult: { create: async ({ data }: any) => ({ id: id(), ...data }), updateMany: async () => ({ count: 1 }) },
     contentScanDetection: { create: async ({ data }: any) => ({ id: id(), ...data }) },
   };

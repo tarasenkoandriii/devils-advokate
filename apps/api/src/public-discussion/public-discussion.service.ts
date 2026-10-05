@@ -192,12 +192,12 @@ export class PublicDiscussionService {
       this.prisma.protocol.findFirst({
         where: { projectId: project.id },
         select: { summaryText: true, createdAt: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
       this.prisma.closingMessage.findFirst({
         where: { projectId: project.id },
         select: { summaryText: true, quoteText: true, quoteSourceReference: true, createdAt: true },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
     ]);
 

@@ -64,7 +64,11 @@ export async function ensureOnboardingConversation(
       // тот баг, который она чинит.
       transcript: { isNot: null },
     },
-    orderBy: { createdAt: 'asc' },
+    // Пункт [the-first-row-was-whichever] 2026-10-05: «самый ранний» по
+    // `createdAt` одному порядка не задаёт — `now()` в Postgres это
+    // время НАЧАЛА транзакции. Второй ключ `id` в ту же сторону: cuid
+    // монотонен по времени, значит «ранний» остаётся ранним.
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     include: {
       transcript: true,
       participants: { where: { isSelf: true }, take: 1 },

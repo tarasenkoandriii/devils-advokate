@@ -40,6 +40,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { ConversationProcessingStatus, ConversationSignal, ConversationSignalType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'manipulation-detection';
 
@@ -111,10 +112,7 @@ export class ManipulationDetectorService {
       throw new BadRequestException(`Разбор невозможен: у этого разговора нет расшифровки. Это не значит, что находок нет — их не искали.`);
     }
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
     // Все реплики, оба говорящих — НЕ фильтруется по isSelf (см. обоснование в шапке файла).
     // Сверка «ссылка на реплику» 2026-09-04: здесь реплики уходят модели

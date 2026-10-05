@@ -50,7 +50,14 @@ function createFakePrisma() {
       findFirst: async ({ where, orderBy }: any) => {
         const matching = agendas.filter((a) => a.projectId === where.projectId);
         if (matching.length === 0) return null;
-        if (orderBy?.createdAt === 'desc') {
+        // Пункт [the-first-row-was-whichever] 2026-10-05: `orderBy` стал
+        // МАССИВОМ (`[{ createdAt: 'desc' }, { id: 'desc' }]`), потому что
+        // `createdAt` ничью не разрывает. Заглушка знала только объектную
+        // форму — и молча проваливалась в «первый попавшийся», то есть
+        // проверяла не то поведение, которое назвала в имени теста.
+        const keys = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+        const byCreatedDesc = keys.some((k: any) => k?.createdAt === 'desc');
+        if (byCreatedDesc) {
           return matching.reduce((latest, a) => (a.createdAt > latest.createdAt ? a : latest));
         }
         return matching[0];

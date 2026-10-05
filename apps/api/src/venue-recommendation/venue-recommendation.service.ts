@@ -24,6 +24,7 @@ import { ConsentService } from '../consent/consent.service';
 import { ConsentType, VenueRecommendation } from '@prisma/client';
 import { getPlaceDetails, searchNearbyVenues } from './google-places-client';
 import { LOCATION_PURPOSES } from '../consent/location-purposes';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 const TASK_TYPE = 'venue-suitability';
@@ -114,10 +115,7 @@ export class VenueRecommendationService {
         '\n\n',
       );
 
-      const activePrompt = await this.prisma.promptVersion.findFirst({
-        where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-        orderBy: { createdAt: 'desc' },
-      });
+      const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
       let result;
       try {

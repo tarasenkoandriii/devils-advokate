@@ -33,6 +33,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { ConversationProcessingStatus } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'best-next-move-detection';
 
@@ -92,10 +93,7 @@ export class BestNextMoveService {
       where: { projectId: conversation.projectId },
     });
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
 
     const objectiveContext = objective?.desiredOutcome
@@ -151,7 +149,7 @@ export class BestNextMoveService {
     await this.findOwnedConversationWithTranscript(userId, conversationId);
     return this.prisma.bestNextMoveRecommendation.findFirst({
       where: { conversationId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   }
 

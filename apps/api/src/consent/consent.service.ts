@@ -15,6 +15,7 @@ import { AIJobStatus, ConsentType, PrivacyProcessingMode, Prisma } from '@prisma
 import { REVOCATION_EFFECTS, RevocationReport } from './consent-revocation-effects';
 import { coversPurpose, locationPurposeSpec } from './location-purposes';
 
+
 export interface GrantConsentInput {
   userId: string;
   consentType: ConsentType;
@@ -40,7 +41,30 @@ export class ConsentService {
     projectId?: string,
     purpose?: string,
   ): Promise<boolean> {
-    const record = await this.prisma.consentRecord.findFirst({
+    // Пункт [the-first-row-was-whichever] 2026-10-05 — здесь брали ОДНУ
+    // запись согласия и по ней отвечали про применения.
+    //
+    // Действующих записей одного типа может быть несколько, и даже без
+    // гонки: `grant()` ниже создаёт запись безусловно и открыт наружу
+    // как `POST /consent/grant`. `orderBy: { createdAt: 'desc' }` здесь
+    // стоял — поэтому место и не попало в измерение «findFirst без
+    // порядка», а дефект был: `createdAt` это `now()`, то есть время
+    // НАЧАЛА транзакции, и записи, созданные одной транзакцией, его
+    // делят до миллисекунды. Порядок не разрывал ничью, и `purposes`
+    // брались у произвольной из записей.
+    //
+    // Цена: у LOCATION `purposes` и есть всё содержание согласия
+    // (onboarding-city-hint / weather-forecast / venue-search и далее по
+    // `LOCATION_PURPOSES`). Человек, разрешивший
+    // погоду, а потом ещё и поиск заведений, мог получить отказ на
+    // поиск — потому что ответ считался по той записи, где его нет.
+    // Молчаливый отказ в праве, которое человек дал.
+    //
+    // Лечится не порядком, а объединением: действующее согласие это
+    // ВСЕ неотозванные записи вместе. Отзыв этому не противоречит — он
+    // гасит все записи типа разом (`revoke()` ниже, `updateMany`),
+    // поэтому «отозвал, а вторая живая осталась» невозможно.
+    const records = await this.prisma.consentRecord.findMany({
       where: {
         userId,
         consentType,
@@ -63,14 +87,25 @@ export class ConsentService {
         // где цена ошибки максимальная.
         ...(projectId ? { OR: [{ projectId: null }, { projectId }] } : { projectId: null }),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { purposes: true },
+      // ПОТОЛКА ЗДЕСЬ НЕТ НАМЕРЕННО, и это записано в реестре растущих
+      // чтений (`common/growing-reads.ts`, state `unbounded-on-purpose`).
+      // Причина: обрезка превратила бы поломку в МОЛЧА НЕВЕРНЫЙ ОТВЕТ о
+      // праве, которое человек дал, — применение, разрешённое записью
+      // за обрезом, читалось бы как неразрешённое. А растёт это
+      // множество не потоком событий: записей ДЕЙСТВУЮЩИХ согласий
+      // одного типа у одного человека столько, сколько он их выдал
+      // руками, и отзыв гасит их все разом (`revoke()` ниже,
+      // `updateMany`). Тот же разбор, что у операторского списка
+      // пользователей в том же реестре.
     });
-    if (record === null) return false;
+    if (records.length === 0) return false;
     if (purpose === undefined) return true;
     // Опечатка в имени применения не должна означать «разрешено»:
     // неизвестное применение не покрывается ничем.
     if (locationPurposeSpec(purpose) === null) return false;
-    return coversPurpose(record.purposes, purpose);
+    return records.some((r) => coversPurpose(r.purposes, purpose));
   }
 
   /** Бросает ForbiddenException, если согласие не дано — используется

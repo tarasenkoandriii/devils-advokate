@@ -50,6 +50,7 @@ import { publicApiBaseUrl } from '../common/public-base-url';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
 import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'sparring-session';
 /** Пункт [partial-basis] 2026-09-04 — лимит был законен, а молчание о
@@ -351,10 +352,7 @@ export class SparringService {
   }
 
   private async callOpponent(userId: string, projectId: string, userPrompt: string, engineId?: string) {
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

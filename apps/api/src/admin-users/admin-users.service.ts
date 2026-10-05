@@ -121,12 +121,12 @@ export class AdminUsersService {
     // вообще — честная оценка на существующих данных, не точный лог).
     const lastProject = await this.prisma.project.findFirst({
       where: { ownerId: targetUserId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: { createdAt: true },
     });
     const lastConversation = await this.prisma.conversation.findFirst({
       where: { project: { ownerId: targetUserId } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: { createdAt: true },
     });
 

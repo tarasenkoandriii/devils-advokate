@@ -400,7 +400,7 @@ export class JobSearchToolsService {
     if (sheet.projectId !== projectId || sheet.kind !== TermsSheetKind.VACANCY_RESPONSE) throw new NotFoundException(`TermsSheet ${sheetId} not found`);
     const draft = config.cvDraft as unknown as CvDraft | null;
     if (!draft) throw new BadRequestException('Сначала сгенерируйте CV');
-    const variant = dto.cvVariantId ? await this.prisma.cvVariant.findFirst({ where: { id: dto.cvVariantId, sheetId } }) : await this.prisma.cvVariant.findFirst({ where: { sheetId }, orderBy: { compiledAt: 'desc' } });
+    const variant = dto.cvVariantId ? await this.prisma.cvVariant.findFirst({ where: { id: dto.cvVariantId, sheetId } }) : await this.prisma.cvVariant.findFirst({ where: { sheetId }, orderBy: [{ compiledAt: 'desc' }, { id: 'desc' }] });
     const cvText = variant?.cvText ?? config.cvText ?? '';
     const clauses = (await this.sheets.loadClauses(sheetId)).filter((c) => c.side === TermsSide.EMPLOYER && c.kind === TermsClauseKind.REQUIREMENT && c.confirmedAt && !c.rejectedAt);
     const lines = clauses.map((c) => `- ${c.text}: ${c.current.CANDIDATE?.coverage ?? 'unknown'}${c.current.CANDIDATE?.evidenceQuote ? ` — «${c.current.CANDIDATE.evidenceQuote}»` : ''}`);
@@ -479,7 +479,7 @@ export class JobSearchToolsService {
   async applicationPackage(userId: string, projectId: string, sheetId: string, dto: { notCoveredHandling: 'name_honestly' | 'skip'; questions?: string[] }) {
     const config = await this.ctx(userId, projectId);
     const letter = await this.coverLetter(userId, projectId, sheetId, { notCoveredHandling: dto.notCoveredHandling });
-    const variant = await this.prisma.cvVariant.findFirst({ where: { sheetId }, orderBy: { compiledAt: 'desc' } });
+    const variant = await this.prisma.cvVariant.findFirst({ where: { sheetId }, orderBy: [{ compiledAt: 'desc' }, { id: 'desc' }] });
     // Пункт [own-input] 2026-09-04: здесь терялись СЛОВА САМОГО ЧЕЛОВЕКА,
     // и дважды — экран резал список до восьми и сервер резал его ещё раз,
     // оба молча. Человек вписывал двенадцать вопросов, получал ответы на

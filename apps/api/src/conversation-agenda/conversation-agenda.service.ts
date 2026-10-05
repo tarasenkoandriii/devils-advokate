@@ -24,6 +24,7 @@ import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote } from '../common/partial-basis';
 import { orderLabel } from '../common/server-time';
 import { allStringsFilled } from '../common/claim-substance';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 /** Пункт [shown-not-all] 2026-09-05 — лимит законен, молчание о нём нет. */
 const PAST_CONVERSATIONS_LIMIT = 5;
@@ -81,10 +82,7 @@ export class ConversationAgendaService {
     });
     const pastBasis = partialBasis('разговоры', pastConversations.length, pastConversationsTotal, 'recent');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
 
     const objectiveContext = objective?.desiredOutcome ? `Цель: ${objective.desiredOutcome}\n\n` : '';
@@ -139,7 +137,7 @@ export class ConversationAgendaService {
     await assertProjectOwnership(this.prisma, userId, projectId);
     return this.prisma.conversationAgenda.findFirst({
       where: { projectId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
   }
 }

@@ -37,6 +37,7 @@ import { ArchetypeType } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
 import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 /** Пункт [partial-basis] 2026-09-04 — лимиты были законны, молчание о
  * них нет. */
@@ -166,10 +167,7 @@ export class ArchetypePerspectiveService {
           .filter(Boolean)
           .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt =
       activePrompt?.template ??
       (archetypeType === 'REAL_PERSON'

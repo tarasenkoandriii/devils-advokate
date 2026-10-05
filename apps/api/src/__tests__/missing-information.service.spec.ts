@@ -35,7 +35,11 @@ function createFakePrisma() {
       findFirst: async ({ where, orderBy }: any) => {
         const matching = checks.filter((c) => c.projectId === where.projectId);
         if (matching.length === 0) return null;
-        if (orderBy?.createdAt === 'desc') {
+        // Пункт [the-first-row-was-whichever] 2026-10-05: `orderBy` стал
+        // МАССИВОМ (`createdAt` ничью не разрывает), а заглушка знала
+        // только объектную форму и молча отдавала «первый попавшийся».
+        const keys = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+        if (keys.some((k: any) => k?.createdAt === 'desc')) {
           return matching.reduce((latest, c) => (c.createdAt > latest.createdAt ? c : latest));
         }
         return matching[0];

@@ -1260,6 +1260,14 @@ model Conversation {
   @@index([projectId, occurredAt])
   @@index([externalTranscriptionJobId])
   @@index([transcriptionProviderVersionId])
+  // Пункт [the-first-row-was-whichever] 2026-10-05: по
+  // paralinguisticsJobId идёт поиск разговора на КАЖДУЮ доставку
+  // результата паралингвистики, а индекса не было вовсе — то есть
+  // полное сканирование таблицы разговоров. У соседнего
+  // JobVacancy.batchMatchJobId индекс есть; «правило было, просто не
+  // везде». Требует `prisma db push` — пока он не сделан, запрос
+  // работает, но дорого.
+  @@index([paralinguisticsJobId])
   @@map("conversations")
 }
 
@@ -1649,6 +1657,13 @@ model PromptVersion {
 
   @@unique([promptId, version])
   @@index([promptId, status])
+  // Пункт [the-first-row-was-whichever] 2026-10-05: «ровно одна ACTIVE
+  // на promptId» обеспечивает ЧАСТИЧНЫЙ уникальный индекс
+  // prompt_versions_promptId_active_key — он в
+  // manual-migrations/one_active_row_2026_10_05.sql, потому что Prisma
+  // фильтрованный unique не выражает. Написано здесь, иначе
+  // ограничение невидимо читающему схему: @@unique([promptId, version])
+  // разводит ВЕРСИИ, а не статусы, и инварианта не даёт.
   @@map("prompt_versions")
 }
 
@@ -6210,6 +6225,12 @@ model DtpParticipant {
   budgetLineItems DtpBudgetLineItem[]
   @@index([configId])
 
+  // Пункт [the-first-row-was-whichever] 2026-10-05: «не більше одного SELF на
+  // конфіг» (§3.1 ТЗ) обеспечивает частичный уникальный индекс
+  // dtp_participants_configId_self_key из
+  // manual-migrations/one_active_row_2026_10_05.sql. Prisma его не
+  // выражает; @@unique([configId, role]) поставить НЕЛЬЗЯ — участников
+  // с ролью OTHER_PARTY/THIRD_PARTY бывает несколько намеренно.
   @@map("dtp_participants")
 }
 
@@ -6339,6 +6360,12 @@ model FamilyLawParty {
   budgetLineItems FamilyLawBudgetLineItem[]
   @@index([configId])
 
+  // Пункт [the-first-row-was-whichever] 2026-10-05: «лише один SELF на
+  // конфіг» обеспечивает частичный уникальный индекс
+  // family_law_parties_configId_self_key из
+  // manual-migrations/one_active_row_2026_10_05.sql. Prisma его не
+  // выражает; @@unique([configId, role]) поставить нельзя — сторон с
+  // ролью OTHER/CHILD бывает несколько намеренно.
   @@map("family_law_parties")
 }
 

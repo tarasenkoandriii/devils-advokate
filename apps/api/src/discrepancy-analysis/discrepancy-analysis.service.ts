@@ -63,6 +63,7 @@ import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote } from '../common/partial-basis';
 import { orderLabel } from '../common/server-time';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 // Пункт [media-review] (devils-advocate-media-review-tz.md §2.4/§3):
 // Google Fact Check Tools API — четвёртый источник сверки §3.16 ТЗ
@@ -295,10 +296,7 @@ export class DiscrepancyAnalysisService {
       this.buildPriorConversationsByPerson(conversation.projectId, conversationId, segments),
     ]);
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
 
     const argumentsContext =
@@ -457,10 +455,7 @@ export class DiscrepancyAnalysisService {
 
     const userPrompt = `Утверждение из разговора: "${segment.text}"\n\nТекст страницы по ссылке, которую пользователь сам указал как источник для проверки:\n${sourceText}`;
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: SOURCE_CHECK_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, SOURCE_CHECK_TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SOURCE_CHECK_PROMPT;
 
     let result;
@@ -880,10 +875,7 @@ export class DiscrepancyAnalysisService {
 
     if (uncachedForAi.length > 0) {
       try {
-        const activePrompt = await this.prisma.promptVersion.findFirst({
-          where: { promptId: AI_FALLBACK_TASK_TYPE, status: 'ACTIVE' },
-          orderBy: { createdAt: 'desc' },
-        });
+        const activePrompt = await activePromptVersion(this.prisma, AI_FALLBACK_TASK_TYPE);
         const userPrompt = uncachedForAi
           .map((r, i) => `${i + 1}. [segmentId=${r.segmentId}] ${r.text}`)
           .join('\n');

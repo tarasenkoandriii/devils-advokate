@@ -27,6 +27,7 @@ import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { partialBasis, promptBasisNote, humanBasisNote, type PartialBasis } from '../common/partial-basis';
 import { derivedList, DERIVED_CONTEXT_INSTRUCTION, hasDerived } from '../common/derived-context';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 /** Пункт [partial-basis] 2026-09-04 — лимиты законны, молчание о них нет. */
 const TOP_ARGUMENTS_LIMIT = 5;
@@ -88,10 +89,31 @@ export class OutcomeForecastingService {
     // берутся срезом, а назывались «ключевыми» и «известными» — модель
     // не могла знать, что видит часть. Счёт по тому же условию, что и
     // выборка, иначе доля будет о другом множестве.
-    const [topArguments, argumentsTotal, decisionMakerLink, protectedNotes] = await Promise.all([
+    const [topArguments, argumentsTotal, decisionMakerLinks, protectedNotes] = await Promise.all([
       this.prisma.argument.findMany({ where: { projectId, targetPersonId: null }, orderBy: [{ weight: 'desc' }, { id: 'desc' }], take: TOP_ARGUMENTS_LIMIT }),
       this.prisma.argument.count({ where: { projectId, targetPersonId: null } }),
-      this.prisma.projectPerson.findFirst({ where: { projectId, stakeholderRole: 'DECISION_MAKER' }, include: { person: true } }),
+      // Пункт [the-first-row-was-whichever] 2026-10-05 — РЕШАЮЩИХ
+      // МОЖЕТ БЫТЬ ДВОЕ, и прогноз строился про произвольного из них.
+      // `@@unique([projectId, personId])` говорит «один человек один раз
+      // в проекте» и ничего не говорит про роль, а `confirmRole`
+      // (`stakeholder-map.service.ts`) не проверяет, занята ли роль
+      // DECISION_MAKER кем-то ещё. Отметив двоих, человек получал
+      // прогноз «как себя поведёт ключевой человек», построенный на
+      // профиле, связях и прецедентах ДРУГОГО — с его именем в тексте и
+      // ссылками на его прошлое поведение, и подавалось это как прогноз
+      // по решающему лицу. Два запроса подряд могли дать прогнозы про
+      // разных людей, не сообщив об этом.
+      //
+      // Лечится не сортировкой: порядок сделал бы выбор воспроизводимым,
+      // а не правильным — возражение записано в
+      // `employer-dossier/single-dossier.ts` и здесь применяется второй
+      // раз. Берём два и, если их два, говорим это вслух.
+      this.prisma.projectPerson.findMany({
+        where: { projectId, stakeholderRole: 'DECISION_MAKER' },
+        include: { person: true },
+        orderBy: [{ id: 'asc' }],
+        take: 2,
+      }),
       this.prisma.protectedNote.findMany({ where: { projectId } }),
     ]);
 
@@ -104,6 +126,16 @@ export class OutcomeForecastingService {
     const argumentsBasis = bases[0];
 
     let decisionMakerContext = '(ключевой решающий человек ещё не определён в карте круга лиц — прогноз общий, не персонализированный)';
+    if (decisionMakerLinks.length > 1) {
+      // Несколько решающих — продукт не выбирает за человека. Прогноз
+      // остаётся общим, и причина названа в тексте, который уходит и в
+      // промпт, и человеку: иначе он прочтёт общий прогноз как
+      // персональный.
+      decisionMakerContext = `(в карте круга лиц решающими отмечены несколько человек: ${decisionMakerLinks
+        .map((l) => l.person.displayName ?? 'без имени')
+        .join(', ')} — продукт не выбирает за вас, про кого строить прогноз. Прогноз общий, не персонализированный; оставьте одного решающего, чтобы он стал персональным)`;
+    }
+    const decisionMakerLink = decisionMakerLinks.length === 1 ? decisionMakerLinks[0] : null;
     if (decisionMakerLink) {
       const personId = decisionMakerLink.personId;
       const [traits, relationships, precedents] = await Promise.all([
@@ -170,10 +202,7 @@ export class OutcomeForecastingService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

@@ -13,6 +13,7 @@ import { budgetByCurrency, moneyWithCurrency, normalizeCurrency } from '../commo
 import { CriteriaComparisonService, CrossConsultationCheckResult, NOT_DISCUSSED_PLACEHOLDER } from '../criteria-comparison/criteria-comparison.service';
 import { FamilyLawPartyRole, FamilyLawStatusSource, FamilyLawBudgetCategory, FamilyLawBudgetDirection } from '@prisma/client';
 import { assertOwnedFamilyLawProject } from './family-law-access';
+import { withScopeLock } from '../common/ceiling-lock';
 
 const CROSS_CHECK_TASK_TYPE = 'family-law-cross-consultation-check';
 
@@ -25,22 +26,40 @@ export class FamilyLawV2Service {
 
   // ── Сторони (§3.1 ТЗ) — той самий захист "лише один SELF", що ДТП v2 ──
 
+  /** Пункт [the-first-row-was-whichever] 2026-10-05 — тот же мёртвый
+   * `catch`, что в ДТП v2, и по той же причине: уникального ограничения
+   * на `(configId, role=SELF)` в базе не было, значит `P2002` никто не
+   * бросал. «Той самий захист, що ДТП v2» было правдой — защиты не было
+   * ни там, ни тут.
+   *
+   * Цена дубля: `listParties` вернёт две «себя», а сводка разложит
+   * имущество и бюджет человека по двум его собственным сторонам —
+   * часть активов окажется не его. В разводном деле это не косметика.
+   *
+   * Теперь проверка и запись — одно событие под замком; частичный
+   * уникальный индекс заведён файлом
+   * `prisma/manual-migrations/one_active_row_2026_10_05.sql` и
+   * применяется владельцем. */
   async createParty(userId: string, configId: string, role: FamilyLawPartyRole, displayName?: string) {
     await this.assertOwnedConfig(userId, configId);
 
     if (!Object.values(FamilyLawPartyRole).includes(role)) {
       throw new BadRequestException(`Неизвестная роль участника: ${role}`);
     }
-    if (role === FamilyLawPartyRole.SELF) {
-      const existing = await this.prisma.familyLawParty.findFirst({ where: { configId, role: FamilyLawPartyRole.SELF } });
-      if (existing) {
-        throw new BadRequestException('У этого конфига уже есть сторона с role=SELF');
-      }
-    }
 
     try {
+      if (role === FamilyLawPartyRole.SELF) {
+        return await withScopeLock(this.prisma, `family-law-self|${configId}`, async (tx) => {
+          const existing = await tx.familyLawParty.findFirst({ where: { configId, role: FamilyLawPartyRole.SELF } });
+          if (existing) {
+            throw new BadRequestException('У этого конфига уже есть сторона с role=SELF');
+          }
+          return tx.familyLawParty.create({ data: { configId, role, displayName } });
+        });
+      }
       return await this.prisma.familyLawParty.create({ data: { configId, role, displayName } });
     } catch (err: any) {
+      if (err instanceof BadRequestException) throw err;
       if (err?.code === 'P2010' || err?.code === 'P2002') {
         throw new BadRequestException('У этого конфига уже есть сторона с role=SELF');
       }

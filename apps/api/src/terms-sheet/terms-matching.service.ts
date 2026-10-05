@@ -336,7 +336,7 @@ export class TermsMatchingService {
     const raw = withQuote.kept.slice(0, MAX_CLAUSES_PER_TEXT);
     skipped.overLimit = withQuote.kept.length - raw.length;
 
-    const last = await this.prisma.termsClause.findFirst({ where: { sheetId: params.sheetId }, orderBy: { orderIndex: 'desc' }, select: { orderIndex: true } });
+    const last = await this.prisma.termsClause.findFirst({ where: { sheetId: params.sheetId }, orderBy: [{ orderIndex: 'desc' }, { id: 'desc' }], select: { orderIndex: true } });
     let orderIndex = (last?.orderIndex ?? -1) + 1;
     const created = [];
     for (const c of raw) {

@@ -86,7 +86,7 @@ export class EmployerHiringService {
     const transcript = await this.prisma.transcript.findUnique({ where: { conversationId } });
     if (!transcript) throw new NotFoundException(`Transcript for conversation ${conversationId} not found`);
     const participant = await this.prisma.conversationParticipant.findFirst({ where: { conversationId, isSelf: true } });
-    const last = await this.prisma.transcriptSegment.findFirst({ where: { transcriptId: transcript.id }, orderBy: { endMs: 'desc' } });
+    const last = await this.prisma.transcriptSegment.findFirst({ where: { transcriptId: transcript.id }, orderBy: [{ endMs: 'desc' }, { id: 'desc' }] });
     const startMs = (last?.endMs ?? 0) + 1;
     return this.prisma.transcriptSegment.create({
       data: { transcriptId: transcript.id, participantId: participant?.id ?? null, text: text.trim(), startMs, endMs: startMs },

@@ -62,7 +62,7 @@ export class OpenLoopsService {
       await Promise.all([
         this.prisma.missingInformationCheck.findFirst({
           where: { projectId },
-          orderBy: { createdAt: 'desc' },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         }),
         this.sourceConflict.listUnresolvedForProject(userId, projectId),
         this.prisma.commitment.findMany({

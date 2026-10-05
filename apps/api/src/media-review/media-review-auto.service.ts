@@ -23,6 +23,7 @@ import {
 } from '@prisma/client';
 import { spendLimit, spendLimitByKey } from '../common/spend-limits';
 import type { FailureKind } from '../ai-router/failure-reason';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 export const MEDIA_PUBLIC_REVIEW_TASK_TYPE = 'media-public-review';
 
@@ -301,10 +302,7 @@ export class MediaReviewAutoService implements OnModuleInit {
         conversationId = conversation.id;
       }
 
-      const activePrompt = await this.prisma.promptVersion.findFirst({
-        where: { promptId: MEDIA_PUBLIC_REVIEW_TASK_TYPE, status: 'ACTIVE' },
-        orderBy: { createdAt: 'desc' },
-      });
+      const activePrompt = await activePromptVersion(this.prisma, MEDIA_PUBLIC_REVIEW_TASK_TYPE);
 
       const { jobId } = await this.aiRouter.enqueue({
         userId,

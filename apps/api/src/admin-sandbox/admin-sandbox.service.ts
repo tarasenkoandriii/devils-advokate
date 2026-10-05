@@ -1438,7 +1438,7 @@ export class AdminSandboxService {
     }
     const status = candidateStatusId?.trim()
       ? await this.prisma.candidatePipelineStatus.findUnique({ where: { id: candidateStatusId } })
-      : await this.prisma.candidatePipelineStatus.findFirst({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+      : await this.prisma.candidatePipelineStatus.findFirst({ where: { projectId }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
     if (!status || status.projectId !== projectId) {
       throw new BadRequestException('В пуле нет кандидатов — сначала добавьте кандидата');
     }
@@ -1596,7 +1596,7 @@ export class AdminSandboxService {
     if (after.jobStatus === 'COMPLETED' && itemAfter.status === 'PROCESSING') {
       const inference = await this.prisma.aIInference.findFirst({
         where: { aiJobId: item.aiJobId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         select: { id: true },
       });
       if (inference) {

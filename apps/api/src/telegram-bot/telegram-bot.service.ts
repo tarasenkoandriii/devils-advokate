@@ -138,7 +138,7 @@ export class TelegramBotService {
   private async targetProject(userId: string) {
     return this.prisma.project.findFirst({
       where: { ownerId: userId, mode: ProjectMode.JOB_SEARCH, frozenAt: null, jobSearchConfig: { isNot: null } },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       select: { id: true, question: true },
     });
   }

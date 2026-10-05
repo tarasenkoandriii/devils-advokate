@@ -15,7 +15,7 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
     _seedProject(p: any) {
       const project = { id: nextId(), ...p };
       projects.set(project.id, project);
@@ -147,24 +147,16 @@ function createFakePrisma() {
     // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
     // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
     $executeRaw: async () => 1,
-    $transaction: async (fn: any) =>
-      fn({
-        familyLawConfig: {
-          update: async ({ where, data }: any) => {
-            const c = configs.get(where.id);
-            Object.assign(c, data);
-            return c;
-          },
-        },
-        familyLawGoalRevision: {
-          create: async ({ data }: any) => {
-            const rec = { id: nextId(), changedAt: new Date(), ...data };
-            goalRevisions.push(rec);
-            return rec;
-          },
-        },
-      }),
+    // Пункт [the-first-row-was-whichever] 2026-10-05: транзакция отдавала
+    // УЗКИЙ объект — только `familyLawConfig` и `familyLawGoalRevision`,
+    // ровно то, что понадобилось первому вызывающему. Это сама ловушка
+    // этого ряда сверок: следующий код под транзакцией (здесь — замок
+    // «лише один SELF») падает на отсутствующей модели, и падение
+    // говорит не о том, что сломано. Транзакция обязана иметь ТУ ЖЕ
+    // поверхность, что и клиент вне неё.
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
   };
+  return fake;
 }
 
 function makeService(prisma: any, comparison: any = { compare: async () => ({ status: 'NO_DISCREPANCY_FOUND', statements: [] }) }) {

@@ -42,6 +42,7 @@ import { ConversationProcessingStatus, ConversationSignal, ConversationSignalTyp
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'do-not-say-detection';
 
@@ -101,10 +102,7 @@ export class DoNotSayService {
       );
     }
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
     // Сверка «ссылка на реплику» 2026-09-04: здесь реплики уходят модели
     // с НАСТОЯЩИМ id, а не с коротким номером, — и это решение, а не

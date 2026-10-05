@@ -63,6 +63,11 @@ function webhookFake() {
   const released: number[] = [];
   const prisma: any = {
     conversation: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: вебхук ищет
+      // разговор `findMany({ take: 2 })` и при ДВУХ совпадениях не
+      // привязывает ничего. Заглушка обязана знать эту форму — иначе
+      // проверялся бы не код, а она.
+      findMany: async () => [{ ...conversation }],
       findFirst: async () => ({ ...conversation }),
       updateMany: async ({ where, data }: any) => {
         // Точное подражание условному UPDATE: строка забирается, только

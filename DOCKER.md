@@ -81,7 +81,7 @@ Prisma-клиент один и тот же. Два разных образа р
 нормальный `prisma migrate` (см. `VERCEL.md`).
 
 Файлы из `prisma/manual-migrations/` стенд **не применяет** — их там
-**24: пять `pg_cron_*.sql` и девятнадцать прочих**. `intake_session.sql`
+**25: пять `pg_cron_*.sql` и двадцать прочих**. `intake_session.sql`
 и `schema_audit_2026_08_30.sql` — эквиваленты того, что `db push` и так
 делает из схемы, а `pg_cron_*.sql` требуют расширений `pg_cron`/`pg_net`,
 которых в образе `postgres:16-alpine` нет. Практическое следствие:

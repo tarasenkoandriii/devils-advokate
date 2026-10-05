@@ -30,6 +30,7 @@ import { ArgumentStance, StakeholderRole } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled, filled, substanceSite } from '../common/claim-substance';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const SUGGEST_ROLES_TASK_TYPE = 'stakeholder-role-suggestion';
 const TARGETED_ARGUMENTS_TASK_TYPE = 'stakeholder-argument-generation';
@@ -155,10 +156,7 @@ export class StakeholderMapService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: SUGGEST_ROLES_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, SUGGEST_ROLES_TASK_TYPE);
 
     let result;
     try {
@@ -228,10 +226,7 @@ export class StakeholderMapService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TARGETED_ARGUMENTS_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TARGETED_ARGUMENTS_TASK_TYPE);
 
     let result;
     try {

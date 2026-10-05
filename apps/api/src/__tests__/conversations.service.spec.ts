@@ -18,6 +18,26 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
+  // Буквальный разбор фильтра согласий, включая семантику Prisma
+  // «условие без определённых полей не ограничивает ничего» — иначе
+  // тест проверял бы задуманное поведение вместо фактического.
+  const matchingConsents = (where: any) => {
+    const matchesCond = (r: any, cond: any) => {
+      const defined = Object.entries(cond).filter(([, v]) => v !== undefined);
+      if (defined.length === 0) return true;
+      return defined.every(([k, v]) => r[k] === v);
+    };
+    return consentRecords.filter((r) => {
+      if (r.userId !== where.userId) return false;
+      if (r.consentType !== where.consentType) return false;
+      if (where.granted !== undefined && r.granted !== where.granted) return false;
+      if (where.revokedAt === null && r.revokedAt !== null) return false;
+      if ('projectId' in where && where.projectId === null && r.projectId !== null) return false;
+      if (where.OR && !where.OR.some((c: any) => matchesCond(r, c))) return false;
+      return true;
+    });
+  };
+
   return {
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedUser(u: any) { users.set(u.id, u); },
@@ -50,24 +70,12 @@ function createFakePrisma() {
       },
     },
     consentRecord: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: отбор вынесен в
+      // одно место, и появился `findMany` — согласие теперь считается по
+      // ВСЕМ действующим записям, а не по одной.
+      findMany: async ({ where }: any) => matchingConsents(where),
       findFirst: async ({ where }: any) => {
-        // Буквальный разбор фильтра, включая семантику Prisma «условие
-        // без определённых полей не ограничивает ничего» — иначе тест
-        // проверял бы задуманное поведение вместо фактического.
-        const matchesCond = (r: any, cond: any) => {
-          const defined = Object.entries(cond).filter(([, v]) => v !== undefined);
-          if (defined.length === 0) return true;
-          return defined.every(([k, v]) => r[k] === v);
-        };
-        const matches = consentRecords.filter((r) => {
-          if (r.userId !== where.userId) return false;
-          if (r.consentType !== where.consentType) return false;
-          if (where.granted !== undefined && r.granted !== where.granted) return false;
-          if (where.revokedAt === null && r.revokedAt !== null) return false;
-          if ('projectId' in where && where.projectId === null && r.projectId !== null) return false;
-          if (where.OR && !where.OR.some((c: any) => matchesCond(r, c))) return false;
-          return true;
-        });
+        const matches = matchingConsents(where);
         return matches[matches.length - 1] ?? null;
       },
     },
@@ -77,8 +85,18 @@ function createFakePrisma() {
         conversations.set(c.id, c);
         return c;
       },
-      findMany: async ({ where }: any) =>
-        [...conversations.values()].filter((c) => c.projectId === where.projectId),
+      // Пункт [the-first-row-was-whichever] 2026-10-05: вебхук
+      // расшифровки ищет разговор ЭТИМ методом (`take: 2`, при двух
+      // совпадениях не привязывает ничего), а заглушка умела только
+      // фильтр по проекту — то есть возвращала пустой список, и вебхук
+      // «не находил» разговор никогда. Фильтры разные, оба нужны.
+      findMany: async ({ where }: any) => {
+        const all = [...conversations.values()];
+        if (where?.externalTranscriptionJobId?.in) {
+          return all.filter((c) => where.externalTranscriptionJobId.in.includes(c.externalTranscriptionJobId));
+        }
+        return all.filter((c) => c.projectId === where.projectId);
+      },
       findUnique: async ({ where, include }: any) => {
         const c = conversations.get(where.id);
         if (!c) return null;
@@ -999,6 +1017,38 @@ async function run() {
     // приходит не в вебхуке, а только в результате GET — тут это transcriptResultByJobId.
     await svc.handleTranscriptionWebhook({ transcript_id: 'ext-job-2', status: 'error' } as any);
     assertEqual(prisma._getConversation(conv.id).status, 'FAILED', 'статус после ошибки провайдера');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [the-first-row-was-whichever]: вебхук, подошедший к ДВУМ разговорам, не привязывает ничего', async () => {
+    // Условие вебхука — `in` по пяти написаниям id (голый и с префиксом
+    // каждого из трёх провайдеров), а `externalTranscriptionJobId` в
+    // схеме не уникален. Значит легаси-строка `abc` и новая
+    // `soniox:abc` подходят ОБЕ, и раньше выбор делал планировщик базы:
+    // чужая расшифровка целиком ложилась в разговор человека.
+    const prisma = createFakePrisma();
+    const fakeTranscription = new FakeTranscriptionService();
+    const stt = makeFakeStt(fakeTranscription);
+    const svc = new ConversationsService(
+      prisma as any, {} as SecretsService, {} as ConsentService, fakeTranscription as any, stt as any, makeFakeAudioBlob() as any, makeFakeParalinguistics() as any,
+    );
+    prisma._seedProject({ id: 'p1', ownerId: 'u1' });
+    const legacy = await prisma.conversation.create({
+      data: { projectId: 'p1', status: 'TRANSCRIBING', externalTranscriptionJobId: 'abc', sourceType: 'AUDIO_UPLOAD' },
+    });
+    const modern = await prisma.conversation.create({
+      data: { projectId: 'p1', status: 'TRANSCRIBING', externalTranscriptionJobId: 'soniox:abc', sourceType: 'AUDIO_UPLOAD' },
+    });
+
+    const result: any = await svc.handleTranscriptionWebhook({ id: 'abc', status: 'completed' } as any);
+
+    assertEqual(result, { acknowledged: true, matched: false, ambiguous: true }, 'неоднозначность названа в ответе, а не разрешена молча');
+    assertEqual(fakeTranscription.getResultCalls, [], 'результат у провайдера даже не запрашивается: привязывать его некуда');
+    assertEqual(stt.discarded, [], 'запись у провайдера НЕ убирается — результат принадлежит одному из найденных, и уборка отняла бы возможность разобраться');
+    assertEqual(
+      [prisma._getConversation(legacy.id).status, prisma._getConversation(modern.id).status],
+      ['TRANSCRIBING', 'TRANSCRIBING'],
+      'ни один из двух разговоров не тронут',
+    );
   });
 
   test('handleTranscriptionWebhook() не падает на неизвестный job id — просто не совпадает', async () => {

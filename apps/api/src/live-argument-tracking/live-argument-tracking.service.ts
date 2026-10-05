@@ -31,6 +31,7 @@ import { assertProjectOwnership } from '../common/project-ownership';
 import { ArgumentStance, ArgumentTrackingState, LiveArgumentTrackingStatus } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'live-argument-tracking';
 
@@ -144,10 +145,7 @@ export class LiveArgumentTrackingService {
 
     const userPrompt = `Фрагмент транскрипта:\n${transcriptWindow}\n\nОтслеживаемые аргументы:\n${argumentsText}`;
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

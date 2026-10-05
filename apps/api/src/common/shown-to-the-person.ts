@@ -80,6 +80,12 @@ export interface ResponseSite {
 
 export const RESPONSE_SITES: readonly ResponseSite[] = [
   {
+    at: 'conversations/conversations.service.ts#handleTranscriptionWebhook',
+    keys: ['ambiguous'],
+    fate: 'не-для-человека',
+    why: 'Пункт [the-first-row-was-whichever] 2026-10-05: ответ уходит ПРОВАЙДЕРУ расшифровки, у него экрана нет. Поле значит «тело вебхука подошло сразу к двум разговорам, поэтому не привязано ничего» — человеку об этом говорит не это поле, а отсутствие расшифровки и строка в логе: подложить чужую расшифровку хуже, чем не привязать ничего',
+  },
+  {
     at: 'ai-router/ai-router.service.ts#getJobForUser',
     keys: ['aiInferenceId'],
     fate: 'не-для-человека',

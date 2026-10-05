@@ -26,6 +26,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { deadlineRelative } from '../common/server-time';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'protocol-generation';
 
@@ -60,7 +61,7 @@ export class ProtocolService {
       this.prisma.decisionObjective.findUnique({ where: { projectId } }),
       this.prisma.conversation.findFirst({
         where: { projectId },
-        orderBy: { occurredAt: 'desc' },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
         include: { transcript: { include: { segments: true } } },
       }),
     ]);
@@ -98,10 +99,7 @@ export class ProtocolService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

@@ -115,10 +115,16 @@ function createFakePrisma() {
     },
     aIInference: { create: async ({ data }: any) => ({ id: `inf-${++n}`, ...data }) },
     consentRecord: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: согласие считается
+      // по ВСЕМ действующим записям — заглушка обязана знать `findMany`.
       findFirst: async ({ where }: any) =>
         where.consentType === 'EXTERNAL_AI' && where.userId === USER_ID
           ? { id: 'c1', userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null }
           : null,
+      findMany: async ({ where }: any) =>
+        where.consentType === 'EXTERNAL_AI' && where.userId === USER_ID
+          ? [{ id: 'c1', userId: USER_ID, consentType: 'EXTERNAL_AI', granted: true, revokedAt: null }]
+          : [],
     },
     contentScanResult: { create: async ({ data }: any) => ({ id: `scan-${++n}`, ...data }), updateMany: async () => ({ count: 1 }) },
     contentScanDetection: { create: async ({ data }: any) => ({ id: `det-${++n}`, ...data }) },

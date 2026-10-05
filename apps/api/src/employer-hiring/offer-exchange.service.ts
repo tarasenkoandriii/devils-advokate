@@ -165,7 +165,7 @@ export class OfferExchangeService {
       }
     }
     // вакансии у соискателя нет — создаём из текста вакансии работодателя
-    const candidateProject = await this.prisma.project.findFirst({ where: { ownerId: share.sharedByUserId, mode: ProjectMode.JOB_SEARCH }, orderBy: { createdAt: 'desc' } });
+    const candidateProject = await this.prisma.project.findFirst({ where: { ownerId: share.sharedByUserId, mode: ProjectMode.JOB_SEARCH }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] });
     const config = candidateProject ? await this.prisma.jobSearchConfig.findUnique({ where: { projectId: candidateProject.id } }) : null;
     if (!candidateProject || !config) throw new BadRequestException('У соискателя нет проекта поиска работы — копию отправить некуда');
     await assertCounterpartyProjectNotFrozen(this.prisma, candidateProject.id);
@@ -199,7 +199,40 @@ export class OfferExchangeService {
       // подходит: ищем по ИЛИ (код реестра или домен), а уникальность
       // только по коду. Поэтому второй приём того же пункта — поймать и
       // перечитать: ответ один и тот же, кто бы ни успел раньше.
-      const own = await this.prisma.employerDossier.findFirst({ where: { projectId: candidateProject.id, OR: [{ registryCode: dossier.registryCode ?? '__none__' }, { domain: dossier.domain ?? '__none__' }] } });
+      //
+      // Пункт [the-first-row-was-whichever] 2026-10-05 — этот `OR`
+      // смешивал два признака РАЗНОЙ СИЛЫ и выбирал из совпавших
+      // произвольно. Код реестра уникален по схеме
+      // (`@@unique([projectId, registryCode])`); домен — только
+      // `@@index`, и несколько юрлиц на одном домене разрешены
+      // осознанно (`employer-dossier.service.ts` отказывает по домену
+      // лишь когда кода нет ни у одного). Значит в проекте соискателя
+      // могли лежать два досье, подходящих под одно `OR`: одно по
+      // коду, другое по домену, — и к присланной вакансии цеплялось
+      // досье ДРУГОГО юрлица. Соискатель читает карточку компании,
+      // решая, идти ли на оффер: он мог увидеть реквизиты и
+      // «подтверждённость» другой компании той же группы.
+      //
+      // Теперь признаки разведены по силе: сначала точное совпадение по
+      // коду реестра (уникально — `findUnique`, а не «один из»), и
+      // только при отсутствии кода или промахе — поиск по домену, с
+      // определённым порядком. Порядок там `[createdAt asc, id asc]`:
+      // домен — слабый признак, и старшая запись чаще та, которую
+      // человек уже смотрел и подтверждал.
+      //
+      // Заодно убран `?? '__none__'`: магическая строка подменяла
+      // семантику NULL, и досье с доменом, буквально равным
+      // `__none__`, подобралось бы как своё.
+      const own = dossier.registryCode
+        ? await this.prisma.employerDossier.findUnique({
+            where: { projectId_registryCode: { projectId: candidateProject.id, registryCode: dossier.registryCode } },
+          })
+        : dossier.domain
+          ? await this.prisma.employerDossier.findFirst({
+              where: { projectId: candidateProject.id, domain: dossier.domain },
+              orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            })
+          : null;
       let target = own;
       if (!target) {
         try {
@@ -208,7 +241,13 @@ export class OfferExchangeService {
           });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
-          target = await this.prisma.employerDossier.findFirstOrThrow({ where: { projectId: candidateProject.id, registryCode: dossier.registryCode } });
+          // Перечитываем тем же точным ключом, которым и упёрлись:
+          // `findFirstOrThrow` по неуникальному фильтру вернул бы «одно
+          // из» ровно там, где мы только что узнали, что строка одна.
+          target = await this.prisma.employerDossier.findFirstOrThrow({
+            where: { projectId: candidateProject.id, registryCode: dossier.registryCode },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          });
         }
       }
       await this.prisma.jobVacancy.update({ where: { id: vacancy.id }, data: { employerDossierId: target.id } });

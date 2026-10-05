@@ -19,6 +19,7 @@ import { ArgumentStance, DecisionObjective } from '@prisma/client';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { deadlineRelative } from '../common/server-time';
 import { allFilled, substanceSite } from '../common/claim-substance';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'argument-generation';
 
@@ -89,10 +90,7 @@ export class ArgumentGenerationService {
     const project = await assertProjectOwnership(this.prisma, userId, projectId);
     const objective = await this.prisma.decisionObjective.findUnique({ where: { projectId } });
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     const systemPrompt =
       activePrompt?.template ??

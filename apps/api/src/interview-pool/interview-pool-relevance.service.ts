@@ -283,7 +283,7 @@ export class InterviewPoolRelevanceService {
     await assertInterviewPoolProjectAccess(this.prisma, userId, projectId);
     const snapshot = await this.prisma.poolRelevanceSnapshot.findFirst({
       where: { projectId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { entries: { include: { candidateProfile: true } } },
     });
     if (!snapshot) {

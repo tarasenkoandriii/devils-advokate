@@ -24,6 +24,7 @@ import { geminiMediaTypeProblem } from '../ai-router/provider-media-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AsyncJobOutcome } from '../ai-router/ai-router.service';
 import { ConversationSignalType } from '@prisma/client';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 export const PARALINGUISTICS_TASK_TYPE = 'conversation-paralinguistics';
 
@@ -144,10 +145,7 @@ export class ParalinguisticsService implements OnModuleInit {
       throw new Error('paralinguistics requires a non-empty transcript');
     }
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: PARALINGUISTICS_TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, PARALINGUISTICS_TASK_TYPE);
 
     // Сегменты подставляются в текстовую часть промпта: модель
     // комментирует ИЗВЕСТНЫЕ реплики, не транскрибирует заново (§7.1).

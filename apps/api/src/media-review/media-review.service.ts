@@ -206,7 +206,7 @@ export class MediaReviewService {
             if (job && job.status === AIJobStatus.COMPLETED) {
               const inference = await this.prisma.aIInference.findFirst({
                 where: { aiJobId: item.aiJobId },
-                orderBy: { createdAt: 'desc' },
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
                 select: { id: true },
               });
               if (inference) {

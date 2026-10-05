@@ -21,6 +21,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { assertProjectOwnership } from '../common/project-ownership';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled } from '../common/claim-substance';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'prediction-analysis';
 
@@ -78,10 +79,7 @@ export class PredictionService {
       );
     }
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
     const systemPrompt = activePrompt?.template ?? DEFAULT_SYSTEM_PROMPT;
     const userPrompt = `Прогноз: ${prediction.predictedOutcome}\n\nФактический результат: ${actualOutcome}`;
 

@@ -21,6 +21,22 @@ function createFakePrisma(privacyProcessingMode: string = 'BALANCED') {
   const records: any[] = [];
   let idCounter = 0;
 
+  /** Отбор действующих записей — один на `findFirst` и `findMany`. */
+  const matching = (where: any) =>
+    records.filter((r) => {
+      if (r.userId !== where.userId) return false;
+      if (r.consentType !== where.consentType) return false;
+      if (where.granted !== undefined && r.granted !== where.granted) return false;
+      if (where.revokedAt === null && r.revokedAt !== null) return false;
+      if ('projectId' in where && where.projectId !== undefined && r.projectId !== where.projectId) return false;
+      if ('projectId' in where && where.projectId === null && r.projectId !== null) return false;
+      if (where.OR) {
+        const orMatch = where.OR.some((cond: any) => matchesCondition(r, cond));
+        if (!orMatch) return false;
+      }
+      return true;
+    });
+
   return {
     _records: records,
     // Аудит согласий 2026-09-03: режим приватности — не согласие, и
@@ -29,20 +45,14 @@ function createFakePrisma(privacyProcessingMode: string = 'BALANCED') {
       findUniqueOrThrow: async ({ where }: any) => ({ id: where.id, privacyProcessingMode }),
     },
     consentRecord: {
+      // Пункт [the-first-row-was-whichever] 2026-10-05: отбор вынесен в
+      // одну функцию, и `findMany` отдаёт ВСЕ подходящие.
+      // `hasActiveConsent` теперь объединяет `purposes` по всем
+      // действующим записям — заглушка, возвращавшая одну, проверяла бы
+      // себя.
+      findMany: async ({ where }: any) => matching(where),
       findFirst: async ({ where }: any) => {
-        const matches = records.filter((r) => {
-          if (r.userId !== where.userId) return false;
-          if (r.consentType !== where.consentType) return false;
-          if (where.granted !== undefined && r.granted !== where.granted) return false;
-          if (where.revokedAt === null && r.revokedAt !== null) return false;
-          if ('projectId' in where && where.projectId !== undefined && r.projectId !== where.projectId) return false;
-          if ('projectId' in where && where.projectId === null && r.projectId !== null) return false;
-          if (where.OR) {
-            const orMatch = where.OR.some((cond: any) => matchesCondition(r, cond));
-            if (!orMatch) return false;
-          }
-          return true;
-        });
+        const matches = matching(where);
         return matches[matches.length - 1] ?? null;
       },
       create: async ({ data }: any) => {

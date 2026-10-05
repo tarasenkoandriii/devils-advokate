@@ -88,7 +88,7 @@ export class CvDialogueService {
     } else {
       if (!input.text?.trim()) throw new BadRequestException('Нужен text ответа или segmentId');
       const bundle = await ensureOnboardingConversation(this.prisma, sheet.projectId);
-      const last = await this.prisma.transcriptSegment.findFirst({ where: { transcriptId: bundle.transcript.id }, orderBy: { endMs: 'desc' } });
+      const last = await this.prisma.transcriptSegment.findFirst({ where: { transcriptId: bundle.transcript.id }, orderBy: [{ endMs: 'desc' }, { id: 'desc' }] });
       const startMs = (last?.endMs ?? 0) + 1;
       segment = await this.prisma.transcriptSegment.create({
         data: { transcriptId: bundle.transcript.id, participantId: bundle.participant.id, text: input.text.trim(), startMs, endMs: startMs },

@@ -261,7 +261,7 @@ export class InterviewPoolCandidateService {
     const status = await this.prisma.candidatePipelineStatus.findFirst({
       where: { candidateProfileId },
       select: { projectId: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     if (status) await this.auditShipmentSafely(userId, status.projectId, 'candidate_share.created', shareToken);
 

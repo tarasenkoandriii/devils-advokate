@@ -31,6 +31,7 @@ import { orderLabel } from '../common/server-time';
 import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 const TASK_TYPE = 'precedent-search';
 
@@ -135,10 +136,7 @@ export class PrecedentSearchService {
 
     const userPrompt = `Факты о человеке, каждый с указанием происхождения:\n${factsSummary}\n\nЕго реплики из прошлых разговоров:\n${conversationsSummary || '(реплик пока нет)'}\n\nНовая ситуация, для которой нужен прецедент: ${situationDescription}`;
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {

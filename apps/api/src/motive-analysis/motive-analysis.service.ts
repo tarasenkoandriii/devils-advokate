@@ -44,6 +44,7 @@ import { ConsentService } from '../consent/consent.service';
 import { ConsentType } from '@prisma/client';
 import { allFilled } from '../common/claim-substance';
 import { isEnumValue } from '../common/enum-values';
+import { activePromptVersion } from '../common/active-prompt-version';
 
 /** Пункт [partial-basis] 2026-09-04 — лимит законен, молчание о нём нет. */
 const PRECEDENTS_LIMIT = 5;
@@ -197,10 +198,7 @@ export class MotiveAnalysisService {
       .filter(Boolean)
       .join('\n\n');
 
-    const activePrompt = await this.prisma.promptVersion.findFirst({
-      where: { promptId: TASK_TYPE, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePrompt = await activePromptVersion(this.prisma, TASK_TYPE);
 
     let result;
     try {
