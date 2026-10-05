@@ -1,6 +1,17 @@
 // Пункт [ci-built-on-a-different-node] 2026-10-01 — версия Node живёт в
 // одном месте, и это проверяется.
 //
+// Пункт [the-runner-image-was-chosen-by-the-platform] 2026-10-05 — И ТО
+// ЖЕ ПРАВИЛО ДЛЯ ОБРАЗА РАННЕРА. `runs-on` стоял `ubuntu-latest` в семи
+// джобах, то есть операционную систему сборки выбирал GitHub, а не
+// репозиторий; переезд на Ubuntu 26.04 начинается 19 октября 2026 и
+// завершается 19 ноября. Теперь образ прибит литералом — `runs-on` НЕ
+// читает ни `env`, ни иной внутренний контекст (проверено: попытка
+// подставить `${{ env.… }}` сломала бы workflow), поэтому в репозитории
+// это семь копий одного значения, и единственность держит проверка, а не
+// дисциплина. Одно отличающееся значение разрешено и ОБЪЯВЛЕНО ниже —
+// джоба раннего предупреждения на 26.04.
+//
 // Пункт [the-actions-ran-on-a-runtime-github-deprecated] 2026-10-05 —
 // ТО ЖЕ ПРАВИЛО ДЛЯ МАЖОРОВ ДЕЙСТВИЙ. `actions/checkout` упоминается в
 // этом репозитории СЕМЬ раз, и подъём мажора — семь правок, из которых
@@ -80,6 +91,34 @@ export function majorsThatDisagree(sources) {
     .map(([action, majors]) => `${action}: ${[...majors].sort().join(' и ')}`);
 }
 
+/** Все `runs-on: <label>` без комментариев.
+ *
+ *  Снятие комментариев обязательно и здесь: объяснение к джобе раннего
+ *  предупреждения называет ОБА образа по именам, и разбор по сырому
+ *  тексту увидел бы расхождение в абзаце, который его объясняет. Это уже
+ *  третья проверка в этом файле, которой нужна та же осторожность. */
+export function runnerLabels(source) {
+  return [...stripYamlComments(source).matchAll(/runs-on:\s*([A-Za-z0-9._-]+)/g)].map((m) => m[1]);
+}
+
+/** Образ, на котором идёт прогон, и объявленные исключения.
+ *
+ *  Реестр, а не «разрешаем любое второе значение»: иначе забытый
+ *  `ubuntu-latest` в новой джобе выглядел бы как законное исключение. */
+export const RUNNER_IMAGE = 'ubuntu-24.04';
+export const RUNNER_EXCEPTIONS = [
+  {
+    label: 'ubuntu-26.04',
+    why: 'джоба раннего предупреждения: переезд ubuntu-latest на 26.04 (19.10–19.11.2026) измеряется заранее и не красит прогон',
+  },
+];
+
+/** Метки, которые ни основная, ни объявленное исключение. */
+export function undeclaredRunners(sources) {
+  const allowed = new Set([RUNNER_IMAGE, ...RUNNER_EXCEPTIONS.map((e) => e.label)]);
+  return [...new Set(sources.flatMap(runnerLabels))].filter((l) => !allowed.has(l));
+}
+
 function walk(dir) {
   const out = [];
   for (const entry of readdirSync(dir)) {
@@ -143,6 +182,47 @@ for (const [action, major] of [
 ].sort()) {
   console.log(`  ${action} = ${major}`);
 }
+
+// ── Образ раннера ──────────────────────────────────────────────────
+const labels = sources.flatMap(runnerLabels);
+check('разбор находит runs-on — иначе согласие образов ничего не значит', labels.length > 0);
+const undeclared = undeclaredRunners(sources);
+check(
+  'образ раннера либо основной, либо объявленное исключение',
+  undeclared.length === 0,
+  `не объявлены: ${undeclared.join(', ')}`,
+);
+check(
+  `основной образ прибит литералом (${RUNNER_IMAGE}) и встречается у большинства джоб`,
+  labels.filter((l) => l === RUNNER_IMAGE).length > RUNNER_EXCEPTIONS.length,
+  `основного ${labels.filter((l) => l === RUNNER_IMAGE).length}, исключений объявлено ${RUNNER_EXCEPTIONS.length}`,
+);
+check(
+  'у каждого исключения названа причина',
+  RUNNER_EXCEPTIONS.every((e) => e.why.trim().length > 20),
+);
+check(
+  'ubuntu-latest не вернулся ни в одну джобу',
+  !labels.includes('ubuntu-latest'),
+  'платформа снова выбирала бы ОС за репозиторий',
+);
+for (const [label, n] of [...labels.reduce((m, l) => m.set(l, (m.get(l) ?? 0) + 1), new Map())].sort()) {
+  console.log(`  runs-on ${label} × ${n}`);
+}
+
+// ОБРАТНЫЕ ПРОБЫ на разбор образов.
+check(
+  'обратная проба: незаявленная метка находится',
+  undeclaredRunners(['    runs-on: ubuntu-latest\n']).length === 1,
+);
+check(
+  'обратная проба: объявленное исключение незаявленным НЕ считается',
+  undeclaredRunners([`    runs-on: ${RUNNER_EXCEPTIONS[0].label}\n`]).length === 0,
+);
+check(
+  'обратная проба: метка В КОММЕНТАРИИ не считается',
+  undeclaredRunners(['      # прежде здесь стоял runs-on: ubuntu-latest\n']).length === 0,
+);
 
 // ОБРАТНАЯ ПРОБА на разбор мажоров: он обязан находить расхождение и НЕ
 // находить его в комментарии, который цитирует прежнее значение.
