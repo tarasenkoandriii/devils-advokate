@@ -44,11 +44,18 @@ function discussion(counts: Record<string, number>) {
       return { id: `${model}-1` };
     },
   });
-  const prisma = {
+  // Пункт [the-public-door-counted-then-crossed] 2026-10-05: потолок и
+  // запись идут ОДНОЙ транзакцией под advisory-замком, и заглушка
+  // обязана знать ту же форму, что production. Без этого тесты выше
+  // проходили бы и на коде БЕЗ замка — то есть проверяли бы не то, что
+  // проверяют.
+  const prisma: any = {
     project: { findFirst: async () => ({ id: 'proj-1', publicShareToken: 't' }) },
     publicParticipant: counter('publicParticipant'),
     publicArgumentSubmission: counter('publicArgumentSubmission'),
     publicComment: counter('publicComment'),
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
   };
   return { service: new PublicDiscussionService(prisma as never, {} as never), created, prisma };
 }
@@ -60,7 +67,7 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
     // потолке не создалось» зеленело бы само собой.
     const fake = discussion({ publicParticipant: 7 });
     expect(fake.created).toEqual([]);
-    return fake.prisma.publicParticipant.count().then(async (n) => {
+    return fake.prisma.publicParticipant.count().then(async (n: number) => {
       expect(n).toBe(7);
       await fake.prisma.publicParticipant.create();
       expect(fake.created).toEqual(['publicParticipant']);
@@ -137,7 +144,7 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
 
   it('КЛЮЧЕВОЙ ТЕСТ: потолок на участника считает ПО УЧАСТНИКУ, а не по обсуждению', async () => {
     const seen: unknown[] = [];
-    const prisma = {
+    const prisma: any = {
       project: { findFirst: async () => ({ id: 'proj-1' }) },
       publicParticipant: { findFirst: async () => ({ id: 'p-1', projectId: 'proj-1' }) },
       publicComment: {
@@ -147,6 +154,10 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
         },
         create: async () => ({ id: 'c-1' }),
       },
+      $executeRaw: async () => 1,
+      // Пункт [the-public-door-counted-then-crossed] 2026-10-05: та же
+      // форма, что в production — потолок и запись одной транзакцией.
+      $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
     };
     const service = new PublicDiscussionService(prisma as never, {} as never);
     await service.addComment('t', 'текст', 'p-1');
@@ -175,7 +186,7 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
     // и проба проверяет именно это: второй запрос счёта идёт с
     // `participantId: null`, а не отсутствует.
     const seen: unknown[] = [];
-    const prisma = {
+    const prisma: any = {
       project: { findFirst: async () => ({ id: 'proj-1' }) },
       publicComment: {
         count: async ({ where }: { where: unknown }) => {
@@ -184,6 +195,10 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
         },
         create: async () => ({ id: 'c-1' }),
       },
+      $executeRaw: async () => 1,
+      // Пункт [the-public-door-counted-then-crossed] 2026-10-05: та же
+      // форма, что в production — потолок и запись одной транзакцией.
+      $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
     };
     await new PublicDiscussionService(prisma as never, {} as never).addComment('t', 'текст');
     expect(seen).toEqual([{ projectId: 'proj-1' }, { projectId: 'proj-1', participantId: null }]);
@@ -192,7 +207,7 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
   it('КЛЮЧЕВОЙ ТЕСТ: публичная библиотека тоже перестаёт принимать на потолке', async () => {
     const make = (existing: number) => {
       const created: string[] = [];
-      const prisma = {
+      const prisma: any = {
         libraryEntry: { findFirst: async () => ({ id: 'e-1' }) },
         libraryExperience: {
           count: async () => existing,
@@ -201,6 +216,8 @@ describe('[the-open-door-had-no-counter] потолки публичной за�
             return { id: 'x-1' };
           },
         },
+        $executeRaw: async () => 1,
+        $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg)),
       };
       return { service: new LibraryService(prisma as never, {} as never), created };
     };

@@ -21,7 +21,7 @@
 
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
+import { assertUnderPublicWriteLimit, insertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { PrismaService } from '../prisma/prisma.service';
 import { mayBePublished } from '../common/fact-scope';
 import { assertProjectOwnership } from '../common/project-ownership';
@@ -301,13 +301,19 @@ export class LibraryService {
     }
     // Пункт [the-open-door-had-no-counter] 2026-09-30: библиотека
     // открыта всем, и под одним разбором можно было писать бесконечно.
-    await assertUnderPublicWriteLimit('experiences-per-entry', () =>
-      this.prisma.libraryExperience.count({ where: { libraryEntryId: entryId } }),
+    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: счёт и
+    // запись — одним событием под замком записи библиотеки.
+    return insertUnderPublicWriteLimit(
+      this.prisma,
+      'experiences-per-entry',
+      entryId,
+      (tx) => tx.libraryExperience.count({ where: { libraryEntryId: entryId } }),
+      (tx) =>
+        tx.libraryExperience.create({
+          data: { libraryEntryId: entryId, text: text.trim(), authorDisplayName: authorDisplayName?.trim() || null },
+          select: { id: true, text: true, authorDisplayName: true, createdAt: true },
+        }),
     );
-    return this.prisma.libraryExperience.create({
-      data: { libraryEntryId: entryId, text: text.trim(), authorDisplayName: authorDisplayName?.trim() || null },
-      select: { id: true, text: true, authorDisplayName: true, createdAt: true },
-    });
   }
 
   private async assertModerator(userId: string) {

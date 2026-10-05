@@ -57,6 +57,8 @@
 import { BadRequestException } from '@nestjs/common';
 
 import { resolveLimit, type LimitSource } from './spend-limits';
+import { withCeilingLock } from './ceiling-lock';
+import type { PrismaService } from '../prisma/prisma.service';
 
 /** По чему считается потолок. */
 export type PublicWriteScope =
@@ -169,9 +171,61 @@ export function publicWriteLimit(key: string): { value: number; source: LimitSou
   return resolveLimit(entry.env, entry.fallback);
 }
 
-/** Проверка потолка. Ноль отключает потолок совсем — как и у потолков
- *  расходов, и по той же причине: владельцу нужен способ сказать «не
- *  ограничивай», а не только «ограничь иначе». */
+/** Пункт [the-public-door-counted-then-crossed] 2026-10-05 — ЗАПИСЬ ПОД
+ *  ПОТОЛКОМ, одним событием.
+ *
+ *  НАЙДЕННОЕ. Все шесть потолков публичной записи проверялись
+ *  `assertUnderPublicWriteLimit`, а запись шла СЛЕДУЮЩИМ, отдельным
+ *  обращением. То есть N одновременных запросов читали один и тот же
+ *  счёт и все проходили. Это та же болезнь, что днём раньше нашлась у
+ *  потолков расходов, и там она измерена на живом Postgres 16:
+ *  двадцать одновременных попыток при потолке пять дают двадцать
+ *  записей, под замком — пять.
+ *
+ *  Цена здесь не деньги, а СМЫСЛ потолка. Каждый из них заведён ровно
+ *  затем, чтобы очередь разобрал человек («модерация заявок — ручная
+ *  работа владельца; неограниченная очередь означает, что её не сделают
+ *  никогда»). Потолок, который не держит при одновременных запросах, это
+ *  обещание человеку, что его прочитают, — не исполненное.
+ *
+ *  И дверь здесь ПУБЛИЧНАЯ: одновременность достигается тем, кто знает
+ *  ссылку, без аутентификации и без цены.
+ *
+ *  ЧЕГО ЭТО НЕ МЕНЯЕТ. Всё, что перечислено в
+ *  `PUBLIC_WRITE_NOT_LIMITED_HERE`, по-прежнему не сделано: ни счёта по
+ *  IP, ни каптчи, ни частоты. Замок делает потолок потолком; защитой от
+ *  человека, заводящего участников подряд, он не делает ничего. */
+export async function insertUnderPublicWriteLimit<T>(
+  prisma: PrismaService,
+  key: string,
+  scopeKey: string,
+  current: (tx: PrismaService) => Promise<number>,
+  insert: (tx: PrismaService) => Promise<T>,
+): Promise<T> {
+  const limit = publicWriteLimit(key);
+  if (limit.value === 0) return insert(prisma); // явное «не ограничивай»
+  return withCeilingLock(prisma, `public|${key}|${scopeKey}`, async (tx) => {
+    if ((await current(tx)) >= limit.value) {
+      const entry = PUBLIC_WRITE_LIMITS.find((l) => l.key === key)!;
+      throw new BadRequestException(entry.refusal);
+    }
+    return insert(tx);
+  });
+}
+
+/** Проверка потолка БЕЗ записи.
+ *
+ *  Остаётся ровно для одного случая: там, где запись сама атомарна и
+ *  сама держит потолок (`posting-review-comments.ts` — один `UPDATE` с
+ *  проверкой длины массива в условии), а этот вызов нужен только чтобы
+ *  ВЗЯТЬ ТЕКСТ ОТКАЗА из реестра. Для всего остального он недостаточен:
+ *  проверка без записи — это два события, см. шапку
+ *  `insertUnderPublicWriteLimit` выше. Сверка пункта держит этот список
+ *  исключений поимённо.
+ *
+ *  Ноль отключает потолок совсем — как и у потолков расходов, и по той
+ *  же причине: владельцу нужен способ сказать «не ограничивай», а не
+ *  только «ограничь иначе». */
 export async function assertUnderPublicWriteLimit(key: string, current: () => Promise<number>): Promise<void> {
   const limit = publicWriteLimit(key);
   if (limit.value === 0) return;

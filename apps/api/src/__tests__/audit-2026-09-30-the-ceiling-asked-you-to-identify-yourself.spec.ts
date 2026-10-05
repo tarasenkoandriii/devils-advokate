@@ -96,7 +96,13 @@ function createFakePrisma(existing: FakeRow[] = []) {
     rows.filter(
       (r) => r.projectId === where.projectId && (where.participantId === undefined || r.participantId === (where.participantId ?? null)),
     ).length;
-  return {
+  const fake: any = {
+    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: потолок и
+    // запись идут ОДНОЙ транзакцией под advisory-замком. Заглушка
+    // обязана знать ту же форму, что production, иначе эти тесты
+    // проходили бы и на коде БЕЗ замка.
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _submissions: submissions,
     _comments: comments,
     project: {
@@ -124,6 +130,7 @@ function createFakePrisma(existing: FakeRow[] = []) {
       },
     },
   };
+  return fake;
 }
 
 function buildService(prisma: any): PublicDiscussionService {

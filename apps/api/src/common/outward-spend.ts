@@ -29,6 +29,7 @@
 
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { spendLimitByKey } from './spend-limits';
+import { withCeilingLock } from './ceiling-lock';
 import type { PrismaService } from '../prisma/prisma.service';
 
 export interface OutwardSpend {
@@ -87,30 +88,22 @@ export interface OutwardSpend {
  *     опыт в библиотеке), этой правкой не затронуты — у них своя
  *     таблица и свой заход.
  */
-const SPEND_LOCK_TIMEOUT_MS = 10_000;
-
-/** Проверка потолка и отметка расхода — одним событием.
+/** Пункт [the-public-door-counted-then-crossed] 2026-10-05: сам замок
+ *  переехал в `common/ceiling-lock.ts` — та же болезнь нашлась у
+ *  потолков публичной записи, и это был выбор между второй копией и
+ *  одним местом. Имя и шапка остались здесь: вызывающие счётчики
+ *  расходов говорят на своём языке, а механизм один.
  *
- *  Внутри `body` счёт и запись идут по той же транзакции `tx`, то есть
- *  под тем же замком. Передавать наружу `prisma` вместо `tx` нельзя: это
- *  вернуло бы ровно ту гонку, ради которой замок и ставится, — поэтому
- *  сверка пункта проверяет, что ни один счётчик не обращается внутри к
- *  чему-то, кроме `tx`. */
+ *  Таймаут тоже один и живёт там же: два таймаута разъехались бы. */
 export async function withSpendLock<T>(
   prisma: PrismaService,
   userId: string,
   action: string,
   body: (tx: PrismaService) => Promise<T>,
 ): Promise<T> {
-  return prisma.$transaction(
-    async (tx) => {
-      // Ключ — пара «кто» и «за что»: разные расходы одного человека
-      // друг друга не ждут, один расход одного человека — ждёт.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${userId}|${action}`}, 0))`;
-      return body(tx as unknown as PrismaService);
-    },
-    { timeout: SPEND_LOCK_TIMEOUT_MS },
-  );
+  // Ключ — пара «кто» и «за что»: разные расходы одного человека друг
+  // друга не ждут, один расход одного человека — ждёт.
+  return withCeilingLock(prisma, `${userId}|${action}`, body);
 }
 
 /** Сколько уже потрачено за сутки. */

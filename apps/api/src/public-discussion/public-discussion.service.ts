@@ -32,7 +32,7 @@
 
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { assertUnderPublicWriteLimit } from '../common/public-write-limits';
+import { assertUnderPublicWriteLimit, insertUnderPublicWriteLimit } from '../common/public-write-limits';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_PAGE_LIMIT, pagedList, takeWithProbe } from '../common/page';
@@ -245,15 +245,22 @@ export class PublicDiscussionService {
     const project = await this.findProjectByToken(token);
     // Пункт [the-open-door-had-no-counter] 2026-09-30: до этой строки
     // знание ссылки позволяло завести сколько угодно участников.
-    await assertUnderPublicWriteLimit('participants-per-discussion', () =>
-      this.prisma.publicParticipant.count({ where: { projectId: project.id } }),
+    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: счёт и
+    // запись — ОДНО событие под замком. Проверка отдельным обращением не
+    // держала ничего: одновременные запросы читали один счёт.
+    return insertUnderPublicWriteLimit(
+      this.prisma,
+      'participants-per-discussion',
+      project.id,
+      (tx) => tx.publicParticipant.count({ where: { projectId: project.id } }),
+      (tx) =>
+        tx.publicParticipant.create({
+          data: { projectId: project.id, displayName: displayName?.trim() || null },
+          // Единственное место во всём проекте, где `withdrawToken`
+          // называется в `select`, — и получает его тот, кому он выдан.
+          select: { id: true, displayName: true, createdAt: true, withdrawToken: true },
+        }),
     );
-    return this.prisma.publicParticipant.create({
-      data: { projectId: project.id, displayName: displayName?.trim() || null },
-      // Единственное место во всём проекте, где `withdrawToken`
-      // называется в `select`, — и получает его тот, кому он выдан.
-      select: { id: true, displayName: true, createdAt: true, withdrawToken: true },
-    });
   }
 
   async submitArgument(token: string, text: string, stance: 'PRO' | 'CON', participantId?: string) {
@@ -267,9 +274,13 @@ export class PublicDiscussionService {
     // Пункт [the-open-door-had-no-counter] 2026-09-30: очередь модерации
     // разбирает человек, и неограниченная очередь означает, что её не
     // разберут никогда.
-    await assertUnderPublicWriteLimit('submissions-per-discussion', () =>
-      this.prisma.publicArgumentSubmission.count({ where: { projectId: project.id } }),
-    );
+    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: ОБА
+    // потолка и запись — одним событием под замком обсуждения. Прежде
+    // это были три отдельных обращения, и одновременные запросы
+    // проходили все. Замок берётся по обсуждению, а не по участнику:
+    // личный потолок считается внутри него, и брать два замка значило
+    // бы завести порядок их взятия, то есть способ получить взаимную
+    // блокировку.
     // Пункт [the-ceiling-asked-you-to-identify-yourself] 2026-09-30 —
     // ЛИЧНЫЙ ПОТОЛОК ПРИМЕНЯЕТСЯ И К АНОНИМНОЙ ЗАПИСИ.
     //
@@ -293,20 +304,28 @@ export class PublicDiscussionService {
     // по-прежнему возможна. Она стоит строки участника и упирается в
     // потолок участников; это дороже, чем пустое поле, и потому другой
     // разговор.
-    await assertUnderPublicWriteLimit('submissions-per-participant', () =>
-      this.prisma.publicArgumentSubmission.count({
-        where: { projectId: project.id, participantId: participantId ?? null },
-      }),
-    );
     // Пункт [badge-was-the-key] 2026-09-24: подача заявки возвращала
     // строку целиком, вместе с `participantId`. Своё удостоверение
     // подавший и так знает — но правило поверхности не делает
     // исключений «здесь не страшно»: именно такие исключения и
     // заканчиваются полем, о котором никто не подумал.
-    return this.prisma.publicArgumentSubmission.create({
-      data: { projectId: project.id, text: text.trim(), stance: stance as ArgumentStance, participantId: participantId ?? null },
-      select: { id: true, text: true, stance: true, status: true, upvotes: true, downvotes: true, createdAt: true },
-    });
+    return insertUnderPublicWriteLimit(
+      this.prisma,
+      'submissions-per-discussion',
+      project.id,
+      (tx) => tx.publicArgumentSubmission.count({ where: { projectId: project.id } }),
+      async (tx) => {
+        await assertUnderPublicWriteLimit('submissions-per-participant', () =>
+          tx.publicArgumentSubmission.count({
+            where: { projectId: project.id, participantId: participantId ?? null },
+          }),
+        );
+        return tx.publicArgumentSubmission.create({
+          data: { projectId: project.id, text: text.trim(), stance: stance as ArgumentStance, participantId: participantId ?? null },
+          select: { id: true, text: true, stance: true, status: true, upvotes: true, downvotes: true, createdAt: true },
+        });
+      },
+    );
   }
 
   /** Простой счётчик — см. честное ограничение в шапке файла (нет
@@ -421,23 +440,31 @@ export class PublicDiscussionService {
     if (participantId) {
       await this.assertParticipantBelongsToProject(participantId, project.id);
     }
-    await assertUnderPublicWriteLimit('comments-per-discussion', () =>
-      this.prisma.publicComment.count({ where: { projectId: project.id } }),
+    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: оба
+    // потолка и запись — одним событием под замком обсуждения, как у
+    // заявок выше. Три отдельных обращения не держали ничего.
+    return insertUnderPublicWriteLimit(
+      this.prisma,
+      'comments-per-discussion',
+      project.id,
+      (tx) => tx.publicComment.count({ where: { projectId: project.id } }),
+      async (tx) => {
+        // Пункт [the-ceiling-asked-you-to-identify-yourself] 2026-09-30 —
+        // то же, что у заявок выше: личный потолок обходился пустым полем.
+        await assertUnderPublicWriteLimit('comments-per-participant', () =>
+          tx.publicComment.count({
+            where: { projectId: project.id, participantId: participantId ?? null },
+          }),
+        );
+        // Пункт [badge-was-the-key] 2026-09-24: наружу возвращается только
+        // id созданного — страница всё равно перечитывает список, а лишние
+        // поля в ответе это лишние поля наружу.
+        return tx.publicComment.create({
+          data: { projectId: project.id, text: text.trim(), participantId: participantId ?? null },
+          select: { id: true },
+        });
+      },
     );
-    // Пункт [the-ceiling-asked-you-to-identify-yourself] 2026-09-30 —
-    // то же, что у заявок выше: личный потолок обходился пустым полем.
-    await assertUnderPublicWriteLimit('comments-per-participant', () =>
-      this.prisma.publicComment.count({
-        where: { projectId: project.id, participantId: participantId ?? null },
-      }),
-    );
-    // Пункт [badge-was-the-key] 2026-09-24: наружу возвращается только
-    // id созданного — страница всё равно перечитывает список, а лишние
-    // поля в ответе это лишние поля наружу.
-    return this.prisma.publicComment.create({
-      data: { projectId: project.id, text: text.trim(), participantId: participantId ?? null },
-      select: { id: true },
-    });
   }
 
   /** Секрет → чей он, в пределах ЭТОГО проекта. Пустая строка не

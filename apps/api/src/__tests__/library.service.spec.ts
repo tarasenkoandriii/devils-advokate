@@ -11,7 +11,12 @@ function createFakePrisma() {
   let idCounter = 0;
   const nextId = () => `id-${++idCounter}`;
 
-  return {
+  const fake: any = {
+    // Пункт [the-public-door-counted-then-crossed] 2026-10-05: потолок
+    // рассказов и запись идут одной транзакцией под замком — заглушка
+    // обязана знать ту же форму, что production.
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     _seedProject(p: any) { projects.set(p.id, p); },
     _seedUser(u: any) { users.set(u.id, { isLibraryModerator: false, ...u }); },
     _seedArgument(a: any) { argumentsStore.push(a); },
@@ -107,11 +112,11 @@ function createFakePrisma() {
         return e;
       },
     },
-    $transaction: async (ops: Promise<any>[]) => Promise.all(ops),
     // Пункт [the-ceiling-was-counted-then-crossed] 2026-10-05: под замком
     // счётчика расходов идёт сырой запрос — заглушка обязана знать и его.
     $executeRaw: async () => 1,
   };
+  return fake;
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
