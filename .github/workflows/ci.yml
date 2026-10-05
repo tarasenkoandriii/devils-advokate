@@ -80,7 +80,7 @@ jobs:
     name: ESLint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run lint
 
@@ -88,7 +88,7 @@ jobs:
     name: Typecheck (strict)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run typecheck
 
@@ -96,7 +96,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm test
 
@@ -104,7 +104,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run build --workspace=apps/api
       - run: npm run build --workspace=apps/tma
@@ -115,7 +115,7 @@ jobs:
     name: Prisma schema
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run prisma:validate --workspace=apps/api
 
@@ -145,7 +145,7 @@ jobs:
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/devils_advocate?schema=public
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
 
       # Реестр и каталог сверяются ДО применения: файл, не попавший в
@@ -235,10 +235,10 @@ jobs:
     steps:
       # fetch-depth: 2 — самопроверке нужен HEAD^ (она поднимает свой
       # временный репозиторий, но скрипт обращается к git в принципе).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
 

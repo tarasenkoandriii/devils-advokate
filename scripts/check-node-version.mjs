@@ -1,6 +1,14 @@
 // Пункт [ci-built-on-a-different-node] 2026-10-01 — версия Node живёт в
 // одном месте, и это проверяется.
 //
+// Пункт [the-actions-ran-on-a-runtime-github-deprecated] 2026-10-05 —
+// ТО ЖЕ ПРАВИЛО ДЛЯ МАЖОРОВ ДЕЙСТВИЙ. `actions/checkout` упоминается в
+// этом репозитории СЕМЬ раз, и подъём мажора — семь правок, из которых
+// шесть можно сделать и одну забыть. Забытая не ломает прогон: джоба
+// просто поедет на другом рантайме, с предупреждением, которое уже стало
+// фоном. Это ровно та форма, что и разъехавшаяся версия Node, только
+// внутри одного файла.
+//
 // НАЙДЕННОЕ. `.github/actions/setup/action.yml` пинил Node 20, а Vercel
 // собирает все четыре проекта на 24.x (проверено в панели 2026-10-01).
 // Зелёный CI не обещал ничего про сборку, которая реально поедет: разные
@@ -42,6 +50,34 @@ export function numericVersionLines(source) {
     .split('\n')
     .map((line, i) => [i + 1, line])
     .filter(([, line]) => NUMERIC_VERSION.test(line));
+}
+
+/** Все `uses: owner/action@vN` без комментариев, с номером строки.
+ *
+ *  Снятие комментариев здесь не формальность: объяснение к подъёму
+ *  мажоров ЦИТИРУЕТ прежние значения (`actions/checkout@v4`), и разбор
+ *  по сырому тексту объявил бы расхождение в самом абзаце, который
+ *  рассказывает, что его больше нет. Та же ловушка, что ловила этот
+ *  проект одиннадцать раз; ниже стои́т обратная проба именно на неё. */
+export function actionUses(source) {
+  return [...stripYamlComments(source).matchAll(/uses:\s*([\w.-]+\/[\w.-]+)@(v\d+)/g)].map((m) => ({
+    action: m[1],
+    major: m[2],
+  }));
+}
+
+/** Действия, упомянутые с РАЗНЫМИ мажорами. */
+export function majorsThatDisagree(sources) {
+  const seen = new Map();
+  for (const src of sources) {
+    for (const { action, major } of actionUses(src)) {
+      if (!seen.has(action)) seen.set(action, new Set());
+      seen.get(action).add(major);
+    }
+  }
+  return [...seen.entries()]
+    .filter(([, majors]) => majors.size > 1)
+    .map(([action, majors]) => `${action}: ${[...majors].sort().join(' и ')}`);
 }
 
 function walk(dir) {
@@ -87,6 +123,43 @@ check(
 check(
   'хотя бы один файл читает .nvmrc — иначе проверка выше проходила бы на пустом месте',
   yamls.some((f) => stripYamlComments(readFileSync(f, 'utf8')).includes("node-version-file")),
+);
+
+// ── Мажоры действий ────────────────────────────────────────────────
+const sources = yamls.map((f) => readFileSync(f, 'utf8'));
+const allUses = sources.flatMap(actionUses);
+check(
+  'разбор находит вызовы действий — иначе согласие мажоров ничего не значит',
+  allUses.length > 0,
+);
+const disagree = majorsThatDisagree(sources);
+check(
+  'каждое действие вызывается с ОДНИМ мажором во всём репозитории',
+  disagree.length === 0,
+  disagree.join('; '),
+);
+for (const [action, major] of [
+  ...new Map(allUses.map((u) => [u.action, u.major])).entries(),
+].sort()) {
+  console.log(`  ${action} = ${major}`);
+}
+
+// ОБРАТНАЯ ПРОБА на разбор мажоров: он обязан находить расхождение и НЕ
+// находить его в комментарии, который цитирует прежнее значение.
+check(
+  'обратная проба: два разных мажора одного действия находятся',
+  majorsThatDisagree(['    - uses: actions/checkout@v7\n', '    - uses: actions/checkout@v4\n']).length === 1,
+);
+check(
+  'обратная проба: прежний мажор В КОММЕНТАРИИ расхождением не считается',
+  majorsThatDisagree([
+    '    - uses: actions/checkout@v7\n',
+    '      # здесь было `uses: actions/checkout@v4`, и GitHub гнал его на 24\n',
+  ]).length === 0,
+);
+check(
+  'обратная проба: разные действия с разными мажорами расхождением НЕ считаются',
+  majorsThatDisagree(['    - uses: actions/checkout@v7\n    - uses: actions/setup-node@v5\n']).length === 0,
 );
 
 // ОБРАТНАЯ ПРОБА на саму проверку: она обязана (а) находить настоящую
