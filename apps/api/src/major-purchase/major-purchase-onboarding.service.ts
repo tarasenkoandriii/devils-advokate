@@ -27,7 +27,7 @@ import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-ro
 import { ProjectMode, PurchaseCategory } from '@prisma/client';
 import { getOnboardingChecklist } from './major-purchase-checklist';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
-import { ensureOnboardingConversation } from '../common/onboarding-conversation';
+import { assertOnboardingConversation, ensureOnboardingConversation } from '../common/onboarding-conversation';
 
 const TASK_TYPE = 'major-purchase-onboarding-extract';
 const CHECKLIST_TASK_TYPE = 'major-purchase-onboarding-checklist';
@@ -287,6 +287,14 @@ export class MajorPurchaseOnboardingService {
     if (!conversation || conversation.project.ownerId !== userId) {
       throw new NotFoundException(`Conversation ${conversationId} not found`);
     }
+    // Пункт [the-kind-was-never-checked] 2026-10-26: проверка владения
+    // отвечала на вопрос «его ли это разговор», а метод спрашивал
+    // другое — «тот ли это разговор». Признаки онбординга проверял
+    // только ПОИСК; сюда приходил id снаружи, и годился любой разговор
+    // человека. Теперь проверяются оба вопроса, и признаки берутся из
+    // одного места с поиском.
+    await assertOnboardingConversation(this.prisma, conversation);
+
     return conversation;
   }
 }

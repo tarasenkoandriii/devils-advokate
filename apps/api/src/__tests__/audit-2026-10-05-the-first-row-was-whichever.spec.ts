@@ -115,7 +115,18 @@ export function uniqueGroupsFromSchema(schema: string): Record<string, string[][
 }
 
 /** Ключи верхнего уровня `where`. `null` — объект не литеральный. */
-export function whereKeysOf(arg: string): string[] | null {
+/** Текст объявления константы того же файла. Пункт
+ *  [the-kind-was-never-checked] 2026-10-26: признаки отбора и порядок
+ *  вынесены в экспортируемые константы НАМЕРЕННО — чтобы поиск и
+ *  проверка не разъехались. Разбор, который этого не понимает,
+ *  требовал бы их обратного РАЗДВОЕНИЯ: то есть сторож наказывал бы за
+ *  правильную форму. */
+export function constantText(src: string, name: string): string {
+  const m = new RegExp(`const ${name}\\s*(?::[^=]*)?=([\\s\\S]{0,600})`).exec(src);
+  return m ? m[1] : '';
+}
+
+export function whereKeysOf(arg: string, src = ''): string[] | null {
   const at = arg.search(/\bwhere\s*:/);
   if (at < 0) return [];
   const rest = arg.slice(arg.indexOf(':', at) + 1).replace(/^\s+/, '');
@@ -140,12 +151,29 @@ export function whereKeysOf(arg: string): string[] | null {
   for (const part of parts) {
     const t = part.trim();
     if (!t) continue;
-    if (t.startsWith('...')) return null;
+    if (t.startsWith('...')) {
+      // Раскрываем расширение константы того же файла: ключи из неё —
+      // такие же ключи фильтра, просто объявленные в одном месте.
+      const name = /^\.\.\.([A-Za-z_][A-Za-z0-9_]*)/.exec(t)?.[1];
+      const inner = name ? whereKeysOf(`where: {${constantText(src, name)}}`, src) : null;
+      if (!inner) return null;
+      keys.push(...inner);
+      continue;
+    }
     const k = /^(\w+)\s*(:|,|$)/.exec(t);
     if (!k) return null;
     keys.push(k[1]);
   }
   return keys;
+}
+
+/** Порядок запроса — литералом или ссылкой на константу файла. */
+export function orderByOf(arg: string, src = ''): string {
+  const literal = /orderBy:\s*(\[[\s\S]*?\]|\{[^{}]*\})/.exec(arg);
+  if (literal) return literal[1].replace(/\s+/g, ' ');
+  const ref = /orderBy:\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(arg);
+  if (ref) return constantText(src, ref[1]).replace(/\s+/g, ' ');
+  return 'НЕТ';
 }
 
 export interface FirstRowCall {
@@ -176,9 +204,9 @@ export function firstRowCalls(files: string[], schema: string): FirstRowCall[] {
         i++;
       }
       const arg = src.slice(open + 1, i);
-      const keys = whereKeysOf(arg);
+      const keys = whereKeysOf(arg, src);
       const groups = unique[m[1]] ?? [];
-      const orderBy = (/orderBy:\s*(\[[\s\S]*?\]|\{[^{}]*\})/.exec(arg) ?? ['', 'НЕТ'])[1].replace(/\s+/g, ' ');
+      const orderBy = orderByOf(arg, src);
       out.push({
         file: file.slice(API_SRC.length + 1),
         line: raw.slice(0, m.index!).split('\n').length,
@@ -293,9 +321,9 @@ function callsIn(source: string, schema: string = SCHEMA_SRC): FirstRowCall[] {
       i++;
     }
     const arg = src.slice(open + 1, i);
-    const keys = whereKeysOf(arg);
+    const keys = whereKeysOf(arg, src);
     const groups = unique[m[1]] ?? [];
-    const orderBy = (/orderBy:\s*(\[[\s\S]*?\]|\{[^{}]*\})/.exec(arg) ?? ['', 'НЕТ'])[1].replace(/\s+/g, ' ');
+    const orderBy = orderByOf(arg, src);
     out.push({
       file: 'проба',
       line: 1,

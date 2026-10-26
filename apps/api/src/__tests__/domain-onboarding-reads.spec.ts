@@ -17,11 +17,28 @@ function createFakePrisma() {
       count: async ({ where }: any) => projects.filter((p) => p.ownerId === where.ownerId && p.mode === where.mode).length,
     },
     conversation: {
-      findFirst: async ({ where }: any) => {
-        const c = conversations.find((x) => x.id === where.id);
-        if (!c) return null;
-        const p = projects.find((x) => x.id === c.projectId);
-        return p && p.ownerId === where.project.ownerId ? c : null;
+      // Пункт [the-kind-was-never-checked] 2026-10-26: теперь спрашивают
+      // ДВА разных вопроса — «его ли это разговор» (по id и владельцу) и
+      // «тот ли это разговор» (по признакам онбординга в проекте).
+      // Заглушка, знавшая только первый, молча отвечала бы на второй
+      // чем попало.
+      findFirst: async ({ where, orderBy }: any) => {
+        if (where.id !== undefined) {
+          const c = conversations.find((x) => x.id === where.id);
+          if (!c) return null;
+          const p = projects.find((x) => x.id === c.projectId);
+          return p && p.ownerId === where.project.ownerId ? c : null;
+        }
+        // Отбор онбординг-разговора проекта: тот же, что в продукте —
+        // TEXT_IMPORT, участник SELF, есть транскрипт, самый ранний.
+        const matching = conversations
+          .filter((c) => c.projectId === where.projectId)
+          .filter((c) => c.sourceType === where.sourceType)
+          .filter((c) => (c.participants ?? []).some((pt: any) => pt.diarizationLabel === 'SELF' && pt.isSelf === true))
+          .filter((c) => transcripts.some((t) => t.conversationId === c.id))
+          .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+        void orderBy;
+        return matching[0] ?? null;
       },
     },
     transcript: {
@@ -54,7 +71,17 @@ describe('domain-onboarding-reads (фаза A)', () => {
   it('getOnboardingAnswers возвращает ответы в порядке startMs', async () => {
     const prisma = createFakePrisma();
     prisma._seedProject({ id: 'p1', ownerId: 'u1', mode: 'DTP' });
-    prisma._seedConversation({ id: 'c1', projectId: 'p1', status: 'UPLOADED', createdAt: new Date() });
+    prisma._seedConversation({
+      id: 'c1',
+      projectId: 'p1',
+      status: 'TRANSCRIBED',
+      createdAt: new Date(),
+      // Признаки онбординг-разговора: без них метод, называющий вид в
+      // отказе, обязан отказать — это и есть предмет Пункта
+      // [the-kind-was-never-checked].
+      sourceType: 'TEXT_IMPORT',
+      participants: [{ diarizationLabel: 'SELF', isSelf: true }],
+    });
     prisma._seedTranscript({ conversationId: 'c1', segments: [
       { id: 's2', text: 'второй', startMs: 10 },
       { id: 's1', text: 'первый', startMs: 1 },

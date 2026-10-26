@@ -7,6 +7,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { ProjectMode } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertOnboardingConversation } from './onboarding-conversation';
 
 export const DOMAIN_PROJECTS_MAX_TAKE = 100;
 
@@ -45,6 +46,12 @@ export async function getOnboardingAnswers(prisma: PrismaService, userId: string
   if (!conversation) {
     throw new NotFoundException(`Onboarding conversation ${conversationId} not found`);
   }
+  // Пункт [the-kind-was-never-checked] 2026-10-26: отказ называл вид
+  // («Onboarding conversation … not found»), а проверялось только
+  // владение — то есть по этому пути читался ЛЮБОЙ разговор человека, и
+  // его настоящая расшифровка встречи возвращалась как «ответы
+  // онбординга». Утверждение о виде в тексте отказа теперь обеспечено.
+  await assertOnboardingConversation(prisma, conversation);
   const transcript = await prisma.transcript.findUnique({
     where: { conversationId },
     include: { segments: { orderBy: { startMs: 'asc' }, select: { id: true, text: true, startMs: true } } },

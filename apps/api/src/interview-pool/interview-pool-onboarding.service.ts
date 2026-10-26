@@ -22,7 +22,7 @@ import {
 } from '@prisma/client';
 import { assertInterviewPoolProjectAccess } from './interview-pool-access';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
-import { ensureOnboardingConversation } from '../common/onboarding-conversation';
+import { assertOnboardingConversation, ensureOnboardingConversation } from '../common/onboarding-conversation';
 
 const TASK_TYPE = 'interview-pool-onboarding-extract';
 
@@ -242,6 +242,14 @@ export class InterviewPoolOnboardingService {
     // Той самий командно-обізнаний доступ, що для проєкту напряму —
     // одна перевірка, не дублюємо логіку тут.
     await assertInterviewPoolProjectAccess(this.prisma, userId, conversation.projectId);
+    // Пункт [the-kind-was-never-checked] 2026-10-26: проверка владения
+    // отвечала на вопрос «его ли это разговор», а метод спрашивал
+    // другое — «тот ли это разговор». Признаки онбординга проверял
+    // только ПОИСК; сюда приходил id снаружи, и годился любой разговор
+    // человека. Теперь проверяются оба вопроса, и признаки берутся из
+    // одного места с поиском.
+    await assertOnboardingConversation(this.prisma, conversation);
+
     return conversation;
   }
 }

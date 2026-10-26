@@ -20,6 +20,7 @@ import { ensureOnboardingConversation } from '../common/onboarding-conversation'
 import { assertInterviewPoolProjectAccess } from '../interview-pool/interview-pool-access';
 import { ClientBriefService } from '../client-brief/client-brief.service';
 import { manyCompaniesMessage } from '../employer-dossier/single-dossier';
+import { assertOnboardingConversation } from '../common/onboarding-conversation';
 
 export const EMPLOYER_ONBOARDING_CHECKLIST = [
   'Какая компания нанимает (название, код реестра или домен сайта)?',
@@ -83,6 +84,12 @@ export class EmployerHiringService {
     const conversation = await this.prisma.conversation.findUnique({ where: { id: conversationId }, select: { id: true, projectId: true } });
     if (!conversation) throw new NotFoundException(`Conversation ${conversationId} not found`);
     await assertInterviewPoolProjectAccess(this.prisma, userId, conversation.projectId);
+    // Пункт [the-kind-was-never-checked] 2026-10-26: доступ отвечал на
+    // «его ли это разговор», а метод спрашивал «тот ли это разговор».
+    // Здесь проверка доступа командно-осведомлённая (агентство видит
+    // проект работодателя), поэтому она ОСТАЛАСЬ как есть, а проверка
+    // вида добавлена рядом — а не вместо.
+    await assertOnboardingConversation(this.prisma, conversation);
     const transcript = await this.prisma.transcript.findUnique({ where: { conversationId } });
     if (!transcript) throw new NotFoundException(`Transcript for conversation ${conversationId} not found`);
     const participant = await this.prisma.conversationParticipant.findFirst({ where: { conversationId, isSelf: true } });
@@ -100,6 +107,12 @@ export class EmployerHiringService {
     const conversation = await this.prisma.conversation.findUnique({ where: { id: conversationId }, select: { id: true, projectId: true } });
     if (!conversation) throw new NotFoundException(`Conversation ${conversationId} not found`);
     await assertInterviewPoolProjectAccess(this.prisma, userId, conversation.projectId);
+    // Пункт [the-kind-was-never-checked] 2026-10-26: доступ отвечал на
+    // «его ли это разговор», а метод спрашивал «тот ли это разговор».
+    // Здесь проверка доступа командно-осведомлённая (агентство видит
+    // проект работодателя), поэтому она ОСТАЛАСЬ как есть, а проверка
+    // вида добавлена рядом — а не вместо.
+    await assertOnboardingConversation(this.prisma, conversation);
     const segments = await this.prisma.transcriptSegment.findMany({
       where: { transcript: { conversationId } },
       orderBy: { startMs: 'asc' },

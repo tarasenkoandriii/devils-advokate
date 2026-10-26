@@ -14,7 +14,7 @@ import { ConsentService } from '../consent/consent.service';
 import { ProjectMode, HealthCriterionCategory, ConsentType } from '@prisma/client';
 import { assertOwnedHealthProject } from './health-access';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
-import { ensureOnboardingConversation } from '../common/onboarding-conversation';
+import { assertOnboardingConversation, ensureOnboardingConversation } from '../common/onboarding-conversation';
 
 const TASK_TYPE = 'health-onboarding-extract';
 
@@ -168,6 +168,14 @@ export class HealthOnboardingService {
     if (!conversation || conversation.project.ownerId !== userId) {
       throw new NotFoundException(`Conversation ${conversationId} not found`);
     }
+    // Пункт [the-kind-was-never-checked] 2026-10-26: проверка владения
+    // отвечала на вопрос «его ли это разговор», а метод спрашивал
+    // другое — «тот ли это разговор». Признаки онбординга проверял
+    // только ПОИСК; сюда приходил id снаружи, и годился любой разговор
+    // человека. Теперь проверяются оба вопроса, и признаки берутся из
+    // одного места с поиском.
+    await assertOnboardingConversation(this.prisma, conversation);
+
     return conversation;
   }
 }
