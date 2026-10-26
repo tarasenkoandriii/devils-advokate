@@ -105,12 +105,29 @@ export class VenueRecommendationService {
     }
 
     const created: VenueRecommendation[] = [];
+    let skipped = 0;
     for (const candidate of shortlist) {
+      // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: расход
+      // ОТМЕЧАЕТСЯ ВНЕ деградирующего `try`.
+      //
+      // Было: `spendPlacesRequest` стоял внутри `try … catch { continue }`
+      // вместе с запросом к провайдеру. Причины там две совершенно
+      // разные, а обращение с ними было одно. Сбой провайдера — да,
+      // деградация: одно заведение не отдало детали, остальные отдадут.
+      // Отказ ПОТОЛКА — не сбой: это решение продукта, у него есть
+      // текст, он называет, через сколько освободится место, и человеку
+      // он нужен. Проглоченный, он превращался в более короткий список,
+      // выданный за результат, — то есть ровно в «пробел, который
+      // выглядит как полнота», который шапка этого же метода объявляет
+      // недопустимым восемью строками выше. Проверка перед циклом от
+      // этого не спасает: потолок на человека, и другой его запрос
+      // может выбрать квоту между проверкой и серединой цикла.
+      await spendPlacesRequest(this.prisma, userId, 'venue-recommendation/details');
       let details;
       try {
-        await spendPlacesRequest(this.prisma, userId, 'venue-recommendation/details');
         details = await getPlaceDetails(candidate.placeId, apiKey);
       } catch {
+        skipped += 1;
         continue; // одно заведение не отдало детали — пропускаем, не роняем всю генерацию
       }
 
@@ -147,6 +164,7 @@ export class VenueRecommendationService {
       // выглядеть отказом», сам превратил бы конфигурацию в отказ.
       // Наружу уходит только отсутствие прав.
       if (err instanceof ForbiddenException) throw err;
+        skipped += 1;
         if (err instanceof AIRouterContentBlockedError) continue; // одно заведение отклонено фильтром — пропускаем, не роняем всё
         continue; // AI недоступен для этого конкретного заведения — пропускаем, пробуем следующее
       }
@@ -171,7 +189,13 @@ export class VenueRecommendationService {
     if (created.length === 0) {
       throw new BadGatewayException('Не удалось получить рекомендации ни по одному из найденных заведений');
     }
-    return created;
+    // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: сколько
+    // заведений не дошло — СКАЗАНО. Деградация по заведению осталась
+    // (шапка метода объясняет, почему она верна), но молчаливой она
+    // быть не должна: человек просил подобрать из найденных, получал
+    // часть и не знал, что это часть. Тот же принцип, что `partialBasis`
+    // в разборах: срез называется срезом.
+    return { items: created, consideredCount: shortlist.length, skippedCount: skipped };
   }
 
   async list(userId: string, scheduledConversationId: string) {

@@ -1,5 +1,5 @@
 import { EvaluationService } from '../evaluation/evaluation.service';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 
 function createFakePrisma() {
   const users = new Map<string, any>();
@@ -319,6 +319,69 @@ describe('EvaluationService', () => {
     // не давшая гипотез, и вызов, который не состоялся.
     const notes = prisma._getCaseResults().filter((cr: any) => !cr.passed).map((cr: any) => cr.note);
     expect(notes.filter((n: string) => n.includes('кейс не выполнен')).length).toBe(9);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [the-refusal-was-swallowed-midway]: потолок, съевший 39 кейсов из 40, НЕ даёт зелёный гейт', async () => {
+    // Пункт [the-refusal-was-swallowed-midway] 2026-10-26. Дословно
+    // тот же дефект, что [the-gate-passed-on-nine-failures]
+    // 2026-09-30 закрыл в СОСЕДНЕМ методе — и не закрыл здесь.
+    // `strongDiscrepancyFpr` считается от `cases.length`, а не от
+    // выполненных: 0 ложных срабатываний из 40 кейсов = 0.0000 ≤
+    // порога, и гейт `prompt_promotion` говорил «пройден» ИМЕННО
+    // ПОТОМУ, что прогон не состоялся. Версия промпта уезжала в
+    // прод на основании одного выполненного кейса.
+    const prisma = createFakePrisma();
+    prisma._seedUser({ id: 'op1', isOperator: true });
+    prisma._seedPromptVersion({ id: 'pv1', promptId: 'motive-analysis', template: 'sys' });
+
+    let call = 0;
+    const fakeAiRouter = {
+      execute: async () => {
+        call++;
+        if (call > 1) {
+          // Тот же класс и тот же текст, что у живого потолка
+          // AI-вызовов: это НЕ сбой провайдера, а решение
+          // продукта со сроком внутри.
+          throw new HttpException('Достигнут суточный лимит: AI-вызовы (200/сутки).', HttpStatus.TOO_MANY_REQUESTS);
+        }
+        return { text: JSON.stringify({ label: 'none' }) };
+      },
+    };
+    const service = makeService(prisma, fakeAiRouter);
+
+    const dataset = await service.createDataset('op1', 'ds', 'v1');
+    await service.addCases(
+      'op1',
+      dataset.id,
+      Array.from({ length: 40 }, (_, i) => ({
+        input: `case ${i}`,
+        expectedOutput: { label: 'none' },
+        caseType: 'classification' as const,
+      })),
+    );
+
+    const run = await service.evaluate('op1', 'pv1', dataset.id);
+
+    // Доля ложных срабатываний печатается как есть — она и правда
+    // нулевая, потому что срабатывать было негде.
+    const fpr = prisma._getResults().find((r: any) => prisma._getMetricName(r.evaluationMetricId) === 'false_positive_rate');
+    expect(fpr.value).toBe(0);
+    expect(fpr.passed).toBe(false);
+
+    // А причина отказа в допуске — отдельным числом, иначе
+    // оператор читает «FPR 0.0000» и «гейт не пройден» рядом.
+    const unexecuted = prisma._getResults().find((r: any) => prisma._getMetricName(r.evaluationMetricId) === 'cases_not_executed');
+    expect(unexecuted.value).toBe(39);
+    expect(unexecuted.passed).toBe(false);
+
+    const gate = prisma._getGates().find((g: any) => g.evaluationRunId === run.id);
+    expect(gate.passed).toBe(false);
+
+    // И В ЗАПИСИ КЕЙСА названа ПРИЧИНА, а не только факт
+    // сбоя: «потолок» и «невалидный JSON» — разные вещи, первое
+    // значит «подождите и прогоните заново», второе — «правьте промпт».
+    const outputs = prisma._getCaseResults().map((cr: any) => cr.actualOutput);
+    expect(outputs.filter((o: string) => o.includes('суточный лимит')).length).toBe(39);
   });
 
   it('getRun возвращает failedCases отдельным списком', async () => {

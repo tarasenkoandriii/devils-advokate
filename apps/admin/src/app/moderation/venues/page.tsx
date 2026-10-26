@@ -27,6 +27,12 @@ export default function VenuesModerationPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
+  // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: одобрение
+  // УДАЛОСЬ, а рейтинг в снимок не попал — это не ошибка
+  // действия и не молчание, поэтому отдельное состояние, а не
+  // `actionError`. Снимок делается один раз и повторной
+  // модерации не будет, так что узнать причину потом негде.
+  const [ratingNotice, setRatingNotice] = useState<string | null>(null);
   const [summaries, setSummaries] = useState<Record<string, CommissionSummary>>({});
   const [feeDrafts, setFeeDrafts] = useState<Record<string, string>>({});
 
@@ -76,6 +82,14 @@ export default function VenuesModerationPage() {
 
       <section style={{ marginBottom: 40 }}>
         <h2 style={{ fontSize: 15, marginBottom: 12 }}>Очередь заявок</h2>
+        {ratingNotice && (
+          <p role="status" style={{ marginBottom: 12, fontSize: 13 }}>
+            {ratingNotice}{' '}
+            <button className="btn" style={{ marginLeft: 8 }} onClick={() => setRatingNotice(null)}>
+              Понятно
+            </button>
+          </p>
+        )}
         <ModerationQueueTable
           items={applications}
           columns={['Название', 'Адрес', 'Телефон']}
@@ -91,7 +105,8 @@ export default function VenuesModerationPage() {
             // [project-audit] 2026-09-01: молча несработавшая модерация —
             // оператор думал, что одобрил; заявка возвращалась после F5.
             try {
-              await moderateVenueApplication(app.id, 'APPROVE');
+              const outcome = await moderateVenueApplication(app.id, 'APPROVE');
+              setRatingNotice(outcome.ratingNotice);
               setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
               void load();
             } catch (err) {
@@ -100,6 +115,7 @@ export default function VenuesModerationPage() {
           }}
           onReject={async (app) => {
             try {
+              setRatingNotice(null);
               await moderateVenueApplication(app.id, 'REJECT');
               setApplications((prev) => prev?.filter((a) => a.id !== app.id) ?? null);
             } catch (err) {

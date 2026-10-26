@@ -68,6 +68,16 @@ export interface VenueApplication {
   createdAt: string;
 }
 
+/** Пункт [the-refusal-was-swallowed-midway] 2026-10-26 — ответ на
+ *  модерацию. `ratingNotice` не ошибка: заявка одобрена, но
+ *  рейтинг в снимок не попал, и причина названа — особенно
+ *  когда причина суточный потолок на обращения к картам, то есть
+ *  решение продукта, а не свойство заведения. */
+export interface VenueModerationResult {
+  application: VenueApplication;
+  ratingNotice: string | null;
+}
+
 export interface ApprovedVenue {
   id: string;
   name: string;

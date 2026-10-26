@@ -8,10 +8,11 @@
 
 import { useState } from 'react';
 import { generateVenueRecommendations, listVenueRecommendations } from '../lib/features';
-import { VenueRecommendation } from '../lib/types';
+import { VenueRecommendation, VenueRecommendationResult } from '../lib/types';
 import { haptic } from '../lib/telegram';
 import { checkLocationConsent, LocationConsentPrompt } from './LocationConsentPrompt';
 import { NotLoadedNotice } from './NotLoadedNotice';
+import { PartialResultNotice } from './PartialResultNotice';
 import { LOCATION_PURPOSES } from '../lib/location-purposes';
 
 interface VenueRecommendationSectionProps {
@@ -25,6 +26,11 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
   const [error, setError] = useState<string | null>(null);
   const [showConsentPrompt, setShowConsentPrompt] = useState(false);
   const [notLoaded, setNotLoaded] = useState(false);
+  // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: ответ подбора
+  // хранится ЦЕЛИКОМ, а не только списком: без двух чисел список
+  // из одного заведения неотличим от списка из одного
+  // заведения, которое рядом единственное.
+  const [partial, setPartial] = useState<VenueRecommendationResult | null>(null);
 
   async function handleExpand() {
     setExpanded(true);
@@ -68,7 +74,8 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
             position.coords.latitude,
             position.coords.longitude,
           );
-          setVenues(found);
+          setVenues(found.items);
+          setPartial(found);
           haptic('success');
         } catch (err) {
           haptic('error');
@@ -95,6 +102,15 @@ export function VenueRecommendationSection({ scheduledConversationId }: VenueRec
   return (
     <div className="venue-recommendation-section">
       {notLoaded && <NotLoadedNotice what="ранее подобранные места" />}
+
+      {partial && (
+        <PartialResultNotice
+          shown={partial.items.length}
+          considered={partial.consideredCount}
+          skipped={partial.skippedCount}
+          what="найденных рядом заведений"
+        />
+      )}
 
       {venues && venues.length > 0 && (
         <ul className="venue-recommendation-section__list">

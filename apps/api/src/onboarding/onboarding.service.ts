@@ -170,13 +170,32 @@ export class OnboardingService {
       geo = await reverseGeocode(lat, lon);
     } catch (err) {
       if (err instanceof NominatimError) {
-        return { country: null, countryCode: null, city: null, suggestedReligion: null, reasoning: null };
+        // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: три пустых
+        // поля без причины читались на экране как ответ продукта
+        // о месте («Страна: —, город: —»), а не как отсутствие ответа.
+        return {
+          country: null,
+          countryCode: null,
+          city: null,
+          suggestedReligion: null,
+          reasoning: null,
+          suggestionNote: `Место по координатам определить не удалось: ${err.message}. Пустые поля — из-за этого, а не потому, что здесь ничего нет. Можно заполнить вручную или попробовать позже.`,
+        };
       }
       throw err;
     }
 
     if (!geo.country) {
-      return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: null, reasoning: null };
+      // Страны нет — подсказывать конфессию не от чего, и это не
+      // умолчание, а отсутствие основания — но сказано тоже.
+      return {
+        country: geo.country,
+        countryCode: geo.countryCode,
+        city: geo.city,
+        suggestedReligion: null,
+        reasoning: null,
+        suggestionNote: 'Конфессия не подсказана: страна по координатам не определилась, а без страны подсказывать не от чего.',
+      };
     }
 
     const userPrompt = `Страна: ${geo.country}. Какая религия/конфессия наиболее распространена в этой стране? Учитывай, что это лишь ОБЩАЯ статистическая тенденция по стране, не факт о конкретном человеке — в любой стране есть значительное религиозное разнообразие.`;
@@ -194,7 +213,7 @@ export class OnboardingService {
         validateOutput: isValidReligionSuggestionPayload,
         preferredModelVersionId: engineId,
       });
-    } catch {
+    } catch (err) {
       // Подсказка религии — необязательное улучшение UX, не
       // критический путь. Если AI недоступен, заблокирован
       // content-scan'ом, или ForbiddenException из-за отсутствия
@@ -202,11 +221,25 @@ export class OnboardingService {
       // (детерминированный reverse-geocode уже отработал), просто без
       // suggestedReligion. Не роняем весь онбординг из-за
       // необязательной части.
-      return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: null, reasoning: null };
+      //
+      // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: деградация
+      // осталась, но три причины из собственного же списка выше
+      // были неравны: «согласия EXTERNAL_AI нет» и «суточный потолок» —
+      // решения продукта с текстом, и первое человек может
+      // исправить сам в два нажатия. Проглоченные, они выглядели
+      // как «для этой страны подсказки нет».
+      return {
+        country: geo.country,
+        countryCode: geo.countryCode,
+        city: geo.city,
+        suggestedReligion: null,
+        reasoning: null,
+        suggestionNote: `Конфессия не подсказана: ${err instanceof Error ? err.message : String(err)}. Страна и город определились и не зависят от AI — поле «Вероисповедание» можно выбрать вручную.`,
+      };
     }
 
     const raw: RawReligionSuggestion = JSON.parse(result.text);
-    return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: raw.suggestedReligion, reasoning: raw.reasoning };
+    return { country: geo.country, countryCode: geo.countryCode, city: geo.city, suggestedReligion: raw.suggestedReligion, reasoning: raw.reasoning, suggestionNote: null };
   }
 
   private async ensureReligiousContentConsent(userId: string): Promise<void> {

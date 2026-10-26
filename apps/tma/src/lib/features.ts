@@ -57,6 +57,7 @@ import {
   SituationalAnecdote,
   SituationalContentPreferences,
   VenueRecommendation,
+  VenueRecommendationResult,
   PlaceSearchCandidate,
   VenueAutofillData,
   VenueApplication,
@@ -1381,8 +1382,8 @@ export function generateVenueRecommendations(
   scheduledConversationId: string,
   latitude: number,
   longitude: number,
-): Promise<VenueRecommendation[]> {
-  return apiPost<VenueRecommendation[]>(`/scheduled-conversations/${scheduledConversationId}/venue-recommendations`, {
+): Promise<VenueRecommendationResult> {
+  return apiPost<VenueRecommendationResult>(`/scheduled-conversations/${scheduledConversationId}/venue-recommendations`, {
     latitude,
     longitude,
   });

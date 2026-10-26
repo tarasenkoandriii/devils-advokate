@@ -5,6 +5,7 @@ import type {
   AdminUserDetail,
   LibraryEntry,
   VenueApplication,
+  VenueModerationResult,
   ApprovedVenue,
   CommissionSummary,
   PromptVersion,
@@ -102,7 +103,7 @@ export function moderateVenueApplication(
   decision: 'APPROVE' | 'REJECT',
   referralFeeAmount?: number,
 ) {
-  return apiPatch<VenueApplication>(`/venue-applications/${applicationId}/moderate`, {
+  return apiPatch<VenueModerationResult>(`/venue-applications/${applicationId}/moderate`, {
     decision,
     referralFeeAmount,
   });

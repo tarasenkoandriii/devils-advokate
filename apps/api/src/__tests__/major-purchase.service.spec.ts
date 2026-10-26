@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { MajorPurchaseService } from '../major-purchase/major-purchase.service';
 
 function createFakePrisma() {
@@ -382,6 +382,42 @@ describe('MajorPurchaseService', () => {
     const comparison = await service.addComparison('u1', variant.id, 'https://example.com/listing/2');
 
     expect(comparison.extractedPrice).toBeNull();
+    // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: здесь ответ
+    // ПОЛУЧЕН и он говорит «цены в объявлении нет» — то есть никакой
+    // причины не съедено и приписки быть не должно. Сравните с
+    // следующим тестом: там `null` один и тот же, а события разные.
+    expect(comparison.priceNote).toBeNull();
+    (global as any).fetch = undefined;
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ [the-refusal-was-swallowed-midway]: отказ потолка на выделении цены не выдаётся за «цены в объявлении нет»', async () => {
+    const prisma = createFakePrisma();
+    const project = prisma._seedProject({ ownerId: 'u1' });
+    const config = prisma._seedConfig({ projectId: project.id, category: 'REAL_ESTATE' });
+    const variant = prisma._seedVariant({ configId: config.id, label: 'Варіант 1' });
+
+    (global as any).fetch = jest.fn(async () => ({
+      ok: true,
+      headers: { get: () => null },
+      text: async () => '<html>Цена: $95000</html>',
+    }));
+    // Цена В СТРАНИЦЕ ЕСТЬ — именно поэтому видно, что `null`
+    // вышел из отказа потолка, а не из объявления.
+    const aiRouter = {
+      execute: async () => {
+        throw new HttpException('Достигнут суточный лимит: AI-вызовы (200/сутки). Потолок скользящий: один вызов освободится через 2 ч.', HttpStatus.TOO_MANY_REQUESTS);
+      },
+    };
+    const service = makeService(prisma, { aiRouter });
+
+    const comparison = await service.addComparison('u1', variant.id, 'https://example.com/listing/3');
+
+    // Сравнение сохранено — деградация осталась верной.
+    expect(comparison.extractedPrice).toBeNull();
+    // А причина больше не проглота: без неё человек читал пустую
+    // цену как свойство объявления и добавлял его снова.
+    expect(comparison.priceNote).toContain('суточный лимит');
+    expect(comparison.priceNote).toContain('освободится через');
     (global as any).fetch = undefined;
   });
 

@@ -12,7 +12,7 @@
 // schema.prisma и в /TODO.md: полная формула по ТЗ требует трекинга
 // бронирований и системы жалоб, которых не существует.
 
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { spendPlacesRequest } from '../common/places-spend';
 import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength , IsNotEmpty} from 'class-validator';
@@ -148,22 +148,13 @@ export class VenueApplicationService {
         before: { status: application.status },
         after: { status: updated.status },
       });
-      return updated;
+      return { application: updated, ratingNotice: null };
     }
 
-    let rating: number | null = null;
-    if (application.googlePlaceId) {
-      try {
-        const apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
-        // Один запрос на заявку, и делает его ОПЕРАТОР — расход
-        // считается на него же, как и все прочие обращения к картам.
-        await spendPlacesRequest(this.prisma, userId, 'venue-applications/moderate');
-        const details = await getPlaceDetails(application.googlePlaceId, apiKey);
-        rating = details.rating;
-      } catch {
-        rating = null; // рейтинг недоступен на момент одобрения — не блокируем одобрение из-за этого
-      }
-    }
+    const snapshot = application.googlePlaceId
+      ? await this.ratingSnapshot(userId, application.googlePlaceId)
+      : { rating: null, notice: null };
+    const rating = snapshot.rating;
 
     await this.prisma.approvedVenue.create({
       data: {
@@ -193,7 +184,49 @@ export class VenueApplicationService {
       after: { status: approved.status, referralFeeAmount: referralFeeAmount ?? null },
     });
 
-    return approved;
+    return { application: approved, ratingNotice: snapshot.notice };
+  }
+
+  /** Пункт [the-refusal-was-swallowed-midway] 2026-10-26 — почему
+   * рейтинга нет, говорится оператору.
+   *
+   * БЫЛО: один `try … catch { rating = null }` на три совершенно
+   * разные причины: ключ не настроен, провайдер не ответил и
+   * отказ СУТОЧНОГО ПОТОЛКА на обращения к картам. Первые две —
+   * сбои, и деградация по ним верна: одобрение важнее снимка
+   * рейтинга. Третья — не сбой, а решение продукта: у него есть
+   * текст, он называет, через сколько освободится обращение, и он
+   * про самого оператора (расход считается на него). Проглоченный,
+   * он выглядел как «у этого заведения нет рейтинга в Google» — и
+   * оператор одобрял заявку со снимком без рейтинга навсегда
+   * (снимок делается один раз, повторной модерации не будет),
+   * не зная, что достаточно было подождать.
+   *
+   * Одобрение по-прежнему НЕ блокируется ни одной из трёх
+   * причин — но каждая возвращается текстом и показывается на
+   * экране модерации. */
+  private async ratingSnapshot(userId: string, googlePlaceId: string): Promise<{ rating: number | null; notice: string | null }> {
+    const tail = ' Заявка одобрена, рейтинг в публичной карточке остался пустым.';
+    let apiKey: string;
+    try {
+      apiKey = await this.secrets.resolve(GOOGLE_PLACES_API_KEY_REF);
+    } catch {
+      return { rating: null, notice: 'Рейтинг Google не записан: ключ Google Places не настроен — это настройка, не свойство заведения.' + tail };
+    }
+    // Один запрос на заявку, и делает его ОПЕРАТОР — расход
+    // считается на него же, как и все прочие обращения к картам.
+    try {
+      await spendPlacesRequest(this.prisma, userId, 'venue-applications/moderate');
+    } catch (err) {
+      const refusal = err instanceof HttpException ? err.message : 'расход обращения к картам не удалось отметить';
+      return { rating: null, notice: 'Рейтинг Google не записан. ' + refusal + tail };
+    }
+    try {
+      const details = await getPlaceDetails(googlePlaceId, apiKey);
+      return { rating: details.rating, notice: null };
+    } catch {
+      return { rating: null, notice: 'Рейтинг Google не записан: Google Places не ответил на запрос деталей.' + tail };
+    }
   }
 
   // ── public (без аутентификации — "публичная карточка", буквально ТЗ) ──

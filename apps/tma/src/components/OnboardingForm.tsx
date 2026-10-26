@@ -182,6 +182,14 @@ export function OnboardingForm() {
               🟡 Подсказка, не факт — примите или пропустите, поля формы пока НЕ изменены.
             </p>
             <p>Страна: {suggestion.country ?? '—'}, город: {suggestion.city ?? '—'}</p>
+            {/* Пункт [the-refusal-was-swallowed-midway] 2026-10-26: прочерк
+                сам себя не объясняет. role="status" — строка
+                появляется после нажатия, см. NotLoadedNotice.tsx. */}
+            {suggestion.suggestionNote && (
+              <p role="status" className="conversations-section__hint">
+                {suggestion.suggestionNote}
+              </p>
+            )}
             {suggestion.suggestedReligion && (
               <p>
                 Наиболее распространённая конфессия в этом регионе: {suggestion.suggestedReligion}

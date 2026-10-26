@@ -137,6 +137,19 @@ export class EvaluationService {
     let falsePositive = 0;
     let falseNegative = 0;
     let strongDiscrepancyFalsePositive = 0;
+    /** Пункт [the-refusal-was-swallowed-midway] 2026-10-26 — тот же
+     * дефект, что [the-gate-passed-on-nine-failures] 2026-09-30 закрыл в
+     * СОСЕДНЕМ методе этого же файла, и здесь он остался.
+     *
+     * `catch` ниже глотал ВСЬ, включая отказ СУТОЧНОГО
+     * ПОТОЛКА AI-вызовов (429 с текстом и сроком). Кейс считался
+     * провальным, и два совершенно разных события — «версия промпта
+     * ответила неверно» и «версия промпта не отвечала вообще, квота
+     * кончилась» — попадали в одну графу. Хуже: `strongDiscrepancyFpr`
+     * считается от `cases.length`, а не от выполненных, и при потолке на
+     * втором кейсе давал 0/40 = 0 — гейт `prompt_promotion` говорил
+     * «пройден» ИМЕННО ПОТОМУ, что прогон не состоялся. */
+    let unexecuted = 0;
 
     for (const evalCase of cases) {
       const expectedLabel = (evalCase.expectedOutput as any)?.label;
@@ -156,11 +169,14 @@ export class EvaluationService {
         actualOutputText = result.text;
         const parsed = JSON.parse(result.text);
         actualLabel = parsed.label ?? null;
-      } catch {
-        // Честная деградация: сбой AI-вызова или невалидный JSON —
-        // кейс засчитывается провальным (passed=false), не пропускается
-        // молча — сбой на evaluation-прогоне сам по себе информативен.
-        actualOutputText = actualOutputText || '(AI call failed or returned invalid JSON)';
+      } catch (err) {
+        // Сбой AI-вызова или невалидный JSON — кейс считается
+        // невыполненным и с НАЗВАННОЙ причиной: без причины
+        // «сбой сам по себе информативен» было неправдой: отказ
+        // потолка и невалидный JSON писались одной строкой.
+        actualOutputText =
+          actualOutputText || `(AI call failed or returned invalid JSON: ${err instanceof Error ? err.message : String(err)})`;
+        unexecuted++;
       }
 
       const passed = actualLabel === expectedLabel;
@@ -200,7 +216,11 @@ export class EvaluationService {
     // код удалён, поведение не изменилось.
     const strongDiscrepancyFpr = strongDiscrepancyFalsePositive / (cases.length || 1);
 
-    const fprPassed = strongDiscrepancyFpr <= FALSE_POSITIVE_THRESHOLD_STRONG_DISCREPANCY;
+    // Невыполненный кейс роняет гейт — тот же порядок, что в
+    // `runStructural` после [the-gate-passed-on-nine-failures]: доля
+    // ложных срабатываний печатается как есть, а допуск не даётся,
+    // пока прогон не выполнен целиком.
+    const fprPassed = unexecuted === 0 && strongDiscrepancyFpr <= FALSE_POSITIVE_THRESHOLD_STRONG_DISCREPANCY;
 
     const fprMetric = await this.findOrCreateMetric('false_positive_rate');
     await this.prisma.evaluationResult.create({
@@ -210,6 +230,20 @@ export class EvaluationService {
         value: strongDiscrepancyFpr,
         threshold: FALSE_POSITIVE_THRESHOLD_STRONG_DISCREPANCY,
         passed: fprPassed,
+      },
+    });
+
+    // Причина отказа — отдельной строкой на экране оператора, как
+    // и в `runStructural`: иначе он читает «FPR 0.0000» и «гейт не пройден»
+    // рядом и не может понять, почему.
+    const unexecutedMetric = await this.findOrCreateMetric('cases_not_executed');
+    await this.prisma.evaluationResult.create({
+      data: {
+        evaluationRunId: runId,
+        evaluationMetricId: unexecutedMetric.id,
+        value: unexecuted,
+        threshold: 0,
+        passed: unexecuted === 0,
       },
     });
 
@@ -277,8 +311,13 @@ export class EvaluationService {
         actualOutputText = result.text;
         const parsed = JSON.parse(result.text);
         hypotheses = Array.isArray(parsed) ? parsed : (parsed.hypotheses ?? []);
-      } catch {
-        actualOutputText = actualOutputText || '(AI call failed or returned invalid JSON)';
+      } catch (err) {
+        // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: ПОЧЕМУ кейс
+        // не выполнен. Число `cases_not_executed` уже говорило, что
+        // прогон неполный, но не говорило, был это отказ
+        // суточного потолка (ждать) или сбой модели (править).
+        actualOutputText =
+          actualOutputText || `(AI call failed or returned invalid JSON: ${err instanceof Error ? err.message : String(err)})`;
         executed = false;
         unexecuted++;
       }

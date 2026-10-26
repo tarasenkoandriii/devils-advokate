@@ -24,8 +24,17 @@ function createFakePrisma() {
       count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
       findMany: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action),
       create: async ({ data }: any) => { spendLog.push(data); return data; },
+      // Пункт [the-day-was-the-servers] 2026-10-26: путь ОТКАЗА читает
+      // самую старую отметку окна, чтобы назвать срок. Без этого фейк
+      // описывал базу, в которой путь отказа падает с TypeError.
+      findFirst: async () => (spendLog.length > 0 ? { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } : null),
     },
     _spendLog() { return spendLog; },
+    /** Чужой одновременный расход ТОГО ЖЕ человека: потолок
+     *  на пользователя, и проверка перед циклом от этого не спасает. */
+    _bumpSpend(n: number, action = 'places.request') {
+      for (let i = 0; i < n; i++) spendLog.push({ action });
+    },
     _seedScheduled(s: any) { scheduledConversations.set(s.id, s); },
     _getVenues() { return venues; },
 
@@ -159,8 +168,11 @@ async function run() {
     };
     const svc = new VenueRecommendationService(prisma as any, new FakeAIRouterService() as any, createFakeSecrets() as any, createFakeConsentService() as any);
 
-    const created = await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6);
+    const result = await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6);
+    const created = result.items;
     assertEqual(created.length, 1, 'одно заведение создано');
+    assertEqual(result.consideredCount, 1, 'рассмотрено одно — сколько их было, следует из ответа');
+    assertEqual(result.skippedCount, 0, 'ничего не пропущено — и это тоже сказано, а не подразумевается');
     assertEqual(created[0].rating, 4.5, 'рейтинг (🔵 публичный факт) сохранён как есть из Google');
     assertEqual(created[0].reviewSummary, 'В целом посетители довольны атмосферой', 'парафраз (🟡) сохранён отдельно');
     assertEqual(created[0].suitabilityReason, 'Тихое место, подходит для приватного разговора', 'оценка пригодности (🟡) сохранена отдельно');
@@ -191,7 +203,7 @@ async function run() {
     };
     const svc = new VenueRecommendationService(prisma as any, new FakeAIRouterService() as any, createFakeSecrets() as any, createFakeConsentService() as any);
 
-    const created = await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6);
+    const created = (await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6)).items;
     const serialized = JSON.stringify(created[0]);
     assertEqual(serialized.includes('ДОСЛОВНЫЙ_ТЕКСТ_ОТЗЫВА_НЕ_ДОЛЖЕН_ПОПАСТЬ_В_ЗАПИСЬ'), false, 'сырой текст отзыва не просочился в персистентную запись');
   });
@@ -222,8 +234,63 @@ async function run() {
     };
     const svc = new VenueRecommendationService(prisma as any, new FakeAIRouterService() as any, createFakeSecrets() as any, createFakeConsentService() as any);
 
-    const created = await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6);
-    assertEqual(created.length, 1, 'одно рабочее заведение создано, сломанное пропущено, генерация не упала целиком');
+    const result = await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6);
+    assertEqual(result.items.length, 1, 'одно рабочее заведение создано, сломанное пропущено, генерация не упала целиком');
+    // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: деградация
+    // по заведению осталась верной, но молчаливой быть перестала:
+    // срез называется срезом в том же ответе.
+    assertEqual(result.consideredCount, 2, 'рассмотрено два заведения');
+    assertEqual(result.skippedCount, 1, 'одно пропущено — и человек узнаёт об этом из ответа, а не из длины списка');
+  });
+
+  // ── Пункт [the-refusal-was-swallowed-midway] 2026-10-26 ──
+
+  test('КЛЮЧЕВОЙ ТЕСТ [the-refusal-was-swallowed-midway]: потолок, упёршийся НА СЕРЕДИНЕ цикла, уходит человеку, а не коротит список', async () => {
+    const prisma = createFakePrisma();
+    seedScheduled(prisma);
+    // Два кандидата; проверка перед циклом ПРОХОДИТ (остаток 99
+    // при потолке 100), а квота выбирается ЧУЖИМ одновременным
+    // запросом того же человека между проверкой и вторым витком.
+    (global as any).fetch = async (url: string) => {
+      if (url.includes('nearbysearch')) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'OK',
+            results: [
+              { place_id: 'place-1', name: 'Первое', rating: 4.0 },
+              { place_id: 'place-2', name: 'Второе', rating: 4.2 },
+            ],
+          }),
+        };
+      }
+      if (url.includes('place-1')) prisma._bumpSpend(100);
+      return {
+        ok: true,
+        json: async () => ({ status: 'OK', result: { name: 'Заведение', formatted_address: 'x', formatted_phone_number: null, rating: 4.0, reviews: [] } }),
+      };
+    };
+    const svc = new VenueRecommendationService(prisma as any, new FakeAIRouterService() as any, createFakeSecrets() as any, createFakeConsentService() as any);
+
+    let caught: any = null;
+    try {
+      await svc.generate(USER_ID, SCHEDULED_ID, 55.7, 37.6);
+    } catch (err) {
+      caught = err;
+    }
+
+    // ДО правки здесь возвращался список из ОДНОГО заведения без
+    // единого слова о причине — то есть ровно «пробел, который
+    // выглядит как полнота», недопустимость которого объявлена в
+    // шапке самого этого метода.
+    assertEqual(caught !== null, true, 'отказ потолка не проглочен');
+    assertEqual(typeof caught?.getStatus === 'function' ? caught.getStatus() : null, 429, 'именно отказ потолка, а не какой-нибудь 502');
+    assertEqual(/суточный лимит/.test(String(caught?.message ?? '')), true, 'текст отказа дошёл до человека целиком');
+    // Честная граница правки, записанная тестом, а не замазанная:
+    // первое заведение УЖЕ создано и в базе остаётся — обращение за ним
+    // оплачено, выбрасывать его было бы расточительно. Человек
+    // увидит его при следующем открытии раздела через list().
+    assertEqual(prisma._getVenues().length, 1, 'уже созданное не теряется');
   });
 
   test('list() бросает NotFoundException для чужой запланированной встречи', async () => {

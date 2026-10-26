@@ -405,6 +405,8 @@ export class MajorPurchaseService {
     // тему вартості об'єктів) — ціна виділяється тут звичайним
     // AI-викликом синтезу з тексту сторінки, не через Fact Check API.
     let extractedPrice: number | null = null;
+    // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: ПОЧЕМУ цены нет.
+    let priceNote: string | null = null;
     try {
       const result = await this.aiRouter.execute({
         userId,
@@ -419,10 +421,17 @@ export class MajorPurchaseService {
       });
       const parsed: RawPriceExtraction = JSON.parse(result.text);
       extractedPrice = parsed.extractedPrice;
-    } catch {
+    } catch (err) {
       // Чесна деградація — порівняння зберігається без ціни, не падає
       // весь запит через збій одного допоміжного AI-виклику.
+      //
+      // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: деградация
+      // осталась, молчаливость — нет. Отказ СУТОЧНОГО ПОТОЛКА
+      // AI-вызовов и отсутствие согласия EXTERNAL_AI выглядели так
+      // же, как «в объявлении нет цены», — а первое значит «подождите»,
+      // второе — «дайте согласие», и оба зависят от человека.
       extractedPrice = null;
+      priceNote = `Цена из этой страницы не извлечена: ${err instanceof Error ? err.message : String(err)}. Сравнение сохранено без цены — средняя по объявлениям считается без него.`;
     }
 
     // Пункт [stored-text-cut] 2026-09-06: если страница вошла не
@@ -431,7 +440,7 @@ export class MajorPurchaseService {
     const created = await this.prisma.marketComparison.create({
       data: { variantId, sourceUrl, sourceText, extractedPrice },
     });
-    return { ...created, intakeNote: intakeNote(sourceIntake) };
+    return { ...created, intakeNote: intakeNote(sourceIntake), priceNote };
   }
 
   // ── Порівняльний вивід (§5.6 ТЗ) ──

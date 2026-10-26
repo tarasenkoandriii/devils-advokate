@@ -170,6 +170,12 @@ export interface LocationSuggestion {
   city: string | null;
   suggestedReligion: string | null;
   reasoning: string | null;
+  /** Пункт [the-refusal-was-swallowed-midway] 2026-10-26 — почему чего-то
+   *  в подсказке нет. Пустые поля без причины читались как
+   *  ответ продукта, а не как отсутствие ответа — особенно когда
+   *  причина исправима самим человеком (нет согласия EXTERNAL_AI)
+   *  или просит подождать (суточный потолок). */
+  suggestionNote: string | null;
 }
 
 export interface AvailableEngine {
@@ -1204,6 +1210,17 @@ export interface VenueRecommendation {
   reviewSummary: string | null;
   suitabilityReason: string;
   createdAt: string;
+}
+
+/** Пункт [the-refusal-was-swallowed-midway] 2026-10-26 — подбор отдаёт
+ *  СРЕЗ, и срез называется срезом. `consideredCount` — сколько
+ *  заведений рассматривалось, `skippedCount` — сколько из них не
+ *  дошло. Без этих двух чисел короткий список был неотличим
+ *  от полного. */
+export interface VenueRecommendationResult {
+  items: VenueRecommendation[];
+  consideredCount: number;
+  skippedCount: number;
 }
 
 // Пункт 66 (backend) — VenueApplication/ApprovedVenue (§3.23 ТЗ).

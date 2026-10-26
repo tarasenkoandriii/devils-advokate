@@ -72,6 +72,12 @@ function VariantCard({ v, cfg, spec }: { v: Variant; cfg: MpConfig; spec: any })
   const [open, setOpen] = useState(false);
   const [tick, setTick] = useState(0);
   const [adding, setAdding] = useState<'meeting' | 'compare' | null>(null);
+  // Пункт [the-refusal-was-swallowed-midway] 2026-10-26: ответ на добавление
+  // объявления сбрасывался целиком (`await postJson(...)` без
+  // присваивания), и вместе с ним — причина, почему цены в
+  // строке нет и почему страница вошла не целиком (`intakeNote`
+  // существовал давно и на этом экране никуда не показывался).
+  const [addNote, setAddNote] = useState<string | null>(null);
   const { data, error } = useOne<VariantDetail>(open ? `/major-purchase/variants/${v.id}` : null, tick);
   const bump = () => setTick((t) => t + 1);
   const compareAction = spec.actions?.find((a: any) => a.key === 'compare');
@@ -91,7 +97,8 @@ function VariantCard({ v, cfg, spec }: { v: Variant; cfg: MpConfig; spec: any })
           {data && data.comparisons.length === 0 && <p className="dtp-muted">Нет. Добавьте ссылки на похожие объявления — цена из них попадёт в вывод и в сравнение.</p>}
           {marketAvg !== null && v.askingPrice !== null && <p className={v.askingPrice > marketAvg * 1.1 ? 'dtp-warn' : 'dtp-muted'}>Средняя по {marketPrices.length} объявлениям: {money(Math.round(marketAvg), v.currency ?? cfg.currency)} — запрашиваемая {v.askingPrice > marketAvg * 1.1 ? 'заметно выше' : v.askingPrice < marketAvg * 0.9 ? 'заметно ниже' : 'в рынке'}.</p>}
           <ul className="dtp-access-log">{data?.comparisons.map((c) => <li key={c.id}><a href={c.sourceUrl} target="_blank" rel="noreferrer">{c.sourceUrl}</a>{c.extractedPrice !== null && <span className="dtp-muted"> · {money(c.extractedPrice, v.currency ?? cfg.currency)}</span>}</li>)}</ul>
-          {adding === 'compare' && compareAction ? <EntityForm fields={compareAction.fields} submitLabel="Сверить" onCancel={() => setAdding(null)} onSubmit={async (val) => { await domainApi.postJson(compareAction.route(v.id), val); setAdding(null); bump(); }} />
+          {addNote && <p role="status" className="dtp-status dtp-status--warn">{addNote}</p>}
+          {adding === 'compare' && compareAction ? <EntityForm fields={compareAction.fields} submitLabel="Сверить" onCancel={() => setAdding(null)} onSubmit={async (val) => { const out = await domainApi.postJson(compareAction.route(v.id), val); setAddNote([out?.priceNote, out?.intakeNote].filter((n: unknown): n is string => typeof n === 'string' && n.length > 0).join(' ') || null); setAdding(null); bump(); }} />
             : <button type="button" className="secondary" onClick={() => setAdding('compare')}>+ Объявление для сверки</button>}
           <h4>Встречи и осмотры</h4>
           {data && data.meetings.length === 0 && <p className="dtp-muted">Встреч пока нет.</p>}

@@ -43,6 +43,11 @@ function createFakePrisma() {
     auditLogEntry: {
       count: async () => placesSpend.length,
       create: async ({ data }: any) => { placesSpend.push(data); return data; },
+      // Пункт [the-day-was-the-servers] 2026-10-26: на пути ОТКАЗА
+      // счётчик читает самую старую отметку окна, чтобы назвать
+      // срок. Без этого фейк описывал базу, в которой путь отказа
+      // падает с TypeError, то есть не проверялся вовсе.
+      findFirst: async () => (placesSpend.length > 0 ? { createdAt: new Date(Date.now() - 60 * 60 * 1000) } : null),
     },
     _placesSpend() { return placesSpend; },
     venueApplication: {
@@ -188,8 +193,9 @@ async function run() {
     const [app] = prisma._getApplications();
     const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
-    const updated = await svc.moderate(MODERATOR_ID, app.id, 'REJECT');
+    const { application: updated, ratingNotice } = await svc.moderate(MODERATOR_ID, app.id, 'REJECT');
     assertEqual(updated.status, 'REJECTED', 'статус изменён');
+    assertEqual(ratingNotice, null, 'отклонённая заявка не снимает рейтинг вообще — говорить нечего');
     assertEqual(prisma._getApprovedVenues().length, 0, 'публичная карточка не создана для отклонённой заявки');
   });
 
@@ -229,12 +235,64 @@ async function run() {
     const [app] = prisma._getApplications();
     const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
 
-    const updated = await svc.moderate(MODERATOR_ID, app.id, 'APPROVE');
+    const { application: updated, ratingNotice } = await svc.moderate(MODERATOR_ID, app.id, 'APPROVE');
     assertEqual(updated.status, 'APPROVED', 'статус изменён');
+    assertEqual(ratingNotice, null, 'без googlePlaceId снимка не было и не предполагалось — примечания нет, и это не умолчание');
     const venues = prisma._getApprovedVenues();
     assertEqual(venues.length, 1, 'публичная карточка создана');
     assertEqual(venues[0].name, 'Кафе Тихое', 'данные скопированы снапшотом');
     assertEqual(venues[0].rating, null, 'рейтинг честно null без googlePlaceId — не выдумывается');
+  });
+
+  // ── Пункт [the-refusal-was-swallowed-midway] 2026-10-26 ──
+  //
+  // Две причины отсутствия рейтинга, и разница между ними — вся суть
+  // пункта: «провайдер не ответил» оператор сделать ничего не может,
+  // а «суточный потолок» значит «подожди и одобри позже, тогда рейтинг
+  // в снимок попадёт». Снимок делается ОДИН РАЗ.
+
+  test('[the-refusal-was-swallowed-midway] провайдер не ответил: заявка одобрена, причина названа оператору', async () => {
+    const prisma = createFakePrisma();
+    seedUsers(prisma);
+    prisma._seedApplication({ submittedByUserId: USER_ID, name: 'Кафе', address: 'x', googlePlaceId: 'place-1' });
+    const [app] = prisma._getApplications();
+    (global as any).fetch = async () => ({ ok: false, status: 500 });
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
+
+    const { application, ratingNotice } = await svc.moderate(MODERATOR_ID, app.id, 'APPROVE');
+
+    assertEqual(application.status, 'APPROVED', 'сбой провайдера НЕ блокирует одобрение — деградация осталась верной');
+    assertEqual(prisma._getApprovedVenues()[0].rating, null, 'рейтинг не выдуман');
+    assertEqual(typeof ratingNotice === 'string' && ratingNotice.length > 0, true, 'причина не проглочена');
+    assertEqual(/Google Places не ответил/.test(ratingNotice as string), true, 'назван ИМЕННО сбой провайдера');
+    assertEqual(/суточный лимит/.test(ratingNotice as string), false, 'и НЕ выдан за потолок');
+  });
+
+  test('КЛЮЧЕВОЙ ТЕСТ [the-refusal-was-swallowed-midway]: отказ СУТОЧНОГО ПОТОЛКА доезжает до оператора со сроком', async () => {
+    const prisma = createFakePrisma();
+    seedUsers(prisma);
+    prisma._seedApplication({ submittedByUserId: USER_ID, name: 'Кафе', address: 'x', googlePlaceId: 'place-1' });
+    const [app] = prisma._getApplications();
+    // Потолок выбран доконца: сто отметок в окне — ровно
+    // `fallback` для PLACES_REQUESTS_PER_USER_PER_DAY из spend-limits.ts.
+    for (let i = 0; i < 100; i++) await prisma.auditLogEntry.create({ data: { actorId: MODERATOR_ID, action: 'places.request' } });
+    // Если бы запрос всё же ушёл к провайдеру, он бы УСПЕЛ: так
+    // видно, что рейтинга нет из-за потолка, а не из-за сбоя.
+    (global as any).fetch = async () => ({
+      ok: true,
+      json: async () => ({ status: 'OK', result: { name: 'Кафе', formatted_address: 'x', formatted_phone_number: null, rating: 4.7, reviews: [] } }),
+    });
+    const svc = new VenueApplicationService(prisma as any, createFakeSecrets() as any, { record: async () => ({}) } as any);
+
+    const { application, ratingNotice } = await svc.moderate(MODERATOR_ID, app.id, 'APPROVE');
+
+    assertEqual(application.status, 'APPROVED', 'потолок не блокирует одобрение');
+    assertEqual(prisma._getApprovedVenues()[0].rating, null, 'рейтинг не записан — обращения не было');
+    assertEqual(/суточный лимит/.test(ratingNotice ?? ''), true, 'отказ потолка назван своими словами');
+    // Срок — то единственное, что делает отказ действием, а не
+    // сообщением: без него оператор не знает, ждать минуту или сутки.
+    assertEqual(/освободится через/.test(ratingNotice ?? ''), true, 'срок освобождения доехал до оператора');
+    assertEqual((ratingNotice ?? '').includes('остался пустым'), true, 'следствие для карточки названо тоже');
   });
 
   test('moderate() бросает BadRequestException при повторной модерации уже обработанной заявки', async () => {
