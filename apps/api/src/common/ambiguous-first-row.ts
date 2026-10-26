@@ -98,12 +98,6 @@ export const AMBIGUOUS_FIRST_ROW: readonly AmbiguousFirstRow[] = [
     why: 'Строка служит булевым признаком «уловка за последние 30 секунд была»; ни technique, ни description, ни confidence не читаются. Несколько флагов за окно — норма: одна проверка фрагмента пишет по флагу на каждую найденную уловку.',
   },
   {
-    file: 'venue-application/venue-application.service.ts',
-    model: 'venueBookingConfirmation',
-    reason: 'existence-only',
-    why: 'Только «отметка за сегодня уже есть?» → один и тот же отказ с одним текстом. ОТДЕЛЬНО НАЗВАНО И НЕ ЗАКРЫТО: сама пара «проверил — создал» неатомарна, и два одновременных нажатия удвоят `referralFeeOwed`, который оператор видит как «к оплате» заведению; плюс «день» считается от серверной таймзоны, а не от таймзоны человека. Это не про выбор строки, поэтому закрывается отдельно.',
-  },
-  {
     file: 'dtp/dtp-v2.service.ts',
     model: 'dtpParticipant',
     reason: 'existence-only',

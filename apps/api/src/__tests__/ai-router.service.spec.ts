@@ -11,6 +11,12 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MAX_USER_PROMPT_CHARS } from '../ai-router/prompt-limits';
 
 let fakeAiJobCount = 0; // [rate-limits]
+// Пункт [the-day-was-the-servers] 2026-10-26: отказ по суточному
+// потолку называет, через сколько освободится место, — для этого на
+// пути ОТКАЗА читается самая старая задача окна. Фейк обязан знать и
+// этот запрос: иначе отказ молча падал бы в «Попробуйте позже», и
+// проверять было бы нечего.
+let fakeOldestJobAt: Date | null = null;
 let fakeReusableJob: any = null; // [idempotency]: что вернёт aIJob.findFirst
 
 function createFakePrisma() {
@@ -39,7 +45,13 @@ function createFakePrisma() {
       count: async () => fakeAiJobCount, // [rate-limits]: настраивается тестом лимита
       // [idempotency]: фейк проверяет фильтр по модели (аудит 2026-09-02
       // — переиспользование только при той же разрешённой модели).
-      findFirst: async ({ where }: any = {}) => {
+      findFirst: async ({ where, orderBy, select }: any = {}) => {
+        // Запрос самой старой задачи окна отличается от поиска
+        // переиспользуемой: он сортирует по возрастанию и просит одно
+        // поле. Различать обязательно — иначе «самой старой» оказалась
+        // бы переиспользуемая задача, и срок в отказе был бы чужой.
+        const asc = (Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : []).some((o: any) => o?.createdAt === 'asc');
+        if (asc && select?.createdAt) return fakeOldestJobAt ? { createdAt: fakeOldestJobAt } : null;
         if (!fakeReusableJob) return null;
         if (where?.modelVersionId && fakeReusableJob.modelVersionId && where.modelVersionId !== fakeReusableJob.modelVersionId) return null;
         return fakeReusableJob;
@@ -564,12 +576,14 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     try {
       process.env.AI_CALLS_PER_USER_PER_DAY = '5';
       fakeAiJobCount = 5;
+      fakeOldestJobAt = new Date(Date.now() - 20 * 60 * 60 * 1000);
       await expect(
         router.enqueue({ userId: USER_ID, taskType: 'media-review', userPrompt: [{ type: 'media', ref: { source: 'youtube', videoId: 'abc' } } as any] }),
-      ).rejects.toThrow(/суточный лимит AI-вызовов/);
+      ).rejects.toThrow(/Достигнут суточный лимит: AI-вызовы \(5\/сутки\)\. Потолок скользящий: одно место освободится через 4 часа\./);
     } finally {
       delete process.env.AI_CALLS_PER_USER_PER_DAY;
       fakeAiJobCount = 0;
+  fakeOldestJobAt = null;
     }
   });
 
@@ -809,12 +823,14 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
       process.env.AI_IDEMPOTENCY_WINDOW_MINUTES = '0';
       delete process.env.AI_CALLS_PER_USER_PER_DAY;
       fakeAiJobCount = 0;
+  fakeOldestJobAt = null;
       const fresh = await router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'обычный вопрос про зарплату' });
       expect(fresh.jobId).not.toBe('job-prev');
       expect(getCallCount()).toBe(1);
     } finally {
       fakeReusableJob = null;
       fakeAiJobCount = 0;
+  fakeOldestJobAt = null;
       delete process.env.AI_CALLS_PER_USER_PER_DAY;
       delete process.env.AI_IDEMPOTENCY_WINDOW_MINUTES;
     }
@@ -850,9 +866,12 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     try {
       process.env.AI_CALLS_PER_USER_PER_DAY = '5';
       fakeAiJobCount = 5; // пользователь уже выбрал лимит
+      // Самой старой задачи окна фейк не знает — отказ обязан остаться
+      // честным «позже», а не выдумать срок.
+      fakeOldestJobAt = null;
       await expect(
         router.execute({ userId: USER_ID, taskType: 'argument-generation', userPrompt: 'вопрос' }),
-      ).rejects.toThrow(/суточный лимит AI-вызовов/);
+      ).rejects.toThrow('Достигнут суточный лимит: AI-вызовы (5/сутки). Попробуйте позже.');
       expect(getCallCount()).toBe(0); // до провайдера не дошло
 
       process.env.AI_CALLS_PER_USER_PER_DAY = '0'; // явное отключение
@@ -861,6 +880,7 @@ describe('AIRouterService (интеграция с ConsentService/ContentScanSer
     } finally {
       delete process.env.AI_CALLS_PER_USER_PER_DAY;
       fakeAiJobCount = 0;
+  fakeOldestJobAt = null;
     }
   });
 

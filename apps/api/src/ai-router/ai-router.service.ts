@@ -55,6 +55,7 @@ import { spendLimit } from '../common/spend-limits';
 import { FROZEN_JOB_REASON } from '../project-freeze/frozen-background';
 import { failureText, type FailureKind, type FailureText } from './failure-reason';
 import { checkJsonMode } from './json-mode';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 export interface AIRouterRequest {
   /** Кто инициирует вызов — обязателен для проверки ConsentRecord.
@@ -1670,15 +1671,22 @@ export class AIRouterService {
     // жило в двух местах и попадало в документацию само.
     const limit = spendLimit('AI_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return; // явное отключение
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.aIJob.count({
-      where: { requestUserId: userId, createdAt: { gte: since } },
-    });
+    const where = { requestUserId: userId, createdAt: { gte: dailyWindowStart() } };
+    const count = await this.prisma.aIJob.count({ where });
     if (count >= limit) {
-      // 429, не Forbidden: лимит временной, не правовой — клиент может
-      // повторить завтра; текст без цифр внутренних счётчиков.
+      // 429, не Forbidden: лимит временной, не правовой.
+      //
+      // Пункт [the-day-was-the-servers] 2026-10-26: в прежнем
+      // комментарии здесь стояло «клиент может повторить завтра» — и это
+      // было неправдой о собственном механизме: окно СКОЛЬЗЯЩЕЕ, место
+      // освобождается не в полночь, а когда самой старой задаче окна
+      // исполняются сутки. Теперь отказ называет, через сколько.
       throw new HttpException(
-        `Достигнут суточный лимит AI-вызовов (${limit}/сутки). Попробуйте позже.`,
+        dailyLimitRefusal({
+          subject: 'AI-вызовы',
+          limit,
+          oldestInWindow: await this.oldestJobInWindow(where),
+        }),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
@@ -1692,16 +1700,31 @@ export class AIRouterService {
   private async assertUnderDailyMediaLimit(userId: string, taskType: string): Promise<void> {
     const limit = spendLimit('AI_MEDIA_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return;
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.aIJob.count({
-      where: { requestUserId: userId, taskType, createdAt: { gte: since } },
-    });
+    const where = { requestUserId: userId, taskType, createdAt: { gte: dailyWindowStart() } };
+    const count = await this.prisma.aIJob.count({ where });
     if (count >= limit) {
       throw new HttpException(
-        `Достигнут суточный лимит медиа-разборов (${limit}/сутки). Попробуйте позже.`,
+        dailyLimitRefusal({
+          subject: 'медиа-разборы',
+          limit,
+          oldestInWindow: await this.oldestJobInWindow(where),
+        }),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
+  }
+
+  /** Самая старая задача окна — только для текста отказа, то есть
+   *  только когда отказ уже неизбежен. Порядок с `id` вторым ключом:
+   *  `createdAt` не уникален, а задачи создаются пачками (Пункт
+   *  [the-first-row-was-whichever]). */
+  private async oldestJobInWindow(where: Record<string, unknown>): Promise<Date | null> {
+    const row = await this.prisma.aIJob.findFirst({
+      where,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { createdAt: true },
+    });
+    return row?.createdAt ?? null;
   }
 
   private hashInput(request: AIRouterRequest): string {

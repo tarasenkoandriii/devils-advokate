@@ -54,7 +54,16 @@ function sourceFiles(dir: string): string[] {
 }
 
 /** Все места, где считаются записи журнала. Ищется по вызову, а не по
- *  списку файлов: список файлов отстаёт от кода молча. */
+ *  списку файлов: список файлов отстаёт от кода молча.
+ *
+ *  ПОПРАВКА, Пункт [the-day-was-the-servers] 2026-10-26: разбор читал
+ *  400 знаков ПОСЛЕ вызова и этим требовал, чтобы фильтр был написан
+ *  внутри вызова. А фильтр переехал в переменную — и не ради красоты:
+ *  тем же фильтром теперь читается самая старая запись окна, чтобы
+ *  отказ назвал, через сколько освободится место. Один фильтр на два
+ *  запроса — это и есть гарантия, что они согласованы; разбор, который
+ *  такую форму не видит, требовал бы её РАЗДВОЕНИЯ. Поэтому к телу
+ *  вызова подклеивается объявление того, на что он ссылается. */
 function countingSites(): Array<{ file: string; body: string }> {
   const sites: Array<{ file: string; body: string }> = [];
   for (const file of sourceFiles(join(API_ROOT, 'src'))) {
@@ -63,11 +72,30 @@ function countingSites(): Array<{ file: string; body: string }> {
     for (;;) {
       const at = src.indexOf('auditLogEntry.count(', from);
       if (at < 0) break;
-      sites.push({ file: file.slice(API_ROOT.length + 1), body: src.slice(at, at + 400) });
+      const body = src.slice(at, at + 400);
+      sites.push({ file: file.slice(API_ROOT.length + 1), body: body + resolvedFilters(src, body) });
       from = at + 1;
     }
   }
   return sites;
+}
+
+/** Объявления имён, на которые ссылается тело вызова (`where`,
+ *  `windowWhere(...)`). Без этого «считает по тем же трём полям»
+ *  проверялось бы только у тех, кто написал фильтр на месте. */
+function resolvedFilters(src: string, body: string): string {
+  let extra = '';
+  for (const m of body.matchAll(/where:\s*([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    const name = m[1];
+    const decl = new RegExp(`const ${name}\\s*=[\\s\\S]{0,400}`).exec(src);
+    if (decl) extra += `\n${decl[0]}`;
+  }
+  // `count({ where })` — сокращённая запись того же имени.
+  if (/count\(\{\s*where\s*\}/.test(body)) {
+    const decl = /const where\s*=[\s\S]{0,400}/.exec(src);
+    if (decl) extra += `\n${decl[0]}`;
+  }
+  return extra;
 }
 
 describe('Пункт [the-counter-read-the-whole-life]: у счётчика потолков есть свой индекс', () => {

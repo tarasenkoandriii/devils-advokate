@@ -157,7 +157,14 @@ describe('AIRouterService.enqueue', () => {
       process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY = '3';
       // Общий лимит (300) не выбран — count считает медиа-задачи по taskType.
       deps.prisma.aIJob.count = async (args?: any) => (args?.where?.taskType === 'media-public-review' ? 3 : 0);
-      await expect(router.enqueue(req)).rejects.toThrow(/лимит медиа-разборов/);
+      // Пункт [the-day-was-the-servers] 2026-10-26: текст отказа стал
+      // одним на все потолки и называет срок. Здесь фейк самой старой
+      // задачи окна не знает (`findFirst` отдаёт null), поэтому отказ
+      // честно остаётся «позже» — и проверяется он целиком, а не
+      // вхождением подстроки.
+      await expect(router.enqueue(req)).rejects.toThrow(
+        'Достигнут суточный лимит: медиа-разборы (3/сутки). Попробуйте позже.',
+      );
       expect(deps.prisma.aIJob.create).not.toHaveBeenCalled();
 
       process.env.AI_MEDIA_CALLS_PER_USER_PER_DAY = '0';

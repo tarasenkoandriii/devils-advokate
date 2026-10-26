@@ -21,6 +21,13 @@ function createFakePrisma() {
     auditLogEntry: {
       count: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action).length,
       findMany: async ({ where }: any) => spendLog.filter((r: any) => r.action === where.action),
+      // Пункт [the-day-was-the-servers] 2026-10-26: на пути отказа
+      // читается самая старая отметка окна — отказ называет, через
+      // сколько освободится место.
+      findFirst: async ({ where }: any) => {
+        const mine = spendLog.filter((r: any) => r.action === where.action);
+        return mine.length > 0 ? { createdAt: new Date(Date.now() - 20 * 60 * 60 * 1000) } : null;
+      },
       create: async ({ data }: any) => { spendLog.push(data); return data; },
     },
     _spendLog() { return spendLog; },

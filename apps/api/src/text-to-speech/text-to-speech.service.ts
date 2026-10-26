@@ -27,6 +27,7 @@ import { fetchWithTimeout } from '../common/fetch-with-timeout';
 import { spendLimit } from '../common/spend-limits';
 import { withSpendLock } from '../common/outward-spend';
 import { isUniqueViolation } from '../common/unique-violation';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 const ELEVENLABS_API_KEY_REF = 'ELEVENLABS_API_KEY';
 // Пункт [rate-limits]: маркер расхода ElevenLabs в AuditLogEntry.
@@ -71,13 +72,16 @@ export class TextToSpeechService {
     const limit = spendLimit('TTS_CALLS_PER_USER_PER_DAY');
     if (limit === 0) return;
     await withSpendLock(this.prisma, userId, TTS_USAGE_ACTION, async (tx) => {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const count = await tx.auditLogEntry.count({
-        where: { actorId: userId, action: TTS_USAGE_ACTION, createdAt: { gte: since } },
-      });
+      const where = { actorId: userId, action: TTS_USAGE_ACTION, createdAt: { gte: dailyWindowStart() } };
+      const count = await tx.auditLogEntry.count({ where });
       if (count >= limit) {
+        const oldest = await tx.auditLogEntry.findFirst({
+          where,
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { createdAt: true },
+        });
         throw new HttpException(
-          `Достигнут суточный лимит озвучки (${limit}/сутки). Попробуйте позже.`,
+          dailyLimitRefusal({ subject: 'озвучка', limit, oldestInWindow: oldest?.createdAt ?? null }),
           HttpStatus.TOO_MANY_REQUESTS,
         );
       }

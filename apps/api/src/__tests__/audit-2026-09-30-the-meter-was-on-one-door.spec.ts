@@ -84,6 +84,13 @@ function fakeLog(initial = 0) {
     auditLogEntry: {
       count: async ({ where }: any) => rows.filter((r) => r.action === where.action).length,
       findMany: async ({ where }: any) => rows.filter((r) => r.action === where.action),
+      // Пункт [the-day-was-the-servers] 2026-10-26: на пути отказа
+      // читается самая старая отметка окна — отказ называет, через
+      // сколько освободится место.
+      findFirst: async ({ where }: any) => {
+        const mine = rows.filter((r) => r.action === where.action);
+        return mine.length > 0 ? { createdAt: new Date(Date.now() - 20 * 60 * 60 * 1000) } : null;
+      },
       create: async ({ data }: any) => {
         rows.push(data);
         return data;
@@ -106,7 +113,12 @@ describe('[the-meter-was-on-one-door] потолки стоят у каждой 
     for (let i = 0; i < limit; i++) {
       await recordTranscriptionSpend(log.prisma, 'u1', 'SparringSession', `s-${i}`, null);
     }
-    await expect(assertUnderDailyTranscriptionLimit(log.prisma, 'u1')).rejects.toThrow(/лимит расшифровок/);
+    // Текст отказа стал одним на все потолки и называет срок (Пункт
+    // [the-day-was-the-servers]); предмет этого теста — что потолок
+    // ВООБЩЕ срабатывает и считает попытки, поэтому проверяется начало.
+    await expect(assertUnderDailyTranscriptionLimit(log.prisma, 'u1')).rejects.toThrow(
+      /Достигнут суточный лимит: расшифровки \(30\/сутки\)/,
+    );
     // И записи — с тем же именем действия во всех трёх дверях: разные
     // имена означали бы, что каждая дверь считает только себя.
     expect([...new Set(log.rows.map((r) => r.action))]).toEqual([TRANSCRIPTION_USAGE_ACTION]);
@@ -139,7 +151,9 @@ describe('[the-meter-was-on-one-door] потолки стоят у каждой 
     const full = fakeLog();
     for (let i = 0; i < limit; i++) await spendPlacesRequest(full.prisma, 'u1', 'проба');
     expect(full.rows.length).toBe(limit);
-    await expect(spendPlacesRequest(full.prisma, 'u1', 'ещё')).rejects.toThrow(/лимит обращений к картам/);
+    await expect(spendPlacesRequest(full.prisma, 'u1', 'ещё')).rejects.toThrow(
+      /Достигнут суточный лимит: обращения к картам \(\d+\/сутки\)/,
+    );
     // И отметка не добавилась: отказ не должен тратить потолок.
     expect(full.rows.length).toBe(limit);
     expect([...new Set(full.rows.map((r) => r.action))]).toEqual([PLACES_USAGE_ACTION]);

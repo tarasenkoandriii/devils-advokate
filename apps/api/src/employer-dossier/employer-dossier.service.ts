@@ -27,6 +27,7 @@ import { MAX_SOURCE_TEXT_CHARS, quoteIsFromSource } from '../terms-sheet/terms-m
 import { keepQuoted, type KeptWithQuote } from '../common/kept-with-quote';
 import { extractDomain, isRegistryUrl, loadRegistryHosts, looksLikePersonName, normalizeHost } from './registry-hosts';
 import { allFilled, substanceSite } from '../common/claim-substance';
+import { timeUntil } from '../common/server-time';
 
 export const DOSSIER_EXTRACT_TASK_TYPE = 'employer-dossier-extract';
 export const DOSSIER_DISCREPANCIES_TASK_TYPE = 'employer-dossier-discrepancies';
@@ -275,7 +276,12 @@ export class EmployerDossierService {
       throw new BadRequestException('Укажите компанию: для обновления нужен код реестра или подтверждённый домен');
     }
     if (dossier.lastRefreshedAt && now.getTime() - dossier.lastRefreshedAt.getTime() < DOSSIER_REFRESH_MIN_INTERVAL_MS) {
-      throw new TooManyRequestsException('Досье обновляется не чаще раза в сутки');
+      // Пункт [the-day-was-the-servers] 2026-10-26: момент готовности
+      // известен точно — он отсчитывается от прошлого обновления.
+      const ready = new Date(dossier.lastRefreshedAt.getTime() + DOSSIER_REFRESH_MIN_INTERVAL_MS);
+      throw new TooManyRequestsException(
+        `Досье обновляется не чаще раза в сутки. Можно будет через ${timeUntil(ready, now)}.`,
+      );
     }
     const hosts = loadRegistryHosts()[dossier.jurisdiction] ?? [];
     const sources: Array<{ url: string; category: EmployerFactCategory }> = [];

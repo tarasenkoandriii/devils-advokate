@@ -24,6 +24,7 @@ import { assertOwnedHealthProject } from './health-access';
 import { ExtractedHealthConfigDraft } from './health-onboarding.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { allFilled, substanceSite } from '../common/claim-substance';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 const BREAKDOWN_TASK_TYPE = 'health-consultation-breakdown';
 
@@ -420,12 +421,23 @@ export class HealthService {
   // projectId в подсчёте не участвовал и убран из сигнатуры, чтобы не
   // выглядело лимитом «10 в сутки на каждый проект».
   private async assertUnderOcrRateLimit(userId: string) {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.healthLabDocumentDraft.count({
-      where: { config: { project: { ownerId: userId } }, createdAt: { gte: since } },
-    });
+    // Пункт [the-day-was-the-servers] 2026-10-26: этот отказ не говорил
+    // про сброс ВООБЩЕ — человек не мог узнать, когда можно снова.
+    const where = { config: { project: { ownerId: userId } }, createdAt: { gte: dailyWindowStart() } };
+    const count = await this.prisma.healthLabDocumentDraft.count({ where });
     if (count >= OCR_DAILY_LIMIT_PER_USER) {
-      throw new ForbiddenException(`Достигнут суточный лимит распознавания документов (${OCR_DAILY_LIMIT_PER_USER}/сутки)`);
+      const oldest = await this.prisma.healthLabDocumentDraft.findFirst({
+        where,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { createdAt: true },
+      });
+      throw new ForbiddenException(
+        dailyLimitRefusal({
+          subject: 'распознавание документов',
+          limit: OCR_DAILY_LIMIT_PER_USER,
+          oldestInWindow: oldest?.createdAt ?? null,
+        }),
+      );
     }
   }
 

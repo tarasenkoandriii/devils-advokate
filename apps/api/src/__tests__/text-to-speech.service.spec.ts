@@ -21,6 +21,10 @@ function createFakePrisma() {
       // [rate-limits]: учёт расхода ElevenLabs + суточный потолок.
       create: async ({ data }: any) => { usageLog.push(data); return data; },
       count: async () => fakeTtsUsageCount,
+      // Пункт [the-day-was-the-servers] 2026-10-26: на пути отказа
+      // читается самая старая отметка окна — отказ называет, через
+      // сколько освободится место.
+      findFirst: async () => (fakeTtsUsageCount > 0 ? { createdAt: new Date(Date.now() - 18 * 60 * 60 * 1000) } : null),
     },
     ttsCache: {
       findUnique: async ({ where }: any) => cache.find((c) => c.textHash === where.textHash) ?? null,

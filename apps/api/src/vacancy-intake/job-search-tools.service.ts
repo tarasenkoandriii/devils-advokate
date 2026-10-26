@@ -32,6 +32,8 @@ import { keywords } from '../vacancy-posting/posting-checks';
 import { takeSource, promptIntakeNote, AI_PROMPT_CHARS, type SourceIntake } from '../common/source-intake';
 import { spendLimit } from '../common/spend-limits';
 import { isEnumValue } from '../common/enum-values';
+import { dailyWindowStart, releaseAt } from '../common/daily-limit';
+import { timeUntil } from '../common/server-time';
 
 export const BATCH_MATCH_TASK_TYPE = 'job-search-batch-match';
 export const QUERY_BUILDER_TASK_TYPE = 'job-search-query-builder';
@@ -207,9 +209,25 @@ export class JobSearchToolsService {
 
     const cap = spendLimit('AI_BATCH_MATCH_PER_USER_PER_DAY');
     if (cap > 0) {
-      const since = new Date(Date.now() - 86_400_000);
-      const used = await this.prisma.jobVacancy.count({ where: { config: { project: { ownerId: userId } }, batchMatchQueuedAt: { gte: since } } });
-      if (used + vacancies.length > cap) throw new TooManyRequestsException(`Суточный потолок пакетной сверки — ${cap} вакансий; использовано ${used}`);
+      // Пункт [the-day-was-the-servers] 2026-10-26: окно берётся из
+      // одного места — одиннадцать копий «минус сутки» разъехались бы, и
+      // «сутки» у двух потолков стали бы разными сутками. И отказ
+      // называет, когда освободится: раньше он сообщал только, сколько
+      // использовано, то есть не отвечал на единственный вопрос.
+      const where = { config: { project: { ownerId: userId } }, batchMatchQueuedAt: { gte: dailyWindowStart() } };
+      const used = await this.prisma.jobVacancy.count({ where });
+      if (used + vacancies.length > cap) {
+        const oldest = await this.prisma.jobVacancy.findFirst({
+          where,
+          orderBy: [{ batchMatchQueuedAt: 'asc' }, { id: 'asc' }],
+          select: { batchMatchQueuedAt: true },
+        });
+        const release = releaseAt(oldest?.batchMatchQueuedAt ?? null);
+        throw new TooManyRequestsException(
+          `Суточный потолок пакетной сверки — ${cap} вакансий; использовано ${used}, запрошено ${vacancies.length}.` +
+            (release ? ` Потолок скользящий: одно место освободится через ${timeUntil(release)}.` : ' Попробуйте позже.'),
+        );
+      }
     }
 
     const criteriaText = config.criteria.map((c) => `[${c.id}] ${c.text}${c.isRequired ? ' (обязательный)' : ''}`).join('\n');

@@ -27,7 +27,7 @@ import { VenueApplicationService } from '../venue-application/venue-application.
 function fakePrisma() {
   const confirmations: any[] = [];
   let n = 0;
-  return {
+  const fake: any = {
     _confirmations() { return confirmations; },
     _seedConfirmation(c: any) {
       confirmations.push({ id: `b-${++n}`, createdAt: new Date(), referralFeeOwed: 100, ...c });
@@ -52,7 +52,15 @@ function fakePrisma() {
     },
     user: { findUnique: async () => ({ isVenueModerator: true }) },
     scheduledConversation: { findFirst: async () => ({ id: 'sc1' }) },
+    // Пункт [the-day-was-the-servers] 2026-10-26: отметка брони идёт
+    // под замком — проверка «уже отмечал за сутки» и запись стали
+    // одним событием (два нажатия удваивали сумму «к оплате»
+    // заведению). Заглушка обязана знать интерактивную
+    // транзакцию и сырой запрос замка.
+    $executeRaw: async () => 1,
+    $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
   };
+  return fake;
 }
 
 function setup() {
@@ -97,14 +105,38 @@ describe('Деньги из самоотчёта: число не растёт �
     expect(summary.distinctReporters).toBe(2);
   });
 
-  it('вчерашняя отметка не мешает сегодняшней', async () => {
-    // Ограничение — на день, а не навсегда: человек может бывать в
+  it('отметка СТАРШЕ суток не мешает новой', async () => {
+    // Ограничение — на сутки, а не навсегда: человек может бывать в
     // заведении не один раз.
+    //
+    // ПОПРАВКА, Пункт [the-day-was-the-servers] 2026-10-26: тест
+    // назывался «вчерашняя отметка не мешает сегодняшней» и подкладывал
+    // отметку РОВНО сутки назад (`setDate(-1)` сохраняет время). При
+    // календарном дне это было «вчера»; теперь окно скользящее, и
+    // ровно-сутки — это граница, а не «вчера». Смену смысла надо
+    // назвать вслух, а не подогнать: ПРЕЖДЕ отметка в 23:00 не мешала
+    // новой в 00:30 (другой календарный день), ТЕПЕРЬ мешает ещё 22
+    // с половиной часа. Это и есть цена отказа от «дня», которого
+    // сервер не знает: граница перестала зависеть от того, в каком
+    // часовом поясе считает процесс.
     const s = setup();
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    s.prisma._seedConfirmation({ approvedVenueId: 'v1', confirmedByUserId: 'me', createdAt: yesterday });
+    s.prisma._seedConfirmation({
+      approvedVenueId: 'v1',
+      confirmedByUserId: 'me',
+      createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    });
     await s.service.confirmBooking('me', 'v1');
     expect(s.prisma._confirmations()).toHaveLength(2);
+  });
+
+  it('КЛЮЧЕВОЙ ТЕСТ: отметка ВНУТРИ суток отклоняется и называет, через сколько можно', async () => {
+    const s = setup();
+    s.prisma._seedConfirmation({
+      approvedVenueId: 'v1',
+      confirmedByUserId: 'me',
+      createdAt: new Date(Date.now() - 23 * 60 * 60 * 1000),
+    });
+    await expect(s.service.confirmBooking('me', 'v1')).rejects.toThrow(/Отметить снова можно через 1 час/);
+    expect(s.prisma._confirmations()).toHaveLength(1);
   });
 });

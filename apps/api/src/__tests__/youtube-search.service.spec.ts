@@ -16,6 +16,17 @@ function createFakePrisma() {
           (l) => l.userId === where.userId && l.createdAt.getTime() >= where.createdAt.gte.getTime(),
         ).length;
       },
+      // Пункт [the-day-was-the-servers] 2026-10-26: отказ по суточному
+      // потолку называет, через сколько освободится место, — для этого
+      // на пути ОТКАЗА читается самая старая запись окна. Заглушка
+      // обязана знать тот же запрос, иначе тест падает не там, где
+      // дефект.
+      findFirst: async ({ where }: any) => {
+        const inWindow = logs
+          .filter((l) => l.userId === where.userId && l.createdAt.getTime() >= where.createdAt.gte.getTime())
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        return inWindow[0] ? { createdAt: inWindow[0].createdAt } : null;
+      },
       create: async ({ data }: any) => {
         const log = { id: `log-${++idCounter}`, createdAt: new Date(), ...data };
         logs.push(log);

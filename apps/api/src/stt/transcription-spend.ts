@@ -40,6 +40,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { spendLimit } from '../common/spend-limits';
 import type { PrismaService } from '../prisma/prisma.service';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 /** Действие в журнале, по которому считается суточный расход. Имя одно
  * на все три двери — иначе потолок считал бы только свою. */
@@ -50,16 +51,22 @@ export async function assertUnderDailyTranscriptionLimit(prisma: PrismaService, 
   const minutesLimit = spendLimit('TRANSCRIPTION_MINUTES_PER_USER_PER_DAY');
   if (countLimit === 0 && minutesLimit === 0) return;
 
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  // Пункт [the-day-was-the-servers] 2026-10-26: здесь окно и так
+  // читается целиком, поэтому самая старая запись достаётся бесплатно —
+  // лишнего запроса на пути отказа не нужно вовсе. Порядок с `id`
+  // вторым ключом: `createdAt` не уникален (Пункт
+  // [the-first-row-was-whichever]).
   const recent = await prisma.auditLogEntry.findMany({
-    where: { actorId: userId, action: TRANSCRIPTION_USAGE_ACTION, createdAt: { gte: since } },
-    select: { after: true },
+    where: { actorId: userId, action: TRANSCRIPTION_USAGE_ACTION, createdAt: { gte: dailyWindowStart() } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { after: true, createdAt: true },
   });
+  const oldestInWindow = recent[0]?.createdAt ?? null;
 
   if (countLimit > 0 && recent.length >= countLimit) {
     // 429, как у остальных потолков: предел временный, не правовой.
     throw new HttpException(
-      `Достигнут суточный лимит расшифровок (${countLimit}/сутки). Попробуйте позже.`,
+      dailyLimitRefusal({ subject: 'расшифровки', limit: countLimit, oldestInWindow }),
       HttpStatus.TOO_MANY_REQUESTS,
     );
   }
@@ -71,7 +78,13 @@ export async function assertUnderDailyTranscriptionLimit(prisma: PrismaService, 
     }, 0);
     if (seconds >= minutesLimit * 60) {
       throw new HttpException(
-        `Достигнут суточный лимит расшифровки по длительности (${minutesLimit} мин/сутки). Попробуйте позже.`,
+        dailyLimitRefusal({
+          subject: 'расшифровки по длительности',
+          limit: minutesLimit,
+          unit: ' мин/сутки',
+          oldestInWindow,
+          releases: 'длительность самой старой расшифровки окна',
+        }),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }

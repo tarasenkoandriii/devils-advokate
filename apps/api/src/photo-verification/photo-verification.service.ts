@@ -30,6 +30,7 @@ import { resolveBlobToken } from '../common/blob-token';
 import { withSpendLock } from '../common/outward-spend';
 import { spendLimitByKey } from '../common/spend-limits';
 import { mayBePublished, NEVER_PUBLISHED_REFUSAL } from '../common/fact-scope';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 /** Пункт [the-meter-counted-rows] 2026-09-30: число жило здесь и
  * только здесь, хотя это потолок РАСХОДОВ (SerpApi платный) и реестр
@@ -209,12 +210,19 @@ export class PhotoVerificationService {
    * же схеме, что у транскрибации и поиска YouTube. */
   private async spendAttempt(userId: string, personFactId: string) {
     await withSpendLock(this.prisma, userId, PHOTO_VERIFICATION_USAGE_ACTION, async (tx) => {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const count = await tx.auditLogEntry.count({
-        where: { actorId: userId, action: PHOTO_VERIFICATION_USAGE_ACTION, createdAt: { gte: since } },
-      });
+      // Пункт [the-day-was-the-servers] 2026-10-26: «попробуйте завтра»
+      // было неправдой о механизме — окно скользящее.
+      const where = { actorId: userId, action: PHOTO_VERIFICATION_USAGE_ACTION, createdAt: { gte: dailyWindowStart() } };
+      const count = await tx.auditLogEntry.count({ where });
       if (count >= DAILY_LIMIT_PER_USER) {
-        throw new ForbiddenException(`Достигнут дневной лимит проверок фото (${DAILY_LIMIT_PER_USER}/день) — попробуйте завтра`);
+        const oldest = await tx.auditLogEntry.findFirst({
+          where,
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: { createdAt: true },
+        });
+        throw new ForbiddenException(
+          dailyLimitRefusal({ subject: 'проверки фото', limit: DAILY_LIMIT_PER_USER, oldestInWindow: oldest?.createdAt ?? null }),
+        );
       }
       await this.recordAttempt(tx, userId, personFactId);
     });

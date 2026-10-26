@@ -36,24 +36,42 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import { spendLimit } from './spend-limits';
 import { withSpendLock } from './outward-spend';
 import type { PrismaService } from '../prisma/prisma.service';
+import { dailyLimitRefusal, dailyWindowStart, releaseAt } from './daily-limit';
 
 /** Действие в журнале, по которому считается суточный расход. Имя одно
  * на все шесть дверей — иначе потолок считал бы только свою. */
 export const PLACES_USAGE_ACTION = 'places.request';
 
-function tooMany(limit: number): HttpException {
+/** Пункт [the-day-was-the-servers] 2026-10-26: отказ называет, через
+ *  сколько освободится место. Самая старая отметка окна читается ТОЛЬКО
+ *  здесь, то есть только когда отказ уже неизбежен. */
+function tooMany(limit: number, oldestInWindow: Date | null): HttpException {
   // 429, как у остальных потолков: предел временный, не правовой.
   return new HttpException(
-    `Достигнут суточный лимит обращений к картам (${limit}/сутки). Попробуйте позже.`,
+    dailyLimitRefusal({ subject: 'обращения к картам', limit, oldestInWindow }),
     HttpStatus.TOO_MANY_REQUESTS,
   );
 }
 
+const windowWhere = (userId: string) => ({
+  actorId: userId,
+  action: PLACES_USAGE_ACTION,
+  createdAt: { gte: dailyWindowStart() },
+});
+
 async function spentToday(prisma: PrismaService, userId: string): Promise<number> {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  return prisma.auditLogEntry.count({
-    where: { actorId: userId, action: PLACES_USAGE_ACTION, createdAt: { gte: since } },
+  return prisma.auditLogEntry.count({ where: windowWhere(userId) });
+}
+
+/** Порядок с `id` вторым ключом — Пункт [the-first-row-was-whichever]:
+ *  `createdAt` не уникален. */
+async function oldestInWindow(prisma: PrismaService, userId: string): Promise<Date | null> {
+  const row = await prisma.auditLogEntry.findFirst({
+    where: windowWhere(userId),
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { createdAt: true },
   });
+  return row?.createdAt ?? null;
 }
 
 /** Одно платное обращение к Places: проверка потолка И отметка расхода,
@@ -67,11 +85,18 @@ export async function spendPlacesRequest(prisma: PrismaService, userId: string, 
   // него двадцать одновременных попыток при потолке пять давали
   // двадцать записей, то есть потолок не держал ничего.
   await withSpendLock(prisma, userId, PLACES_USAGE_ACTION, async (tx) => {
-    if ((await spentToday(tx, userId)) >= limit) throw tooMany(limit);
+    if ((await spentToday(tx, userId)) >= limit) throw tooMany(limit, await oldestInWindow(tx, userId));
     await tx.auditLogEntry.create({
       data: { actorId: userId, action: PLACES_USAGE_ACTION, resource: 'GooglePlaces', resourceId: what },
     });
   });
+}
+
+/** Когда освободится ПЕРВОЕ обращение окна. Нужно там, где отказ
+ * объясняет, сколько ждать: сам потолок об этом не знает, а человек
+ * спрашивает именно это. */
+export async function placesFirstRelease(prisma: PrismaService, userId: string): Promise<Date | null> {
+  return releaseAt(await oldestInWindow(prisma, userId));
 }
 
 /** Сколько обращений ещё можно сделать. Нужно там, где операция делает

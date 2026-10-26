@@ -45,6 +45,7 @@ import { ConsentType } from '@prisma/client';
 import { allFilled } from '../common/claim-substance';
 import { isEnumValue } from '../common/enum-values';
 import { activePromptVersion } from '../common/active-prompt-version';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 /** Пункт [partial-basis] 2026-09-04 — лимит законен, молчание о нём нет. */
 const PRECEDENTS_LIMIT = 5;
@@ -259,7 +260,10 @@ export class MotiveAnalysisService {
   }
 
   private async assertUnderRateLimit(userId: string) {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Пункт [the-day-was-the-servers] 2026-10-26: «попробуйте завтра»
+    // было неправдой о механизме — окно скользящее. Самая старая запись
+    // окна достаётся здесь бесплатно: окно и так читается целиком.
+    const since = dailyWindowStart();
     // "поиск и анализ по одному и тому же человеку И суммарно по
     // разным людям" — один общий счётчик по всем персонам разом.
     // Считаем РАЗЛИЧНЫЕ generatedByInferenceId, не строки таблицы —
@@ -268,11 +272,23 @@ export class MotiveAnalysisService {
     // в разы быстрее, чем реально означает "N анализов в день".
     const recent = await this.prisma.motiveHypothesis.findMany({
       where: { createdByUserId: userId, createdAt: { gte: since } },
-      select: { generatedByInferenceId: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { generatedByInferenceId: true, createdAt: true },
     });
     const distinctAnalyses = new Set(recent.map((r: { generatedByInferenceId: string | null }) => r.generatedByInferenceId)).size;
     if (distinctAnalyses >= DAILY_LIMIT_PER_USER) {
-      throw new ForbiddenException(`Достигнут дневной лимит анализа мотивов (${DAILY_LIMIT_PER_USER}/день) — попробуйте завтра`);
+      throw new ForbiddenException(
+        dailyLimitRefusal({
+          subject: 'анализ мотивов',
+          limit: DAILY_LIMIT_PER_USER,
+          oldestInWindow: recent[0]?.createdAt ?? null,
+          // Счёт идёт по РАЗЛИЧНЫМ разборам, а не по строкам гипотез:
+          // выпадение самой старой строки освобождает место только если
+          // она последняя от своего разбора. Поэтому «один разбор», а не
+          // «одно место», и слово «не раньше» — обещать точнее нельзя.
+          releases: 'один разбор, не раньше чем',
+        }),
+      );
     }
   }
 }

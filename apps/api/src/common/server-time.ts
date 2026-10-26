@@ -70,6 +70,34 @@ export function deadlineRelative(due: Date, now: Date = new Date()): string {
   return `через ${days} ${plural(days, 'день', 'дня', 'дней')}`;
 }
 
+/** Расстояние ВПЕРЁД в часах и минутах. Пункт [the-day-was-the-servers]
+ * 2026-10-26: `deadlineRelative` считает шагом в сутки, и всё, что
+ * короче дня, у него сливается в «в течение суток» — для суточного
+ * потолка это ровно тот ответ, которого человеку не хватало.
+ *
+ * Почему не календарь. Все одиннадцать суточных потолков продукта —
+ * СКОЛЬЗЯЩЕЕ окно 24 часа, а не календарные сутки: место освобождается
+ * не в полночь, а когда самой старой записи окна исполняется сутки.
+ * Расстояние во времени — второй из трёх разрешённых способов сказать
+ * о времени (см. шапку файла), и единственный, который здесь честен:
+ * он одинаков в любом часовом поясе, а часового пояса человека у
+ * сервера нет.
+ *
+ * Меньше минуты — «меньше минуты», а не «0 мин»: ноль прочитался бы
+ * как «уже можно», и человек нажал бы снова впустую. */
+export function timeUntil(when: Date, now: Date = new Date()): string {
+  const ms = when.getTime() - now.getTime();
+  if (ms <= 0) return 'уже освободилось';
+  const totalMinutes = Math.ceil(ms / 60_000);
+  if (totalMinutes < 1) return 'меньше минуты';
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes} ${plural(minutes, 'минуту', 'минуты', 'минут')}`;
+  const hoursText = `${hours} ${plural(hours, 'час', 'часа', 'часов')}`;
+  if (minutes === 0) return hoursText;
+  return `${hoursText} ${minutes} ${plural(minutes, 'минуту', 'минуты', 'минут')}`;
+}
+
 /** Метка порядка вместо даты. `newestFirst` не по умолчанию: направление
  * надо назвать вслух, иначе модель достроит его сама — обычно неверно. */
 export function orderLabel(index: number, total: number, newestFirst: boolean): string {

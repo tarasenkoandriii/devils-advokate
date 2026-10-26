@@ -31,6 +31,7 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 import { spendLimitByKey } from './spend-limits';
 import { withCeilingLock } from './ceiling-lock';
 import type { PrismaService } from '../prisma/prisma.service';
+import { dailyLimitRefusal, dailyWindowStart } from './daily-limit';
 
 export interface OutwardSpend {
   /** Ключ записи в реестре расходов. */
@@ -106,12 +107,31 @@ export async function withSpendLock<T>(
   return withCeilingLock(prisma, `${userId}|${action}`, body);
 }
 
-/** Сколько уже потрачено за сутки. */
+/** Сколько уже потрачено за сутки. Окно скользящее: «сутки назад от
+ *  сейчас», а не календарные сутки — часового пояса человека у сервера
+ *  нет (Пункт [server-said-which-day]). Длина окна одна на весь
+ *  продукт, см. `daily-limit.ts`. */
 export async function spentToday(prisma: PrismaService, userId: string, action: string): Promise<number> {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   return prisma.auditLogEntry.count({
-    where: { actorId: userId, action, createdAt: { gte: since } },
+    where: { actorId: userId, action, createdAt: { gte: dailyWindowStart() } },
   });
+}
+
+/** Самая старая отметка окна — только для текста отказа. Пункт
+ *  [the-day-was-the-servers] 2026-10-26: когда ей исполнятся сутки, она
+ *  выпадет из окна и освободится одно место. Запрос делается ТОЛЬКО на
+ *  пути отказа, поэтому счастливый путь остался в один `count`.
+ *
+ *  Порядок с `id` вторым ключом — требование Пункта
+ *  [the-first-row-was-whichever]: `createdAt` не уникален, и у строк
+ *  одной транзакции он совпадает до миллисекунды. */
+async function oldestSpendInWindow(prisma: PrismaService, userId: string, action: string): Promise<Date | null> {
+  const row = await prisma.auditLogEntry.findFirst({
+    where: { actorId: userId, action, createdAt: { gte: dailyWindowStart() } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { createdAt: true },
+  });
+  return row?.createdAt ?? null;
 }
 
 /** Сколько ещё можно. `Number.MAX_SAFE_INTEGER` — когда потолок снят
@@ -140,7 +160,11 @@ export async function spendOutwardCall(
     if ((await spentToday(tx, userId, spend.action)) >= limit) {
       // 429, как у остальных потолков: предел временный, не правовой.
       throw new HttpException(
-        `Достигнут суточный лимит: ${spend.refusalSubject} (${limit}/сутки). Попробуйте позже.`,
+        dailyLimitRefusal({
+          subject: spend.refusalSubject,
+          limit,
+          oldestInWindow: await oldestSpendInWindow(tx, userId, spend.action),
+        }),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
@@ -160,7 +184,11 @@ export async function assertOutwardCallsLeft(
 ): Promise<void> {
   if ((await outwardCallsLeft(prisma, userId, spend)) > 0) return;
   throw new HttpException(
-    `Достигнут суточный лимит: ${spend.refusalSubject} (${spendLimitByKey(spend.limitKey)}/сутки). Попробуйте позже.`,
+    dailyLimitRefusal({
+      subject: spend.refusalSubject,
+      limit: spendLimitByKey(spend.limitKey),
+      oldestInWindow: await oldestSpendInWindow(prisma, userId, spend.action),
+    }),
     HttpStatus.TOO_MANY_REQUESTS,
   );
 }

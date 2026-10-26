@@ -56,6 +56,15 @@ function makePrisma(rowsInWindow: number) {
         trace.push('tx.count');
         return rows;
       }),
+      // Пункт [the-day-was-the-servers] 2026-10-26: на пути ОТКАЗА
+      // читается самая старая отметка окна, чтобы отказ назвал, через
+      // сколько освободится место. Она обязана читаться ПО ТОЙ ЖЕ
+      // транзакции: иначе срок считался бы по другому снимку, и трасса
+      // ниже это покажет.
+      findFirst: jest.fn(async () => {
+        trace.push('tx.findFirst');
+        return { createdAt: new Date() };
+      }),
       create: jest.fn(async () => {
         trace.push('tx.create');
         rows += 1;
@@ -80,6 +89,13 @@ function makePrisma(rowsInWindow: number) {
       count: jest.fn(async () => {
         trace.push('prisma.count');
         return rows;
+      }),
+      // Внешний `findFirst` тоже умеет отвечать — чтобы чтение самой
+      // старой отметки МИМО транзакции было видно в трассе, а не упало
+      // на отсутствующем методе.
+      findFirst: jest.fn(async () => {
+        trace.push('prisma.findFirst');
+        return { createdAt: new Date() };
       }),
       create: jest.fn(async () => {
         trace.push('prisma.create');
@@ -168,7 +184,13 @@ describe('[the-ceiling-was-counted-then-crossed] проверка потолка
     const prisma = makePrisma(limit);
     await expect(spendOutwardCall(prisma as never, 'u1', GEOCODING_SPEND, 'x')).rejects.toBeInstanceOf(HttpException);
     // Трасса обрывается на счёте: записи нет вовсе.
-    expect(steps(prisma._trace)).toEqual(['transaction(timeout=10000)', 'tx.executeRaw', 'tx.lockKey', 'tx.count']);
+    expect(steps(prisma._trace)).toEqual([
+      'transaction(timeout=10000)',
+      'tx.executeRaw',
+      'tx.lockKey',
+      'tx.count',
+      'tx.findFirst',
+    ]);
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ: озвучка считает ПОПЫТКИ — отметка стои́т до вызова провайдера, а не после', () => {

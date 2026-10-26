@@ -21,6 +21,9 @@ import { SecretsService } from '../secrets/secrets.service';
 import { getPlaceDetails, searchByText } from '../venue-recommendation/google-places-client';
 import { VenueApplicationStatus } from '@prisma/client';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { DAILY_WINDOW_MS, dailyWindowStart } from '../common/daily-limit';
+import { timeUntil } from '../common/server-time';
+import { withScopeLock } from '../common/ceiling-lock';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 
@@ -335,26 +338,56 @@ export class VenueApplicationService {
     // что умеет, не будет. Это только защита от очевидного умножения —
     // тот же приём, что в пункте [click-count], где доля о человеке
     // росла от нажатий.
-    const dayStart = new Date();
-    dayStart.setHours(0, 0, 0, 0);
-    const already = await this.prisma.venueBookingConfirmation.findFirst({
-      where: { approvedVenueId, confirmedByUserId: userId, createdAt: { gte: dayStart } },
-    });
-    if (already) {
-      throw new BadRequestException(
-        'Вы уже отмечали бронь в этом заведении сегодня. Повторная отметка ничего не добавит — это ваша пометка о состоявшейся брони, а не счёт заведению.',
-      );
-    }
+    // Пункт [the-day-was-the-servers] 2026-10-26 — ЗДЕСЬ БЫЛО ДВА
+    // ДЕФЕКТА, и оба в трёх строках.
+    //
+    // ПЕРВЫЙ: «сегодня» решал сервер. `new Date(); setHours(0,0,0,0)` —
+    // это полночь часового пояса ПРОЦЕССА, а `TZ` в проекте не задан
+    // нигде (ни в docker-compose, ни в vercel.json), то есть полночь по
+    // UTC. У киевлянина «день» кончался в 02:00–03:00 его ночи: отметил
+    // бронь в 01:00 — и это «вчера», а в 03:00 того же вечера уже
+    // «сегодня». Слово «сегодня» в отказе человек читал как своё
+    // сегодня. Это прямое нарушение правила, записанного в самом
+    // проекте (`common/server-time.ts`, Пункт [server-said-which-day]):
+    // календарный день, выведенный из момента, — знание, которого у
+    // сервера НЕТ, потому что часового пояса человека в продукте нет.
+    // Это было ЕДИНСТВЕННОЕ место продукта, где сервер всё-таки решил,
+    // в каком поясе кончается «сегодня», не спросив человека.
+    //
+    // ВТОРОЙ: проверка и запись — два обращения без транзакции, то есть
+    // защита от умножения, описанная абзацем выше, не держала при
+    // одновременных нажатиях. Два нажатия удваивали `referralFeeOwed`,
+    // который оператор видит как «к оплате» заведению. Та же порода,
+    // что Пункт [the-ceiling-was-counted-then-crossed], и лечится тем
+    // же замком.
+    //
+    // Окно теперь скользящее — как у всех одиннадцати суточных потолков
+    // продукта: оно не требует часового пояса и одинаково в любом.
+    return withScopeLock(this.prisma, `venue-booking|${userId}|${approvedVenueId}`, async (tx) => {
+      const where = { approvedVenueId, confirmedByUserId: userId, createdAt: { gte: dailyWindowStart() } };
+      const already = await tx.venueBookingConfirmation.findFirst({
+        where,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { createdAt: true },
+      });
+      if (already) {
+        throw new BadRequestException(
+          `Вы уже отмечали бронь в этом заведении за последние сутки. Повторная отметка ничего не добавит — это ваша пометка о состоявшейся брони, а не счёт заведению. Отметить снова можно через ${timeUntil(
+            new Date(already.createdAt.getTime() + DAILY_WINDOW_MS),
+          )}.`,
+        );
+      }
 
-    return this.prisma.venueBookingConfirmation.create({
-      data: {
-        approvedVenueId,
-        confirmedByUserId: userId,
-        scheduledConversationId: scheduledConversationId ?? null,
-        // Снапшот на момент подтверждения — не пересчитывается
-        // задним числом, если ставка комиссии поменяется позже.
-        referralFeeOwed: venue.referralFeeAmount,
-      },
+      return tx.venueBookingConfirmation.create({
+        data: {
+          approvedVenueId,
+          confirmedByUserId: userId,
+          scheduledConversationId: scheduledConversationId ?? null,
+          // Снапшот на момент подтверждения — не пересчитывается
+          // задним числом, если ставка комиссии поменяется позже.
+          referralFeeOwed: venue.referralFeeAmount,
+        },
+      });
     });
   }
 

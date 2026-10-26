@@ -20,6 +20,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { spendLimitByKey } from '../common/spend-limits';
 import { SecretsService } from '../secrets/secrets.service';
 import { fetchWithTimeout } from '../common/fetch-with-timeout';
+import { dailyLimitRefusal, dailyWindowStart } from '../common/daily-limit';
 
 const YOUTUBE_API_KEY_REF = 'YOUTUBE_API_KEY';
 const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
@@ -62,13 +63,24 @@ export class YouTubeSearchService {
   ) {}
 
   private async assertUnderRateLimit(userId: string) {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const count = await this.prisma.youTubeSearchLog.count({
-      where: { userId, createdAt: { gte: since } },
-    });
+    // Пункт [the-day-was-the-servers] 2026-10-26: здесь стояло
+    // «попробуйте завтра», и это была неправда о собственном
+    // механизме — окно СКОЛЬЗЯЩЕЕ. Истративший потолок в 23:00
+    // приходил в 00:05 и получал тот же отказ тем же текстом.
+    const where = { userId, createdAt: { gte: dailyWindowStart() } };
+    const count = await this.prisma.youTubeSearchLog.count({ where });
     if (count >= DAILY_LIMIT_PER_USER) {
+      const oldest = await this.prisma.youTubeSearchLog.findFirst({
+        where,
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { createdAt: true },
+      });
       throw new ForbiddenException(
-        `Достигнут суточный лимит поиска YouTube (${DAILY_LIMIT_PER_USER}/сутки) — общая квота проекта ограничена (§2.1 ТЗ), попробуйте завтра`,
+        `${dailyLimitRefusal({
+          subject: 'поиск YouTube',
+          limit: DAILY_LIMIT_PER_USER,
+          oldestInWindow: oldest?.createdAt ?? null,
+        })} Общая квота проекта ограничена (§2.1 ТЗ).`,
       );
     }
   }

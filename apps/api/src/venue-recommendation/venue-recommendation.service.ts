@@ -17,7 +17,7 @@
 
 import { BadGatewayException, BadRequestException, HttpException, HttpStatus, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { placesRequestsLeft, spendPlacesRequest } from '../common/places-spend';
+import { placesFirstRelease, placesRequestsLeft, spendPlacesRequest } from '../common/places-spend';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { SecretsService } from '../secrets/secrets.service';
 import { ConsentService } from '../consent/consent.service';
@@ -25,6 +25,7 @@ import { ConsentType, VenueRecommendation } from '@prisma/client';
 import { getPlaceDetails, searchNearbyVenues } from './google-places-client';
 import { LOCATION_PURPOSES } from '../consent/location-purposes';
 import { activePromptVersion } from '../common/active-prompt-version';
+import { plural, timeUntil } from '../common/server-time';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 const TASK_TYPE = 'venue-suitability';
@@ -90,8 +91,15 @@ export class VenueRecommendationService {
     // неполного ответа, выданного за полный.
     const shortlist = candidates.slice(0, MAX_CANDIDATES);
     if ((await placesRequestsLeft(this.prisma, userId)) < shortlist.length) {
+      // Пункт [the-day-was-the-servers] 2026-10-26: «попробуйте позже»
+      // здесь особенно пусто — нужно не одно место, а несколько, и
+      // человек не мог узнать ни сколько ждать, ни сколько уже можно.
+      // Называется и то, и другое: ждать надо, пока освободится
+      // НУЖНОЕ число, а первое место освободится через названный срок.
+      const release = await placesFirstRelease(this.prisma, userId);
       throw new HttpException(
-        `Достигнут суточный лимит обращений к картам — на подбор заведений нужно ещё ${shortlist.length} обращений. Попробуйте позже.`,
+        `Достигнут суточный лимит обращений к картам — на подбор заведений нужно ${shortlist.length} ${plural(shortlist.length, 'обращение', 'обращения', 'обращений')}.` +
+          (release ? ` Потолок скользящий: первое обращение освободится через ${timeUntil(release)}, остальные — следом, по одному.` : ' Попробуйте позже.'),
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }

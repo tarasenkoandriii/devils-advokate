@@ -1390,7 +1390,7 @@ export default function SandboxPage() {
                                 <span className="muted"> — воронка health дошла до «С конфигом»</span>
 
                                 {/* OCR лабдокумента: реальный Cloud Vision,
-                                    дневной лимит 10, изображение не
+                                    суточный лимит 10 — скользящее окно 24 ч, не сброс в полночь; изображение не
                                     персистуется — только извлечённый текст
                                     черновиком (verified: false). */}
                                 <div style={{ marginTop: 10 }}>

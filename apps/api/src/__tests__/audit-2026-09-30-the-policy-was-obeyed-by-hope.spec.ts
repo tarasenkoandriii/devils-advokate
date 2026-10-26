@@ -93,6 +93,14 @@ function fakeLog() {
   const prisma: any = {
     auditLogEntry: {
       count: async ({ where }: any) => rows.filter((r) => r.action === where.action).length,
+      // Пункт [the-day-was-the-servers] 2026-10-26: на пути ОТКАЗА
+      // читается самая старая запись окна — отказ называет, через
+      // сколько освободится место. Заглушка обязана знать и этот
+      // запрос.
+      findFirst: async ({ where }: any) => {
+        const mine = rows.filter((r) => r.action === where.action);
+        return mine[0] ? { createdAt: new Date() } : null;
+      },
       create: async ({ data }: any) => {
         rows.push(data);
         return data;

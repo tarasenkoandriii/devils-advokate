@@ -2143,6 +2143,15 @@ button:disabled {
   margin-left: 6px;
 }
 
+/* Пункт [the-day-was-the-servers] 2026-10-26: текст отказа рядом с
+   кнопкой озвучки. До этого любой отказ был «⚠️» и ничем больше. */
+.speak-button-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--tg-theme-destructive-text-color, #d14343);
+}
+
 /* Пункт 64 (TMA UI): SituationalContentSection + /settings. */
 
 .situational-content-section {

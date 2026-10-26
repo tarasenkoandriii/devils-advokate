@@ -27,6 +27,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { fetchUrlText, UnsafeUrlError, UrlFetchError, isUrlSafeToFetch } from '../common/safe-url-fetch';
 import { assertOwnedJobSearchProject } from '../job-search/job-search-access';
 import { availabilityNote } from './source-availability';
+import { timeUntil } from '../common/server-time';
 
 export const MAX_VACANCIES_PER_CONFIG = 50;
 export const MAX_CANDIDATES_PER_CONFIG = 200;
@@ -423,7 +424,14 @@ export class VacancyIntakeService {
     const v = await this.ownedVacancy(userId, vacancyId);
     if (!v.sourceUrl) throw new BadRequestException('У вакансии нет ссылки');
     if (v.lastRefetchedAt && now.getTime() - v.lastRefetchedAt.getTime() < REFETCH_MIN_INTERVAL_MS) {
-      throw new TooManyRequestsException('Повторная загрузка — не чаще раза в сутки на вакансию');
+      // Пункт [the-day-was-the-servers] 2026-10-26: интервал считается
+      // от ПРОШЛОЙ загрузки, то есть момент готовности известен точно —
+      // и теперь назван. «Не чаще раза в сутки» было правдой и не
+      // отвечало на вопрос «когда же».
+      const ready = new Date(v.lastRefetchedAt.getTime() + REFETCH_MIN_INTERVAL_MS);
+      throw new TooManyRequestsException(
+        `Повторная загрузка — не чаще раза в сутки на вакансию. Можно будет через ${timeUntil(ready, now)}.`,
+      );
     }
     return this.refetchOne(v, now);
   }
