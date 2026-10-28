@@ -27,11 +27,14 @@ import { budgetByCurrency, compareToTarget, moneyWithCurrency } from '../common/
 
 type Row = { amount: number; currency: string | null; direction: 'EXPENSE' | 'COVERAGE' };
 
-function prismaFor(configModel: string, itemModel: string, consultationModel: string) {
+function prismaFor(configModel: string, itemModel: string, consultationModel: string, mode: string) {
   return (rows: Row[], config: { currency: string | null; targetBudget: number | null }, written?: any[]) =>
     ({
       [configModel]: { findUnique: async () => ({ id: 'c1', projectId: 'p1', ...config }) },
-      project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
+      // Пункт [the-domain-was-never-checked] 2026-10-27: у проекта есть
+      // РЕЖИМ, и ворота домена его теперь проверяют. Затравка без
+      // режима описывала проект, которого в базе не бывает.
+      project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', mode }) },
       [itemModel]: {
         findMany: async () => rows,
         create: async ({ data }: any) => {
@@ -48,14 +51,14 @@ const DOMAINS = [
     name: 'ДТП',
     category: 'REPAIR',
     build: (rows: Row[], config: any, written?: any[]) =>
-      new DtpV2Service(prismaFor('dtpConfig', 'dtpBudgetLineItem', 'dtpConsultation')(rows, config, written), {} as any),
+      new DtpV2Service(prismaFor('dtpConfig', 'dtpBudgetLineItem', 'dtpConsultation', 'DTP')(rows, config, written), {} as any),
   },
   {
     name: 'семейное право',
     category: 'LEGAL_FEES',
     build: (rows: Row[], config: any, written?: any[]) =>
       new FamilyLawV2Service(
-        prismaFor('familyLawConfig', 'familyLawBudgetLineItem', 'familyLawConsultation')(rows, config, written),
+        prismaFor('familyLawConfig', 'familyLawBudgetLineItem', 'familyLawConsultation', 'FAMILY_LAW')(rows, config, written),
         {} as any,
       ),
   },
@@ -63,7 +66,7 @@ const DOMAINS = [
     name: 'здоровье',
     category: 'PROCEDURE_COST',
     build: (rows: Row[], config: any, written?: any[]) =>
-      new HealthV2Service(prismaFor('healthConfig', 'healthBudgetLineItem', 'healthConsultation')(rows, config, written)),
+      new HealthV2Service(prismaFor('healthConfig', 'healthBudgetLineItem', 'healthConsultation', 'HEALTH')(rows, config, written)),
   },
 ];
 

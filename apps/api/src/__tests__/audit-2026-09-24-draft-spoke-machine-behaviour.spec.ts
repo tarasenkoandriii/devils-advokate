@@ -22,7 +22,8 @@ const FAMILY_ROLES = Object.values(FamilyLawPartyRole) as string[];
 function dtpPrisma(participants: any[]) {
   return {
     dtpConfig: { findUnique: async () => ({ id: 'c1', projectId: 'p1', targetBudget: null, currency: null }) },
-    project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
+    // Пункт [the-domain-was-never-checked] 2026-10-27: у проекта есть РЕЖИМ.
+    project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', mode: 'DTP' }) },
     dtpParticipant: { findMany: async () => participants },
     dtpFaultDetermination: { findMany: async () => [] },
     dtpBudgetLineItem: { findMany: async () => [] },
@@ -33,7 +34,7 @@ function dtpPrisma(participants: any[]) {
 function familyPrisma(parties: any[], assets: any[] = []) {
   return {
     familyLawConfig: { findUnique: async () => ({ id: 'c1', projectId: 'p1', targetBudget: null, currency: null }) },
-    project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
+    project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', mode: 'FAMILY_LAW' }) },
     familyLawParty: { findMany: async () => parties },
     familyLawAsset: { findMany: async () => assets },
     familyLawStatusDetermination: { findMany: async () => [] },

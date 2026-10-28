@@ -26,6 +26,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AIRouterService, AIRouterContentBlockedError } from '../ai-router/ai-router.service';
 import { ProjectMode, PurchaseCategory } from '@prisma/client';
 import { getOnboardingChecklist } from './major-purchase-checklist';
+import { assertOwnedMajorPurchaseProject } from './major-purchase-access';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { assertOnboardingConversation, ensureOnboardingConversation } from '../common/onboarding-conversation';
 
@@ -186,7 +187,7 @@ export class MajorPurchaseOnboardingService {
   /** Створює порожню TEXT_IMPORT-розмову, готову приймати відповіді
    * користувача по чек-лист-пунктах як окремі TranscriptSegment. */
   async createOnboardingConversation(userId: string, projectId: string) {
-    await this.assertOwnedMajorPurchaseProject(userId, projectId);
+    await assertOwnedMajorPurchaseProject(this.prisma, userId, projectId);
 
     // Пункт [onboarding-continuity] 2026-09-02: разговор ОДИН на проект.
     // Раньше каждый вызов создавал новый, и ответы голосового квиза
@@ -269,14 +270,6 @@ export class MajorPurchaseOnboardingService {
       timeline: parsed.timeline ?? null,
       criteria: parsed.criteria.map((c, i) => ({ text: c.text, isRequired: c.isRequired ?? true, orderIndex: i })),
     };
-  }
-
-  private async assertOwnedMajorPurchaseProject(userId: string, projectId: string) {
-    const project = await this.prisma.project.findFirst({ where: { id: projectId, ownerId: userId } });
-    if (!project) {
-      throw new NotFoundException(`Project ${projectId} not found`);
-    }
-    return project;
   }
 
   private async assertOwnedConversation(userId: string, conversationId: string) {

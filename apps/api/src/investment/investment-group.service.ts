@@ -8,7 +8,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MoneyLike, sumMoney } from '../common/money';
-import { InvestmentGroupRole } from '@prisma/client';
+import { InvestmentGroupRole, ProjectMode } from '@prisma/client';
 import { buildStartDeepLink } from '../common/telegram-deep-link';
 
 const INVITE_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // той самий горизонт, що RecruitingTeamInvite
@@ -117,7 +117,13 @@ export class InvestmentGroupService {
    * проєкту, для якого запитується прогрес, не передається ззовні. */
   async getProjectProgress(userId: string, projectId: string) {
     const project = await this.prisma.project.findUnique({ where: { id: projectId } });
-    if (!project || !project.investmentGroupId) {
+    // Пункт [the-domain-was-never-checked] 2026-10-27: режим назван и
+    // здесь. Сказано прямо: сегодня эта проверка ничего не меняет —
+    // `investmentGroupId` без `mode: INVESTMENT` в продукте не ставится, и
+    // проверка группы ниже покрывает тот же случай. Но один из
+    // двух признаков — побочный след другой функции, а не утверждение
+    // о домене; второй — утверждение.
+    if (!project || project.mode !== ProjectMode.INVESTMENT || !project.investmentGroupId) {
       throw new NotFoundException(`Project ${projectId} not found or has no investment group`);
     }
     await this.assertMember(userId, project.investmentGroupId);

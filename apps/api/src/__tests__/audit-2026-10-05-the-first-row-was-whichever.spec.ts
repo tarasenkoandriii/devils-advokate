@@ -492,7 +492,7 @@ describe('[the-first-row-was-whichever] поведение: единственн
   // бессмыслен: что проверка и запись идут ПО ТОЙ ЖЕ транзакции и
   // ПОСЛЕ взятия замка. Обращение мимо транзакции вернуло бы ровно ту
   // гонку, ради которой замок и ставится.
-  function fakeWithTrace() {
+  function fakeWithTrace(mode: 'DTP' | 'FAMILY_LAW' = 'DTP') {
     const steps: string[] = [];
     const rows: any[] = [];
     const model = (on: string) => ({
@@ -532,7 +532,12 @@ describe('[the-first-row-was-whichever] поведение: единственн
       // отвечают на «можно ли вообще», а не на «одним ли событием».
       dtpConfig: { findUnique: async () => ({ id: 'cfg', projectId: 'p1' }) },
       familyLawConfig: { findUnique: async () => ({ id: 'cfg', projectId: 'p1' }) },
-      project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
+      // Пункт [the-domain-was-never-checked] 2026-10-27: у проекта есть РЕЖИМ,
+      // и ворота домена его проверяют.
+      // Фейк один на два домена, поэтому режим — параметр: ворота
+      // спрашивают проект по id и владельцу, а режим сверяют сами —
+      // угадать его по запросу нельзя.
+      project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', mode }) },
     };
     return fake;
   }
@@ -545,7 +550,7 @@ describe('[the-first-row-was-whichever] поведение: единственн
   });
 
   it('КЛЮЧЕВОЙ ТЕСТ (разводное дело): то же — обе копии правила, а не одна', async () => {
-    const prisma = fakeWithTrace();
+    const prisma = fakeWithTrace('FAMILY_LAW');
     const service = new FamilyLawV2Service(prisma, {} as any);
     await service.createParty('u1', 'cfg', FamilyLawPartyRole.SELF, 'Я');
     expect(prisma._steps).toEqual(['transaction', 'tx:lock', 'tx:findFirst', 'tx:create']);

@@ -106,7 +106,9 @@ describe('Проверил — и создал: что будет, если на
     // Гонку здесь не исключить без блокировки — и не надо. Надо, чтобы
     // человек читал «уже настроено», а не «внутренняя ошибка сервера».
     const prisma: any = {
-      project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1' }) },
+      // Пункт [the-domain-was-never-checked] 2026-10-27: у проекта есть РЕЖИМ,
+      // и ворота домена его проверяют.
+      project: { findFirst: async () => ({ id: 'p1', ownerId: 'u1', mode: 'HEALTH' }) },
       healthConfig: {
         // Проверка «уже есть» проходит: в момент чтения записи ещё нет.
         findUnique: async () => null,

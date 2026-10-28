@@ -14,6 +14,7 @@ import { searchNearestByDistance, searchByText, getPlaceDetails } from '../venue
 import { ExtractedConfigDraft } from './major-purchase-onboarding.service';
 import { rethrowClientVisibleAiError } from '../common/ai-error-passthrough';
 import { LOCATION_PURPOSES } from '../consent/location-purposes';
+import { assertOwnedMajorPurchaseProject } from './major-purchase-access';
 
 const GOOGLE_PLACES_API_KEY_REF = 'GOOGLE_PLACES_API_KEY';
 // Пункт [major-purchase] §2.2 ТЗ — офіційні значення Google Places API,
@@ -96,7 +97,7 @@ export class MajorPurchaseService {
     category: PurchaseCategory,
     draft: ExtractedConfigDraft,
   ) {
-    await this.assertOwnedProject(userId, projectId);
+    await assertOwnedMajorPurchaseProject(this.prisma, userId, projectId);
 
     const existing = await this.prisma.majorPurchaseConfig.findUnique({ where: { projectId } });
     if (existing) {
@@ -494,7 +495,7 @@ export class MajorPurchaseService {
   // окремо, тільки створювати) ──
 
   async getConfig(userId: string, projectId: string) {
-    await this.assertOwnedProject(userId, projectId);
+    await assertOwnedMajorPurchaseProject(this.prisma, userId, projectId);
     const config = await this.prisma.majorPurchaseConfig.findUnique({
       where: { projectId },
       include: { criteria: { orderBy: { orderIndex: 'asc' } } },
@@ -531,14 +532,6 @@ export class MajorPurchaseService {
   }
 
 
-
-  private async assertOwnedProject(userId: string, projectId: string) {
-    const project = await this.prisma.project.findFirst({ where: { id: projectId, ownerId: userId } });
-    if (!project) {
-      throw new NotFoundException(`Project ${projectId} not found`);
-    }
-    return project;
-  }
 
   private async assertOwnedConfig(userId: string, configId: string) {
     const config = await this.prisma.majorPurchaseConfig.findUnique({

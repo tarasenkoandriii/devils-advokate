@@ -13,8 +13,14 @@ function createFakePrisma() {
   const nextId = () => `id-${++idCounter}`;
 
   return {
+    // Пункт [the-domain-was-never-checked] 2026-10-27: режим — СВОЙСТВО
+    // проекта, а не необязательное поле: проекта без режима в базе не
+    // бывает (колонка NOT NULL с дефолтом), а затравка его не ставила —
+    // то есть описывала проект, которого не существует, и поэтому не могла
+    // заметить отсутствие проверки режима. Дефолт перекрывается: тесты
+    // сверки сеют ЧУЖОЙ режим и ждут отказа.
     _seedProject(p: any) {
-      const project = { id: nextId(), ...p };
+      const project = { id: nextId(), mode: 'FAMILY_LAW', ...p };
       projects.set(project.id, project);
       return project;
     },
@@ -179,6 +185,15 @@ describe('FamilyLawService', () => {
     const service = makeService(prisma);
     await service.createConfig('owner', project.id, { goalDescription: 'x', targetBudget: null, currency: null, criteria: [] });
 
+    // Пункт [the-domain-was-never-checked] 2026-10-27 — ПРОВОДКА ворот на
+    // ВТОРОМ их вызове. Мутация показала: удалить вызов ворот из
+    // `createConfig` можно было, не уронив ни одного теста — сами
+    // ворота проверялись только через `getConfig`. А именно
+    // `createConfig` — точка, где создаётся дерево данных домена.
+    // Драфт намеренно пустой: ворота стоят ПЕРВЫМ оператором,
+    // и если отказ придёт от валидации, а не от ворот, тест увидит
+    // другой класс исключения и покраснеет.
+    await expect(service.createConfig('stranger', project.id, {} as any)).rejects.toThrow(NotFoundException);
     await expect(service.getConfig('stranger', project.id)).rejects.toThrow(NotFoundException);
   });
 

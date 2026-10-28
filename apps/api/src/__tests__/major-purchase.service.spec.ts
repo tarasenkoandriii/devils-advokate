@@ -28,8 +28,14 @@ function createFakePrisma() {
     // форму, что production: обе, колбэк и массив.
     $transaction: async (arg: any): Promise<any> => (typeof arg === 'function' ? arg(fake) : Promise.all(arg)),
     $executeRaw: async () => 1,
+    // Пункт [the-domain-was-never-checked] 2026-10-27: режим — СВОЙСТВО
+    // проекта, а не необязательное поле: проекта без режима в базе не
+    // бывает (колонка NOT NULL с дефолтом), а затравка его не ставила —
+    // то есть описывала проект, которого не существует, и поэтому не могла
+    // заметить отсутствие проверки режима. Дефолт перекрывается: тесты
+    // сверки сеют ЧУЖОЙ режим и ждут отказа.
     _seedProject(p: any) {
-      const project = { id: nextId(), ...p };
+      const project = { id: nextId(), mode: 'MAJOR_PURCHASE', ...p };
       projects.set(project.id, project);
       return project;
     },
@@ -504,6 +510,15 @@ describe('MajorPurchaseService', () => {
     expect(fetchedMeeting.id).toBe(meeting.id);
 
     // Чужий доступ так само відхиляється для всіх нових read-методів
+    // Пункт [the-domain-was-never-checked] 2026-10-27 — ПРОВОДКА ворот на
+    // ВТОРОМ их вызове. Мутация показала: удалить вызов ворот из
+    // `createConfig` можно было, не уронив ни одного теста — сами
+    // ворота проверялись только через `getConfig`. А именно
+    // `createConfig` — точка, где создаётся дерево данных домена.
+    // Драфт намеренно пустой: ворота стоят ПЕРВЫМ оператором,
+    // и если отказ придёт от валидации, а не от ворот, тест увидит
+    // другой класс исключения и покраснеет.
+    await expect(service.createConfig('attacker', project.id, 'REAL_ESTATE' as any, {} as any)).rejects.toThrow(NotFoundException);
     await expect(service.getConfig('attacker', project.id)).rejects.toThrow(NotFoundException);
     await expect(service.listVariants('attacker', config.id)).rejects.toThrow(NotFoundException);
     await expect(service.getVariant('attacker', variant.id)).rejects.toThrow(NotFoundException);

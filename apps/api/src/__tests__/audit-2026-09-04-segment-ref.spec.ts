@@ -45,7 +45,9 @@ function healthSetup(modelAnswer: unknown) {
   let saved: any = null;
   let capturedPrompt = '';
   const prisma: any = {
-    project: { findFirst: async () => ({ id: 'p-1', ownerId: 'u-1' }) },
+    // Пункт [the-domain-was-never-checked] 2026-10-27: у проекта есть РЕЖИМ,
+    // и ворота домена его проверяют.
+    project: { findFirst: async () => ({ id: 'p-1', ownerId: 'u-1', mode: 'HEALTH' }) },
     healthConsultation: {
       findUnique: async () => consultation,
       update: async ({ data }: any) => {
